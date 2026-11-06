@@ -1,0 +1,4 @@
+# SwitchLoc — OPTIONAL: GeoPackage (.gpkg) input.  Heavy (GDAL wheels) and
+# NOT needed for Shapefile / GeoJSON / Excel / CSV — skip for a lean build.
+geopandas>=1.0,<2
+pyogrio>=0.7

@@ -1,0 +1,30 @@
+SwitchLoc v1.10.1 build verification
+Date: 2026-11-06
+
+Test command:
+  PYTHONPATH=src python -m pytest -q
+
+Result:
+  286 passed, 45 skipped, 0 failed
+
+Compilation:
+  python -m compileall -q src tests
+  Result: passed
+
+Gazetteer validation:
+  data/geography/ardabil_places.sqlite
+  Places: 1,006
+  SQLite PRAGMA integrity_check: ok
+
+Manual data checks:
+  - 10 GIS Shapefile layers inventoried.
+  - 385 transformer features inspected.
+  - Outage workbook non-empty rows inspected; detailed audit:
+    docs/KOSAR_INPUT_AUDIT_1_10_1_FA.md
+
+Limitations:
+  - 45 tests skipped by the suite (optional GUI/platform/sample-data conditions).
+  - Windows EXE build and interactive Qt GUI acceptance were not run in this Linux build environment.
+  - The user's configured GIS mapping/project database was not included, so the exact
+    981 kW residual in the reported project cannot be attributed to specific devices
+    from the raw GIS export alone.

@@ -1,0 +1,9 @@
+# SwitchLoc — optional report extras (Phase 5)
+# Everything here is OPTIONAL: without it the study pipeline and the
+# Excel/Word/GIS exports still work; only the native PDF export needs
+# these (otherwise: open the .docx in Word and print to PDF).
+reportlab>=4.0,<5     # PDF engine
+arabic_reshaper>=3.0,<4  # Persian contextual forms
+python-bidi>=0.6,<1   # visual reordering for RTL
+# The Persian font (Vazirmatn, SIL OFL) is bundled in build_assets/fonts
+# and included in the PyInstaller exe by BUILD.bat — nothing to install.

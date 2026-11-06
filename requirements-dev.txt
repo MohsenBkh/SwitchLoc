@@ -1,0 +1,7 @@
+# SwitchLoc — development / build tooling (not shipped with the app).
+-r requirements.txt
+-r requirements-qt.txt
+-r requirements-report.txt
+pytest>=7,<9
+pyinstaller>=6,<7
+ruff>=0.5

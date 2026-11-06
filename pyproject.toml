@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "switchloc"
+dynamic = ["version"]
+description = "Switch placement & distribution-automation study tool (TAV122-02/00, level-1 method)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyshp>=2.3.1,<4", "pyproj>=3.5,<4", "openpyxl>=3.1.2,<4",
+    "numpy>=1.24,<3", "matplotlib>=3.7,<4", "Pillow>=10,<13",
+    "python-docx>=1.1,<2",
+]
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.5,<7"]
+report = ["reportlab>=4.0,<5", "arabic_reshaper>=3.0,<4", "python-bidi>=0.6,<1"]
+gpkg = ["geopandas>=1.0,<2", "pyogrio>=0.7"]
+dev = ["pytest>=7,<9", "pyinstaller>=6,<7", "ruff>=0.5"]
+
+[tool.setuptools.dynamic]
+version = {attr = "switchloc.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "BLE"]
+ignore = ["E501", "E402"]

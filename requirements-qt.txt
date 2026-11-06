@@ -1,0 +1,3 @@
+# SwitchLoc — desktop UI.  The engineering pipeline runs WITHOUT it.
+# PySide6 (Essentials) already contains QtSvg, used for the built-in icons.
+PySide6>=6.5,<7

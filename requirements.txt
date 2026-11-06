@@ -1,0 +1,10 @@
+# SwitchLoc — core runtime requirements (every package is imported by src/).
+# Upper bounds protect against breaking major releases; for bit-identical
+# release builds freeze the tested set once:  pip freeze > requirements.lock
+pyshp>=2.3.1,<4         # shapefile reading (pure Python, no GDAL)
+pyproj>=3.5,<4          # CRS definitions / transforms
+openpyxl>=3.1.2,<4      # Excel I/O (outage import / exports)
+numpy>=1.24,<3          # OSM tile mosaic / numeric helpers
+matplotlib>=3.7,<4      # network map renderer (ui/map_renderer, D-04)
+Pillow>=10,<13          # OSM tile decoding (ui/osm_tiles)
+python-docx>=1.1,<2     # Word report export (reporting/docx_report)
