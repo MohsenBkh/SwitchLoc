@@ -264,10 +264,27 @@ def build_node_loads(graph: NetworkGraph, net: CanonicalNetwork,
                                                            for ld in lds)))
         net_nodes = getattr(net, "nodes", None) or []
         feeder_of_node = {n.id: n.feeder_name for n in net_nodes}
+        # یک مبنای واحد برای «بار هر فیدر» (نیاز ۱۱): بار منتسب به ترانس‌ها
+        # را بر اساس کلید فیدرِ خود ترانس (همان مبنای scaling) جمع می‌زنیم —
+        # نه بر اساس برچسب فیدرِ گره (که در اغلب GISها خالی است و جدول را
+        # با اعداد بی‌معنی پر می‌کرد).
+        assigned_by_feeder: dict[str, float] = {}
+        for tid, kw in res.transformer_kw_by_id.items():
+            if not kw:
+                continue
+            t = transformer_by_id.get(str(tid)) or transformer_by_id.get(tid)
+            fk = feeder_key_of(t.feeder_name) if t is not None else ""
+            fk = fk or "(بدون برچسب)"
+            assigned_by_feeder[fk] = assigned_by_feeder.get(fk, 0.0) + kw
+        res.per_feeder_kw = {k: round(v, 4)
+                             for k, v in sorted(assigned_by_feeder.items())
+                             if v > 0.0}
+        # بارهای واقعی بدون ترانس — سطل برچسب گره (منشأ متفاوت، همان‌قدر صریح)
         for node, kw in res.node_kw.items():
-            if kw:
-                key = feeder_of_node.get(node, "(بدون فیدر)")
-                res.per_feeder_kw[key] = res.per_feeder_kw.get(key, 0.0) + kw
+            if kw and node not in graph.transformer_ids_at:
+                key = feeder_of_node.get(node, "") or "(بدون برچسب)"
+                res.per_feeder_kw[key] = round(
+                    res.per_feeder_kw.get(key, 0.0) + kw, 4)
         fed_with_input = sum(1 for v in plan.values()
                              if v["p_kw"] or v["q_kvar"])
         input_kw = sum(v["p_kw"] for v in plan.values())
@@ -294,9 +311,14 @@ def build_node_loads(graph: NetworkGraph, net: CanonicalNetwork,
             "reconciled": abs(input_kw - assigned_transformer_kw
                                - unassigned_transformer_kw) <= max(0.5, input_kw * 1e-6),
         }
+        real_feeder_keys = {k for k in plan if k != "(بدون برچسب)"}
         res.coverage = {"nodes_total": len(graph.transformer_ids_at),
-                        "feeders_total": len(plan),
+                        "feeders_total": len(real_feeder_keys),
                         "feeders_with_input": fed_with_input,
+                        "no_capacity_transformers": sum(
+                            v.get("n_no_capacity", 0)
+                            for v in plan.values()),
+                        "unlabeled_plan_bucket": "(بدون برچسب)" in plan,
                         "sum_p_kw": round(input_kw, 1),
                         "transformers_assigned_to_graph": len(
                             graph_transformer_ids & set(transformer_by_id)),

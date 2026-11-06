@@ -119,10 +119,11 @@ def score_feeders(raw_values, weights=None):
     if len(raw_values[0]) != len(weights):
         raise ValueError("تعداد معیارها با جدول ۱۶ هم‌خوان نیست.")
     scores = [sum(w * v for w, v in zip(weights, vals)) for vals in raw_values]
-    order = sorted(range(len(scores)), key=lambda i: -scores[i])
-    rank = [0] * len(scores)
-    for pos, i in enumerate(order, start=1):
-        rank[i] = pos
+    # competition ranking («1224»): equal scores share the same rank
+    rank_of_score: dict[float, int] = {}
+    for pos, s in enumerate(sorted(scores, reverse=True), start=1):
+        rank_of_score.setdefault(s, pos)
+    rank = [rank_of_score[s] for s in scores]
     return [{"score": s, "rank": r} for s, r in zip(scores, rank)]
 
 
@@ -157,7 +158,13 @@ def compute_ep_tl(zone_rows: list[ZoneFaultRow], total_load_kw: float) -> EPTLRe
         raise ValueError("کل بار فیدر باید مثبت باشد.")
     worst = max(zone_rows, key=lambda r: r.shed_kw)
     ep = 100.0 * worst.shed_kw / total_load_kw
-    tl = 100.0 * worst.restorable_kw / total_load_kw
+    # جدول ۱۴: TL = ماکزیمم درصد بار قابل انتقال — بیشینهٔ مستقل روی
+    # همهٔ سناریوهای خطا (هم‌خوان با docstring همین تابع و
+    # docs/TAV122_TRACEABILITY.md جدول ۱۴).  بیشینهٔ TL لزوماً مربوط به
+    # بدترین خطای EP نیست؛ مثال official V-02 هر دو را از همان ردیف
+    # می‌دهد، اما کد قبلی (TL همان بدترین-EP) برای ردیف‌های واگرا
+    # TL را کوچک‌نمایی می‌کرد.
+    tl = 100.0 * max(r.restorable_kw for r in zone_rows) / total_load_kw
     return EPTLResult(ep_percent=ep, tl_percent=tl, worst_zone=worst.zone,
                       total_load_kw=total_load_kw)
 

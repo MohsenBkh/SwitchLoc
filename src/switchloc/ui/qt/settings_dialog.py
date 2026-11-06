@@ -24,15 +24,19 @@ from ...reliability.load_model import (DEFAULT_LOADING_FACTOR,
                                        LEVEL_FA, LEVEL_SCALED)
 from .main_window import _fmt_exc, _write_log
 
-CAPACITY_COLUMNS = ("Feeder", "Nominal kW", "Peak kW", "Emergency kW",
-                    "Note")
-DEFAULT_NOMINAL_FEEDER_KW = 7000.0
+CAPACITY_COLUMNS = ("Feeder", "Nominal kW", "Peak kW (خودکار از مدل بار)",
+                    "Emergency kW", "Note")
 
 
 def default_capacity_rows(feeder_keys) -> list[dict]:
-    """New feeder rows: nominal defaults to 7000 kW; measured peak/emergency stay unknown."""
-    return [{"feeder_key": k, "nominal_kw": DEFAULT_NOMINAL_FEEDER_KW,
-             "peak_kw": None, "emergency_kw": None, "note": ""}
+    """New feeder rows: همهٔ ظرفیت‌ها نامعلوم می‌مانند تا مهندس وارد کند.
+
+    مقدار پیش‌فرضِ ساختگی (۷۰۰۰ kW) عمداً حذف شد — هیچ مقدار پیش‌فرضی به‌عنوان
+    ظرفیت تأییدشدهٔ مهندس به‌کار نمی‌رود.
+    """
+    return [{"feeder_key": k, "nominal_kw": None,
+             "peak_kw": None, "peak_source": "unknown",
+             "emergency_kw": None, "note": ""}
             for k in feeder_keys]
 
 
@@ -51,11 +55,15 @@ def parse_capacity_rows(table_rows) -> list[dict]:
             except ValueError:
                 return None
         nominal = _f(r.get("nominal_kw"))
+        peak = _f(r.get("peak_kw"))
+        peak_src = str(r.get("peak_source", "unknown") or "unknown")
+        if peak is None:
+            peak_src = "unknown"
         out.append({"feeder_key": str(r.get("feeder_key", "")).strip().upper(),
                     "nominal_kw": nominal,
-                    "nominal_source": ("default" if nominal == DEFAULT_NOMINAL_FEEDER_KW
-                                       else "user"),
-                    "peak_kw": _f(r.get("peak_kw")),
+                    "nominal_source": "user" if nominal is not None else "unknown",
+                    "peak_kw": peak,
+                    "peak_source": peak_src,
                     "emergency_kw": _f(r.get("emergency_kw")),
                     "note": str(r.get("note", ""))})
     return out
@@ -176,32 +184,47 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
     page2 = QWidget(); v2 = QVBoxLayout(page2)
     cap_rows = {r["feeder_key"]: dict(r)
                 for r in cur.get("capacity_rows", [])}
-    cap_headers = ["Feeder*", "Nominal kW*", "Peak kW*", "Emergency kW*",
+    cap_headers = ["Feeder*", "Nominal kW*",
+                   "Peak kW (خوانده از مدل بار)", "Emergency kW*",
                    "Note"]
     tbl = QTableWidget(len(feeder_keys), len(cap_headers))
     tbl.setHorizontalHeaderLabels(cap_headers)
     tbl.verticalHeader().setVisible(False)
     tbl.horizontalHeader().setStretchLastSection(True)
+    lpq_rows = ((cur.get("load_model", {}) or {}).get("feeder_pq", {})
+                or {})
+    lpq_now = {str(fk).strip().upper():
+               float((v or {}).get("p_kw") or 0.0)
+               for fk, v in lpq_rows.items()}
     for i, k in enumerate(feeder_keys):
         row = dict(cap_rows.get(k, {}))
-        if row.get("nominal_kw") is None:
-            row["nominal_kw"] = DEFAULT_NOMINAL_FEEDER_KW
-        row.setdefault("peak_kw", None)
+        # پیک از ورودی واحد مدل بار خوانده می‌شود — یک منبع، بدون ورودی موازی
+        row["peak_kw"] = lpq_now.get(k) or None
+        if row["peak_kw"] is None:
+            row["peak_kw"] = row.get("peak_kw")  # مقدار ذخیره‌شده قبلی
         row.setdefault("emergency_kw", None)
         row.setdefault("note", "")
         tbl.setItem(i, 0, QTableWidgetItem(k))
         for j, key in ((1, "nominal_kw"), (2, "peak_kw"),
                        (3, "emergency_kw"), (4, "note")):
             v = row.get(key)
-            tbl.setItem(i, j, QTableWidgetItem("" if v is None else str(v)))
+            cell = QTableWidgetItem("" if v is None else str(v))
+            if j == 2:  # پیک ستون READ-ONLY: همگام خودکار با تب Load Model
+                cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                v_txt = (f"{v:.1f} (از مدل بار)"
+                         if isinstance(v, (int, float)) else
+                         ("پیک نامعلوم — P را در تب Load Model وارد کنید"
+                          if v is None else str(v)))
+                cell.setText(v_txt)
+            tbl.setItem(i, j, cell)
     tbl.setFixedHeight(min(360, 40 * (len(feeder_keys) + 1) + 12))
     v2.addWidget(make_explain_label(
-        "ظرفیت نامی پیش‌فرض هر فیدر ۷۰۰۰ kW است (فرض اولیه، نه مقدار "
-        "اندازه‌گیری‌شده) و قابل ویرایش می‌باشد. بار پیک موجود و ظرفیت "
-        "اضطراری باید توسط مهندس وارد شوند. "
-        "از فایل‌های ورودی حدس زده نمی‌شوند؛ "
-        "نیستند. خالی = نامشخص → طرح‌های انتقالی «نیازمند تأیید ظرفیت» "
-        "می‌شوند و تأیید نهایی مهندسی نمی‌گیرند."))
+        "ظرفیت نامی/اضطراری هر فیدر را مهندس وارد می‌کند؛ هیچ مقدار "
+        "پیش‌فرض ساختگی وجود ندارد و مقادیر از GIS حدس زده نمی‌شوند. "
+        "ستون «Peak kW» فقط نمایش است و از همان ورودی تب «Load Model» "
+        "(P فیدر) خوانده می‌شود — یک ورودی واحد برای همهٔ محاسبات بار. "
+        "خالی = نامشخص → طرح‌های انتقالی «نیازمند تأیید ظرفیت» می‌شوند "
+        "و تأیید نهایی مهندسی نمی‌گیرند."))
     v2.addWidget(tbl)
     tabs.addTab(page2, "Feeder capacity")
 
@@ -284,13 +307,6 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
         def months(text):
             return [p.strip() for p in (text or "").split(",")
                     if p.strip()]
-        cap = parse_capacity_rows(
-            [{"feeder_key": (tbl.item(i, 0).text() if tbl.item(i, 0) else ""),
-              "nominal_kw": tbl.item(i, 1).text() if tbl.item(i, 1) else None,
-              "peak_kw": tbl.item(i, 2).text() if tbl.item(i, 2) else None,
-              "emergency_kw": tbl.item(i, 3).text() if tbl.item(i, 3) else None,
-              "note": tbl.item(i, 4).text() if tbl.item(i, 4) else ""}
-             for i in range(tbl.rowCount())])
         # Load Scaling P/Q — فقط ردیف‌هایی که ورودی دارند (عدد > 0)
         feeder_pq = {}
         for i, k in enumerate(feeder_keys):
@@ -305,6 +321,18 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
             p, q = _num(1), _num(2)
             if p > 0 or q > 0:
                 feeder_pq[k] = {"p_kw": p, "q_kvar": q}
+        cap = parse_capacity_rows(
+            [{"feeder_key": (tbl.item(i, 0).text() if tbl.item(i, 0) else ""),
+              "nominal_kw": tbl.item(i, 1).text() if tbl.item(i, 1) else None,
+              # پیک از سلول خوانده نمی‌شود؛ از ورودی واحد مدل بار ساخته می‌شود
+              "peak_kw": None,
+              "emergency_kw": tbl.item(i, 3).text() if tbl.item(i, 3) else None,
+              "note": tbl.item(i, 4).text() if tbl.item(i, 4) else ""}
+             for i in range(tbl.rowCount())])
+        for row in cap:
+            p = feeder_pq.get(row["feeder_key"], {}).get("p_kw")
+            row["peak_kw"] = float(p) if p else None
+            row["peak_source"] = "load_model" if p else "unknown"
         return {
             "load_model": {"level": cmb_level.currentData(),
                            "loading_factor": sp_lf.value(),
