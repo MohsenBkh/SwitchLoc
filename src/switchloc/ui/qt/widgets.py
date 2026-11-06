@@ -382,8 +382,8 @@ def make_excel_like(table, *, paste: bool = True,
     order (e.g. review dialogs whose rows map 1:1 to source records).
     """
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import (QAbstractItemView, QApplication,
-                                   QShortcut)
+    from PySide6.QtGui import QKeySequence, QShortcut
+    from PySide6.QtWidgets import (QAbstractItemView, QApplication)
 
     table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
     table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -408,7 +408,6 @@ def make_excel_like(table, *, paste: bool = True,
             table.clearSelection()
             select(idx)
 
-    from PySide6.QtGui import QKeySequence
     col_sc = QShortcut(QKeySequence(
         Qt.KeyboardModifier.ControlModifier | Qt.Key.Key_Space), table)
     col_sc.activated.connect(lambda: _space(True))
