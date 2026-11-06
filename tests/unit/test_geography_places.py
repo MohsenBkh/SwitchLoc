@@ -23,3 +23,25 @@ def test_csv_import(tmp_path):
     db = PlaceGazetteer(tmp_path / 'places.sqlite')
     assert db.import_csv(f) == 1
     assert db.search('Ardabil')[0].place.name == 'اردبیل'
+
+
+def test_bundled_ardabil_gazetteer_matches_release_claim():
+    """سند انتشار ۱.۱۰.۱ ادعا می‌کند ۱٬۰۰۶ سکونتگاه با اطمینان بالا در
+    بانک آفلاین مخزن وارد شده‌اند. این آزمون صرفاً بررسی فقط-خواندنی
+    است و هیچ فایلی ایجاد/تغییر نمی‌کند."""
+    import sqlite3
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    bank = root / "data" / "geography" / "ardabil_places.sqlite"
+    assert bank.is_file(), "بانک آفلاین اردبیل از مخزن حذف شده است"
+    with sqlite3.connect(f"file:{bank}?mode=ro", uri=True) as db:
+        n, = db.execute("select count(*) from places").fetchone()
+        beyond, = db.execute(
+            "select count(*) from places "
+            "where lat not between -90 and 90 or lon not between -180 and 180"
+        ).fetchone()
+        sources = [r[0] for r in db.execute(
+            "select distinct source from places")]
+    assert n >= 1006
+    assert beyond == 0
+    assert all("high-confidence" in s for s in sources)

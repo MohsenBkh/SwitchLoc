@@ -368,7 +368,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     from ..qt.mapping_wizard import MappingWizardPage
     from ...application.import_service import ImportService, ImportSettings
     from ...application.outage_service import OutageService, OutageSettings
-    from ...application.outage_review import OutageReviewStore, suggest_event_places
+    from ...application.outage_review import (OutageReviewStore,
+                                              default_gazetteer_path,
+                                              suggest_event_places)
     from ...reliability.zone_outages import calculate_zone_up
     from ...geography.places import PlaceGazetteer
     from ...application.topology_service import TopologyService, TopologySettings
@@ -954,9 +956,13 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         db_path = state.get("db")
         if not db_path:
             return
-        gaz_path = Path(__file__).resolve().parents[4] / "data" / "geography" / "ardabil_places.sqlite"
-        gaz = PlaceGazetteer(gaz_path)
-        suggestions = {x.event_id: x for x in suggest_event_places(records, gaz)}
+        # بانک آفلاین مکان‌ها — هرگز پایگاه خالی ساخته نمی‌شود؛
+        # نبود فایل فقط پیشنهاد مکان را غیرفعال می‌کند
+        gaz_path = default_gazetteer_path()
+        gaz = PlaceGazetteer(gaz_path) if gaz_path else None
+        suggestions = ({x.event_id: x
+                        for x in suggest_event_places(records, gaz)}
+                       if gaz is not None else {})
         zones = list(topo.zones.zones)
         zone_labels = [(f"{z.feeder} | Zone {z.zone_no} | {z.id}", z.id) for z in zones]
         store = OutageReviewStore(db_path)
@@ -967,9 +973,24 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint |
                            Qt.WindowType.WindowMinimizeButtonHint)
         layout = QVBoxLayout(dlg)
-        info = QLabel(f"پیشنهاد نام مکان صرفاً راهنماست (تعداد مکان‌های ثبت‌شده در بانک: {gaz.count():,}). فقط زونی که مهندس صریحاً انتخاب و تأیید کند ذخیره می‌شود؛ رخدادهای بدون انتساب در محاسبات زون توزیع نمی‌شوند.")
+        if gaz is not None:
+            bank_line = (f"تعداد مکان‌های ثبت‌شده در بانک آفلاین: {gaz.count():,}. ")
+        else:
+            bank_line = ("بانک آفلاین مکان‌ها یافت نشد؛ پیشنهاد مکان غیرفعال است "
+                         "(برای فعال‌سازی، متغیر محیطی SWITCHLOC_GAZETTEER را "
+                         "به مسیر فایل بانک اشاره دهید). ")
+        base_info = (bank_line +
+                     "پیشنهاد نام مکان صرفاً راهنماست و فقط زونی که مهندس صریحاً "
+                     "انتخاب و تأیید کند ذخیره می‌شود؛ رخدادهای بدون انتساب در "
+                     "محاسبات زون توزیع نمی‌شوند. "
+                     "جدول مانند اکسل است: کلیک روی سرستون یا شمارهٔ ردیف کل خط را "
+                     "انتخاب می‌کند (Ctrl: افزودن/برداشتن خط، Shift: بازهٔ متوالی)؛ "
+                     "Ctrl+C نسخه‌برداری و Ctrl+V جایگذاری است — سطر/ستون/بازهٔ "
+                     "کامل قابل کپی است (فرمت TSV قابل درج در اکسل).")
+        info = QLabel(base_info)
         info.setWordWrap(True)
         layout.addWidget(info)
+        from ..qt.widgets import make_excel_like, make_table_item
         table = QTableWidget(len(records), 8, dlg)
         table.setHorizontalHeaderLabels(["رخداد", "نام پست", "فیدر", "تاریخ", "توضیحات", "مکان پیشنهادی", "زون متاثر (تأیید مهندس)", "وضعیت"])
         table.setWordWrap(True)
@@ -979,11 +1000,11 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         table.setColumnWidth(4, 320); table.setColumnWidth(5, 170)
         table.setColumnWidth(6, 250); table.setColumnWidth(7, 110)
         for i, rec in enumerate(records):
-            table.setItem(i, 0, QTableWidgetItem(str(rec.event_no or rec.id)))
-            table.setItem(i, 1, QTableWidgetItem(str(rec.substation or "—")))
-            table.setItem(i, 2, QTableWidgetItem(str(rec.feeder_key or rec.feeder_raw)))
-            table.setItem(i, 3, QTableWidgetItem(str(rec.date_j or "")))
-            table.setItem(i, 4, QTableWidgetItem(str(rec.notes or rec.cause_raw or "")))
+            table.setItem(i, 0, make_table_item(str(rec.event_no or rec.id)))
+            table.setItem(i, 1, make_table_item(str(rec.substation or "—")))
+            table.setItem(i, 2, make_table_item(str(rec.feeder_key or rec.feeder_raw)))
+            table.setItem(i, 3, make_table_item(str(rec.date_j or "")))
+            table.setItem(i, 4, make_table_item(str(rec.notes or rec.cause_raw or "")))
             sug = suggestions.get(str(rec.id))
             place_box = QComboBox()
             place_box.addItem("بدون مکان تأییدشده", "")
@@ -1015,6 +1036,16 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             status_box.setCurrentIndex(max(0, status_box.findData(old.get("status", "pending"))))
             table.setCellWidget(i, 7, status_box)
             table.setRowHeight(i, 48)
+
+        def _paste_note(pasted, skipped):
+            info.setText(base_info +
+                         f" — نتیجهٔ آخرین جایگذاری: {pasted} سلول "
+                         f"نوشته شد، {skipped} سلول رد شد "
+                         "(سلول‌های فقط‌خواندنی و کمبوباکس‌های بدون "
+                         "گزینهٔ منطبق رد می‌شوند).")
+
+        # اکسل‌مانند: انتخاب سطر/ستون با هدر + کپی/پیست سطر/ستون کامل
+        make_excel_like(table, paste=True, on_paste=_paste_note)
         layout.addWidget(table, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         layout.addWidget(buttons)

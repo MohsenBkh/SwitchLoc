@@ -1,12 +1,35 @@
 # -*- coding: utf-8 -*-
 """Human-in-the-loop outage place/zone review with auditable SQLite storage."""
 from __future__ import annotations
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 from ..geography.places import PlaceGazetteer, PlaceMatch
+
+#: نام متغیر محیطی برای مسیر جایگزین بانک آفلاین مکان‌ها
+GAZETTEER_ENV_VAR = "SWITCHLOC_GAZETTEER"
+
+
+def default_gazetteer_path() -> Path | None:
+    """مسیر بانک آفلاین مکان‌های اردبیل را بدون ایجاد هیچ فایلی پیدا می‌کند.
+
+    ترتیب: 1) ``$SWITCHLOC_GAZETTEER`` (اگر به فایل موجود اشاره کند) →
+    ``data/geography/ardabil_places.sqlite`` کنار ریشهٔ مخزن/نصب →
+    ``None`` (بانک همراه برنامه نیست — هرگز پایگاه خالی ساخته نمی‌شود).
+    """
+    env = os.environ.get(GAZETTEER_ENV_VAR, "").strip()
+    if env:
+        env_path = Path(env)
+        if env_path.is_file():
+            return env_path
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "data" / "geography" / "ardabil_places.sqlite"
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 @dataclass(frozen=True)
