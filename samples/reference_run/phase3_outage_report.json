@@ -1,0 +1,1235 @@
+{
+  "verdict": "PASS",
+  "verdict_reason_fa": "هیچ Issue از رده Error حل‌نشده وجود ندارد؛ مدل canonical وارد فاز توپولوژی می‌شود.",
+  "outage_run_id": "4756ee6f-32f9-5d11-a8b5-98c080827860",
+  "reader_stats": {
+    "file": "/home/z/my-project/download/SwitchLoc/data/outages_1405.xlsx",
+    "file_sha256": "f4ffd5ef6d00305bc6cd61e9170101de1c9f981400270c53f6ef83f638b87c64",
+    "sheets": {
+      "پست خلخال": {
+        "rows": 1783,
+        "empty_skipped": 887,
+        "records": 896,
+        "columns_found": [
+          "cause_raw",
+          "date_raw",
+          "device_raw",
+          "duration_raw",
+          "energy_raw",
+          "event_no",
+          "feeder_raw",
+          "notes_raw",
+          "restore_raw",
+          "substation",
+          "time_raw",
+          "trip_current_raw"
+        ]
+      },
+      "پست کمی آباد": {
+        "rows": 2179,
+        "empty_skipped": 1075,
+        "records": 1104,
+        "columns_found": [
+          "cause_raw",
+          "date_raw",
+          "device_raw",
+          "duration_raw",
+          "energy_raw",
+          "event_no",
+          "feeder_raw",
+          "notes_raw",
+          "restore_raw",
+          "substation",
+          "time_raw",
+          "trip_current_raw"
+        ]
+      }
+    },
+    "rows_total": 3962,
+    "rows_empty_skipped": 1962,
+    "records": 2000
+  },
+  "settings": {
+    "model_feeders": [
+      "F1",
+      "F2",
+      "F3",
+      "F4",
+      "F5",
+      "F6",
+      "F7"
+    ],
+    "planned_detection": "الگوی باریک؛ ستون نوع خاموشی در داده ۱۴۰۵ موجود نیست (A-08)",
+    "tav_revision": "TAV122-02/00"
+  },
+  "summary": {
+    "records": 2000,
+    "rows_empty_skipped": 1962,
+    "sheets": {
+      "پست خلخال": {
+        "rows": 1783,
+        "empty_skipped": 887,
+        "records": 896,
+        "columns_found": [
+          "cause_raw",
+          "date_raw",
+          "device_raw",
+          "duration_raw",
+          "energy_raw",
+          "event_no",
+          "feeder_raw",
+          "notes_raw",
+          "restore_raw",
+          "substation",
+          "time_raw",
+          "trip_current_raw"
+        ]
+      },
+      "پست کمی آباد": {
+        "rows": 2179,
+        "empty_skipped": 1075,
+        "records": 1104,
+        "columns_found": [
+          "cause_raw",
+          "date_raw",
+          "device_raw",
+          "duration_raw",
+          "energy_raw",
+          "event_no",
+          "feeder_raw",
+          "notes_raw",
+          "restore_raw",
+          "substation",
+          "time_raw",
+          "trip_current_raw"
+        ]
+      }
+    },
+    "class_summary": {
+      "قابل کاهش با کلیدگذاری": 249,
+      "ناشی از هماهنگی حفاظتی": 1537,
+      "خارج از دامنه": 37,
+      "نیازمند تعمیر یا تعویض تجهیز": 138,
+      "داده ناکافی": 38,
+      "برنامه‌ریزی‌شده": 1
+    },
+    "rule_counts": {
+      "R-SWITCH-01": 249,
+      "R-COORD-01": 1537,
+      "R-DOM-01": 37,
+      "R-REP-01": 138,
+      "R-NAK-01": 38,
+      "R-PLAN-01": 1
+    },
+    "in_model_events": 888,
+    "years": [
+      1404,
+      1405
+    ]
+  },
+  "lambda_r": [
+    {
+      "feeder_key": "F1",
+      "feeder_raw": "1",
+      "events_total": 130,
+      "events_random": 130,
+      "events_planned": 0,
+      "events_reducible": 19,
+      "years_covered": 2,
+      "lambda_per_year": 65.0,
+      "lambda_reducible_per_year": 9.5,
+      "r_minutes": 60.685,
+      "r_minutes_nonzero": 60.685,
+      "energy_kwh": 11.6015,
+      "class_counts": {
+        "ناشی از هماهنگی حفاظتی": 107,
+        "قابل کاهش با کلیدگذاری": 19,
+        "نیازمند تعمیر یا تعویض تجهیز": 4
+      },
+      "u_hours": 65.7421
+    },
+    {
+      "feeder_key": "F2",
+      "feeder_raw": "2",
+      "events_total": 24,
+      "events_random": 24,
+      "events_planned": 0,
+      "events_reducible": 10,
+      "years_covered": 2,
+      "lambda_per_year": 12.0,
+      "lambda_reducible_per_year": 5.0,
+      "r_minutes": 30.958,
+      "r_minutes_nonzero": 30.958,
+      "energy_kwh": 5.6076,
+      "class_counts": {
+        "ناشی از هماهنگی حفاظتی": 11,
+        "قابل کاهش با کلیدگذاری": 10,
+        "نیازمند تعمیر یا تعویض تجهیز": 3
+      },
+      "u_hours": 6.1916
+    },
+    {
+      "feeder_key": "F3",
+      "feeder_raw": "3",
+      "events_total": 54,
+      "events_random": 54,
+      "events_planned": 0,
+      "events_reducible": 16,
+      "years_covered": 2,
+      "lambda_per_year": 27.0,
+      "lambda_reducible_per_year": 8.0,
+      "r_minutes": 32.222,
+      "r_minutes_nonzero": 32.83,
+      "energy_kwh": 6.2806,
+      "class_counts": {
+        "ناشی از هماهنگی حفاظتی": 33,
+        "قابل کاهش با کلیدگذاری": 16,
+        "نیازمند تعمیر یا تعویض تجهیز": 3,
+        "خارج از دامنه": 2
+      },
+      "u_hours": 14.4999
+    },
+    {
+      "feeder_key": "F4",
+      "feeder_raw": "4",
+      "events_total": 319,
+      "events_random": 319,
+      "events_planned": 0,
+      "events_reducible": 39,
+      "years_covered": 2,
+      "lambda_per_year": 159.5,
+      "lambda_reducible_per_year": 19.5,
+      "r_minutes": 70.417,
+      "r_minutes_nonzero": 73.891,
+      "energy_kwh": 114.1108,
+      "class_counts": {
+        "قابل کاهش با کلیدگذاری": 39,
+        "خارج از دامنه": 2,
+        "ناشی از هماهنگی حفاظتی": 250,
+        "نیازمند تعمیر یا تعویض تجهیز": 28
+      },
+      "u_hours": 187.1919
+    },
+    {
+      "feeder_key": "F5",
+      "feeder_raw": "5",
+      "events_total": 339,
+      "events_random": 339,
+      "events_planned": 0,
+      "events_reducible": 39,
+      "years_covered": 2,
+      "lambda_per_year": 169.5,
+      "lambda_reducible_per_year": 19.5,
+      "r_minutes": 62.772,
+      "r_minutes_nonzero": 65.083,
+      "energy_kwh": 83.3815,
+      "class_counts": {
+        "ناشی از هماهنگی حفاظتی": 279,
+        "قابل کاهش با کلیدگذاری": 39,
+        "خارج از دامنه": 4,
+        "نیازمند تعمیر یا تعویض تجهیز": 16,
+        "داده ناکافی": 1
+      },
+      "u_hours": 177.3309
+    },
+    {
+      "feeder_key": "F6",
+      "feeder_raw": "",
+      "events_total": 0,
+      "events_random": 0,
+      "events_planned": 0,
+      "events_reducible": 0,
+      "years_covered": 0,
+      "lambda_per_year": 0.0,
+      "lambda_reducible_per_year": 0.0,
+      "r_minutes": 0.0,
+      "r_minutes_nonzero": null,
+      "energy_kwh": 0,
+      "class_counts": {},
+      "u_hours": 0.0
+    },
+    {
+      "feeder_key": "F7",
+      "feeder_raw": "7",
+      "events_total": 22,
+      "events_random": 22,
+      "events_planned": 0,
+      "events_reducible": 8,
+      "years_covered": 2,
+      "lambda_per_year": 11.0,
+      "lambda_reducible_per_year": 4.0,
+      "r_minutes": 35.318,
+      "r_minutes_nonzero": 35.318,
+      "energy_kwh": 9.0624,
+      "class_counts": {
+        "ناشی از هماهنگی حفاظتی": 12,
+        "قابل کاهش با کلیدگذاری": 8,
+        "نیازمند تعمیر یا تعویض تجهیز": 2
+      },
+      "u_hours": 6.475
+    }
+  ],
+  "levels": {
+    "lambda_r": [
+      {
+        "feeder_key": "F1",
+        "feeder_raw": "1",
+        "events_total": 130,
+        "events_random": 130,
+        "events_planned": 0,
+        "events_reducible": 19,
+        "years_covered": 2,
+        "lambda_per_year": 65.0,
+        "lambda_reducible_per_year": 9.5,
+        "r_minutes": 60.685,
+        "r_minutes_nonzero": 60.685,
+        "energy_kwh": 11.6015,
+        "class_counts": {
+          "ناشی از هماهنگی حفاظتی": 107,
+          "قابل کاهش با کلیدگذاری": 19,
+          "نیازمند تعمیر یا تعویض تجهیز": 4
+        },
+        "u_hours": 65.7421
+      },
+      {
+        "feeder_key": "F2",
+        "feeder_raw": "2",
+        "events_total": 24,
+        "events_random": 24,
+        "events_planned": 0,
+        "events_reducible": 10,
+        "years_covered": 2,
+        "lambda_per_year": 12.0,
+        "lambda_reducible_per_year": 5.0,
+        "r_minutes": 30.958,
+        "r_minutes_nonzero": 30.958,
+        "energy_kwh": 5.6076,
+        "class_counts": {
+          "ناشی از هماهنگی حفاظتی": 11,
+          "قابل کاهش با کلیدگذاری": 10,
+          "نیازمند تعمیر یا تعویض تجهیز": 3
+        },
+        "u_hours": 6.1916
+      },
+      {
+        "feeder_key": "F3",
+        "feeder_raw": "3",
+        "events_total": 54,
+        "events_random": 54,
+        "events_planned": 0,
+        "events_reducible": 16,
+        "years_covered": 2,
+        "lambda_per_year": 27.0,
+        "lambda_reducible_per_year": 8.0,
+        "r_minutes": 32.222,
+        "r_minutes_nonzero": 32.83,
+        "energy_kwh": 6.2806,
+        "class_counts": {
+          "ناشی از هماهنگی حفاظتی": 33,
+          "قابل کاهش با کلیدگذاری": 16,
+          "نیازمند تعمیر یا تعویض تجهیز": 3,
+          "خارج از دامنه": 2
+        },
+        "u_hours": 14.4999
+      },
+      {
+        "feeder_key": "F4",
+        "feeder_raw": "4",
+        "events_total": 319,
+        "events_random": 319,
+        "events_planned": 0,
+        "events_reducible": 39,
+        "years_covered": 2,
+        "lambda_per_year": 159.5,
+        "lambda_reducible_per_year": 19.5,
+        "r_minutes": 70.417,
+        "r_minutes_nonzero": 73.891,
+        "energy_kwh": 114.1108,
+        "class_counts": {
+          "قابل کاهش با کلیدگذاری": 39,
+          "خارج از دامنه": 2,
+          "ناشی از هماهنگی حفاظتی": 250,
+          "نیازمند تعمیر یا تعویض تجهیز": 28
+        },
+        "u_hours": 187.1919
+      },
+      {
+        "feeder_key": "F5",
+        "feeder_raw": "5",
+        "events_total": 339,
+        "events_random": 339,
+        "events_planned": 0,
+        "events_reducible": 39,
+        "years_covered": 2,
+        "lambda_per_year": 169.5,
+        "lambda_reducible_per_year": 19.5,
+        "r_minutes": 62.772,
+        "r_minutes_nonzero": 65.083,
+        "energy_kwh": 83.3815,
+        "class_counts": {
+          "ناشی از هماهنگی حفاظتی": 279,
+          "قابل کاهش با کلیدگذاری": 39,
+          "خارج از دامنه": 4,
+          "نیازمند تعمیر یا تعویض تجهیز": 16,
+          "داده ناکافی": 1
+        },
+        "u_hours": 177.3309
+      },
+      {
+        "feeder_key": "F6",
+        "feeder_raw": "",
+        "events_total": 0,
+        "events_random": 0,
+        "events_planned": 0,
+        "events_reducible": 0,
+        "years_covered": 0,
+        "lambda_per_year": 0.0,
+        "lambda_reducible_per_year": 0.0,
+        "r_minutes": 0.0,
+        "r_minutes_nonzero": null,
+        "energy_kwh": 0,
+        "class_counts": {},
+        "u_hours": 0.0
+      },
+      {
+        "feeder_key": "F7",
+        "feeder_raw": "7",
+        "events_total": 22,
+        "events_random": 22,
+        "events_planned": 0,
+        "events_reducible": 8,
+        "years_covered": 2,
+        "lambda_per_year": 11.0,
+        "lambda_reducible_per_year": 4.0,
+        "r_minutes": 35.318,
+        "r_minutes_nonzero": 35.318,
+        "energy_kwh": 9.0624,
+        "class_counts": {
+          "ناشی از هماهنگی حفاظتی": 12,
+          "قابل کاهش با کلیدگذاری": 8,
+          "نیازمند تعمیر یا تعویض تجهیز": 2
+        },
+        "u_hours": 6.475
+      }
+    ],
+    "class_summary": {
+      "قابل کاهش با کلیدگذاری": 249,
+      "ناشی از هماهنگی حفاظتی": 1537,
+      "خارج از دامنه": 37,
+      "نیازمند تعمیر یا تعویض تجهیز": 138,
+      "داده ناکافی": 38,
+      "برنامه‌ریزی‌شده": 1
+    },
+    "level1_by_cause": [
+      {
+        "cause": "عملکرد یا اشکال در کات اوت فیوز",
+        "events": 1346,
+        "mean_duration_min": 58.84,
+        "energy_kwh": 90.3892,
+        "dominant_class": "ناشی از هماهنگی حفاظتی"
+      },
+      {
+        "cause": "عیب گذرا",
+        "events": 110,
+        "mean_duration_min": 14.2,
+        "energy_kwh": 65.9948,
+        "dominant_class": "قابل کاهش با کلیدگذاری"
+      },
+      {
+        "cause": "برخورد پرندگان",
+        "events": 97,
+        "mean_duration_min": 48.8,
+        "energy_kwh": 6.5596,
+        "dominant_class": "ناشی از هماهنگی حفاظتی"
+      },
+      {
+        "cause": "عیب نامشخص",
+        "events": 55,
+        "mean_duration_min": 22.11,
+        "energy_kwh": 16.3714,
+        "dominant_class": "قابل کاهش با کلیدگذاری"
+      },
+      {
+        "cause": "اشکال در مقره (بشقابی ، سوزنی )",
+        "events": 40,
+        "mean_duration_min": 106.95,
+        "energy_kwh": 13.4678,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "باد و طوفان",
+        "events": 40,
+        "mean_duration_min": 79.74,
+        "energy_kwh": 28.1148,
+        "dominant_class": "ناشی از هماهنگی حفاظتی"
+      },
+      {
+        "cause": "برخورد اشیای خارجی",
+        "events": 34,
+        "mean_duration_min": 22.59,
+        "energy_kwh": 9.812,
+        "dominant_class": "قابل کاهش با کلیدگذاری"
+      },
+      {
+        "cause": "رعد و برق",
+        "events": 32,
+        "mean_duration_min": 22.41,
+        "energy_kwh": 8.6703,
+        "dominant_class": "قابل کاهش با کلیدگذاری"
+      },
+      {
+        "cause": "اشکال در جمپر",
+        "events": 19,
+        "mean_duration_min": 84.42,
+        "energy_kwh": 4.7725,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "در رفتگی سیم اصلی",
+        "events": 18,
+        "mean_duration_min": 112.72,
+        "energy_kwh": 3.2098,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "برف و تگرگ",
+        "events": 14,
+        "mean_duration_min": 117.62,
+        "energy_kwh": 4.137,
+        "dominant_class": "ناشی از هماهنگی حفاظتی"
+      },
+      {
+        "cause": "سایر اشکالات همزمان با توضیحات",
+        "events": 12,
+        "mean_duration_min": 69.0,
+        "energy_kwh": 3.7678,
+        "dominant_class": "ناشی از هماهنگی حفاظتی"
+      },
+      {
+        "cause": "سوختن کابلشو کابل ارتباط ترانسفورماتور به تابلو فشارضعیف یا باس بار",
+        "events": 12,
+        "mean_duration_min": 60.5,
+        "energy_kwh": 0.1954,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "برخورد درختان مزاحم",
+        "events": 11,
+        "mean_duration_min": 59.36,
+        "energy_kwh": 0.3634,
+        "dominant_class": "ناشی از هماهنگی حفاظتی"
+      },
+      {
+        "cause": "عبور حیوانات یا پرندگان",
+        "events": 11,
+        "mean_duration_min": 58.64,
+        "energy_kwh": 0.0539,
+        "dominant_class": "ناشی از هماهنگی حفاظتی"
+      },
+      {
+        "cause": "بارندگی",
+        "events": 9,
+        "mean_duration_min": 67.56,
+        "energy_kwh": 13.2154,
+        "dominant_class": "قابل کاهش با کلیدگذاری"
+      },
+      {
+        "cause": "سیم پارگی",
+        "events": 9,
+        "mean_duration_min": 136.56,
+        "energy_kwh": 5.9866,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "اشکال در شبکه داخلی مشترکان",
+        "events": 8,
+        "mean_duration_min": 30.62,
+        "energy_kwh": 0.8574,
+        "dominant_class": "خارج از دامنه"
+      },
+      {
+        "cause": "معیوب شدن برقگیر",
+        "events": 8,
+        "mean_duration_min": 91.0,
+        "energy_kwh": 0.3014,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "اشکال در سرکابل هوایی کابل خودنگهدار",
+        "events": 7,
+        "mean_duration_min": 108.43,
+        "energy_kwh": 13.2427,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "سرقت کابلهای ارتباطی",
+        "events": 7,
+        "mean_duration_min": 57.57,
+        "energy_kwh": 0.1088,
+        "dominant_class": "خارج از دامنه"
+      },
+      {
+        "cause": "اشکال در کابل ارتباط ترانسفورماتور به تابلو فشارضعیف یا باس بار(شینه)",
+        "events": 7,
+        "mean_duration_min": 134.57,
+        "energy_kwh": 0.2447,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "اشکال در لوازم اندازه گیری مشترکان دیماندی فشار متوسط",
+        "events": 6,
+        "mean_duration_min": 71.5,
+        "energy_kwh": 0.1144,
+        "dominant_class": "خارج از دامنه"
+      },
+      {
+        "cause": "فشار متوسط",
+        "events": 6,
+        "mean_duration_min": 23.33,
+        "energy_kwh": 0.0,
+        "dominant_class": "قابل کاهش با کلیدگذاری"
+      },
+      {
+        "cause": "مه و رطوبت بالا",
+        "events": 6,
+        "mean_duration_min": 101.33,
+        "energy_kwh": 15.2637,
+        "dominant_class": "ناشی از هماهنگی حفاظتی"
+      },
+      {
+        "cause": "سرقت ترانسفورماتور",
+        "events": 5,
+        "mean_duration_min": 70.0,
+        "energy_kwh": 0.0858,
+        "dominant_class": "خارج از دامنه"
+      },
+      {
+        "cause": "سرقت تجهیزات شبکه",
+        "events": 5,
+        "mean_duration_min": 61.4,
+        "energy_kwh": 0.0753,
+        "dominant_class": "خارج از دامنه"
+      },
+      {
+        "cause": "عملکرد یا اشکال در دژنکتور",
+        "events": 4,
+        "mean_duration_min": 30.25,
+        "energy_kwh": 0.0005,
+        "dominant_class": "قابل کاهش با کلیدگذاری"
+      },
+      {
+        "cause": "اشکال در ترانسفورماتور",
+        "events": 4,
+        "mean_duration_min": 119.5,
+        "energy_kwh": 0.1619,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "اشکال در جمپرهای پست هوایی",
+        "events": 4,
+        "mean_duration_min": 95.25,
+        "energy_kwh": 0.3915,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "اشکال در پایه (سیمانی – چوبی – فلزی)",
+        "events": 4,
+        "mean_duration_min": 78.75,
+        "energy_kwh": 3.2257,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "اشکال در شبکه داخلی مشترکان فشارمتوسط",
+        "events": 3,
+        "mean_duration_min": 50.67,
+        "energy_kwh": 1.9437,
+        "dominant_class": "خارج از دامنه"
+      },
+      {
+        "cause": "برخورد هادیهای شبکه به هم یا به بدنه (پایه)",
+        "events": 2,
+        "mean_duration_min": 110.0,
+        "energy_kwh": 0.0587,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "سرقت تجهیزات",
+        "events": 2,
+        "mean_duration_min": 37.0,
+        "energy_kwh": 0.0181,
+        "dominant_class": "خارج از دامنه"
+      },
+      {
+        "cause": "اتصالی یا اشکال در شبکه فشار ضعیف",
+        "events": 1,
+        "mean_duration_min": 242.0,
+        "energy_kwh": 0.0591,
+        "dominant_class": "خارج از دامنه"
+      },
+      {
+        "cause": "اتصالی کابل فشار متوسط",
+        "events": 1,
+        "mean_duration_min": 133.0,
+        "energy_kwh": 2.7792,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "اشکال در پستها",
+        "events": 1,
+        "mean_duration_min": 49.0,
+        "energy_kwh": 1.1061,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "بروز عیب در اتوبوستر",
+        "events": 1,
+        "mean_duration_min": 30.0,
+        "energy_kwh": 0.2944,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "قطع اضطراری",
+        "events": 1,
+        "mean_duration_min": 10.0,
+        "energy_kwh": 0.4907,
+        "dominant_class": "برنامه‌ریزی‌شده"
+      },
+      {
+        "cause": "عیب در قطع کننده ها",
+        "events": 1,
+        "mean_duration_min": 42.0,
+        "energy_kwh": 0.1031,
+        "dominant_class": "نیازمند تعمیر یا تعویض تجهیز"
+      },
+      {
+        "cause": "قطر یخ(گالوپینگ)",
+        "events": 1,
+        "mean_duration_min": 58.0,
+        "energy_kwh": 0.008,
+        "dominant_class": "ناشی از هماهنگی حفاظتی"
+      }
+    ],
+    "level2_by_fault_group": [
+      {
+        "fault_group": "حفاظت و کلید",
+        "events": 1351,
+        "mean_duration_min": 58.75,
+        "energy_kwh": 90.4928
+      },
+      {
+        "fault_group": "گذرا",
+        "events": 110,
+        "mean_duration_min": 14.2,
+        "energy_kwh": 65.9948
+      },
+      {
+        "fault_group": "جانداران",
+        "events": 108,
+        "mean_duration_min": 49.81,
+        "energy_kwh": 6.6135
+      },
+      {
+        "fault_group": "تجهیز خط هوایی",
+        "events": 105,
+        "mean_duration_min": 102.99,
+        "energy_kwh": 31.7084
+      },
+      {
+        "fault_group": "شرایط جوی",
+        "events": 102,
+        "mean_duration_min": 66.3,
+        "energy_kwh": 69.4091
+      },
+      {
+        "fault_group": "شبکه فشار متوسط (نامشخص)",
+        "events": 73,
+        "mean_duration_min": 29.92,
+        "energy_kwh": 20.1392
+      },
+      {
+        "fault_group": "انسانی/خارجی",
+        "events": 53,
+        "mean_duration_min": 35.89,
+        "energy_kwh": 10.1
+      },
+      {
+        "fault_group": "ترانس و پست",
+        "events": 32,
+        "mean_duration_min": 96.47,
+        "energy_kwh": 17.7301
+      },
+      {
+        "fault_group": "مشترک/اندازه‌گیری",
+        "events": 17,
+        "mean_duration_min": 48.59,
+        "energy_kwh": 2.9155
+      },
+      {
+        "fault_group": "درختان",
+        "events": 11,
+        "mean_duration_min": 59.36,
+        "energy_kwh": 0.3634
+      },
+      {
+        "fault_group": "شبکه فشار ضعیف",
+        "events": 1,
+        "mean_duration_min": 242.0,
+        "energy_kwh": 0.0591
+      },
+      {
+        "fault_group": "بهره‌برداری/مدیریت بار",
+        "events": 1,
+        "mean_duration_min": 10.0,
+        "energy_kwh": 0.4907
+      }
+    ],
+    "level3_by_time": {
+      "year_month_counts": {
+        "1404": {
+          "07": 152,
+          "08": 124,
+          "09": 89,
+          "10": 170,
+          "11": 132,
+          "12": 57
+        },
+        "1405": {
+          "01": 93,
+          "02": 160,
+          "03": 173,
+          "04": 224,
+          "05": 229,
+          "06": 191,
+          "07": 118,
+          "08": 52
+        }
+      },
+      "year_summary": {
+        "1404": {
+          "events": 724,
+          "mean_duration_min": 63.18,
+          "energy_kwh": 90.8702
+        },
+        "1405": {
+          "events": 1240,
+          "mean_duration_min": 54.06,
+          "energy_kwh": 225.1465
+        }
+      }
+    },
+    "level4_by_scope": {
+      "feeder_device_counts": [
+        {
+          "feeder": "F5",
+          "device": "کات اوت سرخط",
+          "events": 215
+        },
+        {
+          "feeder": "F4",
+          "device": "کات اوت سرخط",
+          "events": 197
+        },
+        {
+          "feeder": "2كمي آ باد",
+          "device": "کات اوت ترانس",
+          "events": 190
+        },
+        {
+          "feeder": "4كمي آ باد",
+          "device": "کات اوت سرخط",
+          "events": 183
+        },
+        {
+          "feeder": "2كمي آ باد",
+          "device": "کات اوت سرخط",
+          "events": 134
+        },
+        {
+          "feeder": "4كمي آ باد",
+          "device": "کات اوت ترانس",
+          "events": 115
+        },
+        {
+          "feeder": "1كمي آ باد",
+          "device": "کات اوت سرخط",
+          "events": 89
+        },
+        {
+          "feeder": "6كمي آ باد",
+          "device": "کات اوت ترانس",
+          "events": 88
+        },
+        {
+          "feeder": "F1",
+          "device": "کات اوت سرخط",
+          "events": 82
+        },
+        {
+          "feeder": "F4",
+          "device": "کات اوت ترانس",
+          "events": 79
+        },
+        {
+          "feeder": "F5",
+          "device": "کات اوت ترانس",
+          "events": 77
+        },
+        {
+          "feeder": "6كمي آ باد",
+          "device": "کات اوت سرخط",
+          "events": 49
+        },
+        {
+          "feeder": "1كمي آ باد",
+          "device": "کات اوت ترانس",
+          "events": 41
+        },
+        {
+          "feeder": "1كمي آ باد",
+          "device": "بریکر پست فوق توزیع",
+          "events": 38
+        },
+        {
+          "feeder": "(بدون فیدر)",
+          "device": "(نامشخص)",
+          "events": 36
+        },
+        {
+          "feeder": "6كمي آ باد",
+          "device": "بریکر پست فوق توزیع",
+          "events": 33
+        },
+        {
+          "feeder": "F1",
+          "device": "کات اوت ترانس",
+          "events": 26
+        },
+        {
+          "feeder": "5كمي آ باد",
+          "device": "کات اوت ترانس",
+          "events": 25
+        },
+        {
+          "feeder": "F3",
+          "device": "کات اوت سرخط",
+          "events": 23
+        },
+        {
+          "feeder": "F4",
+          "device": "(نامشخص)",
+          "events": 22
+        },
+        {
+          "feeder": "F5",
+          "device": "بریکر پست فوق توزیع",
+          "events": 21
+        },
+        {
+          "feeder": "5كمي آ باد",
+          "device": "بریکر پست فوق توزیع",
+          "events": 18
+        },
+        {
+          "feeder": "F4",
+          "device": "بریکر پست فوق توزیع",
+          "events": 18
+        },
+        {
+          "feeder": "F5",
+          "device": "(نامشخص)",
+          "events": 18
+        },
+        {
+          "feeder": "3كمي آ باد",
+          "device": "بریکر پست فوق توزیع",
+          "events": 17
+        },
+        {
+          "feeder": "F1",
+          "device": "بریکر پست فوق توزیع",
+          "events": 16
+        },
+        {
+          "feeder": "4كمي آ باد",
+          "device": "بریکر پست فوق توزیع",
+          "events": 14
+        },
+        {
+          "feeder": "2كمي آ باد",
+          "device": "بریکر پست فوق توزیع",
+          "events": 12
+        },
+        {
+          "feeder": "5كمي آ باد",
+          "device": "کات اوت سرخط",
+          "events": 11
+        },
+        {
+          "feeder": "F3",
+          "device": "کات اوت ترانس",
+          "events": 10
+        },
+        {
+          "feeder": "F2",
+          "device": "کات اوت ترانس",
+          "events": 8
+        },
+        {
+          "feeder": "F3",
+          "device": "بریکر پست فوق توزیع",
+          "events": 7
+        },
+        {
+          "feeder": "F3",
+          "device": "دیژنکتور پست زمینی",
+          "events": 7
+        },
+        {
+          "feeder": "F7",
+          "device": "کات اوت سرخط",
+          "events": 7
+        },
+        {
+          "feeder": "3كمي آ باد",
+          "device": "کات اوت ترانس",
+          "events": 6
+        },
+        {
+          "feeder": "F2",
+          "device": "(نامشخص)",
+          "events": 6
+        },
+        {
+          "feeder": "F2",
+          "device": "بریکر پست فوق توزیع",
+          "events": 6
+        },
+        {
+          "feeder": "F3",
+          "device": "(نامشخص)",
+          "events": 6
+        },
+        {
+          "feeder": "F7",
+          "device": "بریکر پست فوق توزیع",
+          "events": 6
+        },
+        {
+          "feeder": "F7",
+          "device": "کات اوت ترانس",
+          "events": 5
+        },
+        {
+          "feeder": "F7",
+          "device": "(نامشخص)",
+          "events": 4
+        },
+        {
+          "feeder": "F1",
+          "device": "(نامشخص)",
+          "events": 3
+        },
+        {
+          "feeder": "F1",
+          "device": "کلید اصلی",
+          "events": 3
+        },
+        {
+          "feeder": "2كمي آ باد",
+          "device": "ریکلوزر مسیر خط",
+          "events": 2
+        },
+        {
+          "feeder": "4كمي آ باد",
+          "device": "ریکلوزر مسیر خط",
+          "events": 2
+        },
+        {
+          "feeder": "4كمي آ باد",
+          "device": "کلید اصلی",
+          "events": 2
+        },
+        {
+          "feeder": "F2",
+          "device": "دیژنکتور پست زمینی",
+          "events": 2
+        },
+        {
+          "feeder": "F2",
+          "device": "کات اوت سرخط",
+          "events": 2
+        },
+        {
+          "feeder": "F4",
+          "device": "سکسیونر نصب هوایی",
+          "events": 2
+        },
+        {
+          "feeder": "F5",
+          "device": "دیژنکتور پست زمینی",
+          "events": 2
+        },
+        {
+          "feeder": "F5",
+          "device": "کلید اصلی",
+          "events": 2
+        },
+        {
+          "feeder": "1كمي آ باد",
+          "device": "سکسیونر نصب هوایی",
+          "events": 1
+        },
+        {
+          "feeder": "1كمي آ باد",
+          "device": "کلید اصلی",
+          "events": 1
+        },
+        {
+          "feeder": "2كمي آ باد",
+          "device": "سکسیونر نصب هوایی",
+          "events": 1
+        },
+        {
+          "feeder": "3كمي آ باد",
+          "device": "(نامشخص)",
+          "events": 1
+        },
+        {
+          "feeder": "3كمي آ باد",
+          "device": "کات اوت سرخط",
+          "events": 1
+        },
+        {
+          "feeder": "5كمي آ باد",
+          "device": "سکسیونر نصب هوایی",
+          "events": 1
+        },
+        {
+          "feeder": "6كمي آ باد",
+          "device": "ریکلوزر مسیر خط",
+          "events": 1
+        },
+        {
+          "feeder": "F3",
+          "device": "سکسیونر نصب هوایی",
+          "events": 1
+        },
+        {
+          "feeder": "F4",
+          "device": "فیوز مینیاتوری روستایی",
+          "events": 1
+        },
+        {
+          "feeder": "F5",
+          "device": "ریکلوزر مسیر خط",
+          "events": 1
+        },
+        {
+          "feeder": "F5",
+          "device": "سکسیونر نصب هوایی",
+          "events": 1
+        },
+        {
+          "feeder": "F5",
+          "device": "فیوز مینیاتوری روستایی",
+          "events": 1
+        },
+        {
+          "feeder": "F5",
+          "device": "کلید فیدر",
+          "events": 1
+        }
+      ],
+      "feeder_class_counts": {
+        "(بدون فیدر)": {
+          "داده ناکافی": 36
+        },
+        "1كمي آ باد": {
+          "ناشی از هماهنگی حفاظتی": 104,
+          "قابل کاهش با کلیدگذاری": 30,
+          "نیازمند تعمیر یا تعویض تجهیز": 29,
+          "خارج از دامنه": 6,
+          "برنامه‌ریزی‌شده": 1
+        },
+        "2كمي آ باد": {
+          "ناشی از هماهنگی حفاظتی": 303,
+          "قابل کاهش با کلیدگذاری": 13,
+          "خارج از دامنه": 7,
+          "نیازمند تعمیر یا تعویض تجهیز": 16
+        },
+        "3كمي آ باد": {
+          "قابل کاهش با کلیدگذاری": 14,
+          "ناشی از هماهنگی حفاظتی": 5,
+          "نیازمند تعمیر یا تعویض تجهیز": 6
+        },
+        "4كمي آ باد": {
+          "ناشی از هماهنگی حفاظتی": 279,
+          "خارج از دامنه": 5,
+          "قابل کاهش با کلیدگذاری": 14,
+          "نیازمند تعمیر یا تعویض تجهیز": 17,
+          "داده ناکافی": 1
+        },
+        "5كمي آ باد": {
+          "قابل کاهش با کلیدگذاری": 17,
+          "ناشی از هماهنگی حفاظتی": 30,
+          "خارج از دامنه": 2,
+          "نیازمند تعمیر یا تعویض تجهیز": 6
+        },
+        "6كمي آ باد": {
+          "ناشی از هماهنگی حفاظتی": 124,
+          "قابل کاهش با کلیدگذاری": 30,
+          "نیازمند تعمیر یا تعویض تجهیز": 8,
+          "خارج از دامنه": 9
+        },
+        "F1": {
+          "ناشی از هماهنگی حفاظتی": 107,
+          "قابل کاهش با کلیدگذاری": 19,
+          "نیازمند تعمیر یا تعویض تجهیز": 4
+        },
+        "F2": {
+          "ناشی از هماهنگی حفاظتی": 11,
+          "قابل کاهش با کلیدگذاری": 10,
+          "نیازمند تعمیر یا تعویض تجهیز": 3
+        },
+        "F3": {
+          "ناشی از هماهنگی حفاظتی": 33,
+          "قابل کاهش با کلیدگذاری": 16,
+          "نیازمند تعمیر یا تعویض تجهیز": 3,
+          "خارج از دامنه": 2
+        },
+        "F4": {
+          "قابل کاهش با کلیدگذاری": 39,
+          "خارج از دامنه": 2,
+          "ناشی از هماهنگی حفاظتی": 250,
+          "نیازمند تعمیر یا تعویض تجهیز": 28
+        },
+        "F5": {
+          "ناشی از هماهنگی حفاظتی": 279,
+          "قابل کاهش با کلیدگذاری": 39,
+          "خارج از دامنه": 4,
+          "نیازمند تعمیر یا تعویض تجهیز": 16,
+          "داده ناکافی": 1
+        },
+        "F7": {
+          "ناشی از هماهنگی حفاظتی": 12,
+          "قابل کاهش با کلیدگذاری": 8,
+          "نیازمند تعمیر یا تعویض تجهیز": 2
+        }
+      }
+    }
+  },
+  "rule_counts": {
+    "R-SWITCH-01": 249,
+    "R-COORD-01": 1537,
+    "R-DOM-01": 37,
+    "R-REP-01": 138,
+    "R-NAK-01": 38,
+    "R-PLAN-01": 1
+  },
+  "issue_codes": {
+    "OUT-A08-INSUFFICIENT": 1,
+    "OUT-FEEDER-OUT-OF-MODEL": 1,
+    "OUT-A08-ENERGY-UNIT": 1,
+    "OUT-POL-02-PLANNED": 1
+  }
+}

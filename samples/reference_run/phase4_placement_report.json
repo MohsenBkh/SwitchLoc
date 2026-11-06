@@ -1,0 +1,1335 @@
+{
+ "table13_connections": [
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "70fc7b01-cacf-595a-be4d-e63ddb063060",
+   "automation_capable": true,
+   "n_ties": 1,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "78327900-08ef-5532-a24c-e44e7f5df5e5",
+   "automation_capable": true,
+   "n_ties": 2,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "23016d0d-edf3-5ea1-bd0a-f45bacce397e",
+   "automation_capable": true,
+   "n_ties": 3,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "8d9db8c5-73d7-575c-baf6-1bf3acc9c5c8",
+   "automation_capable": true,
+   "n_ties": 4,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "b03751a9-dd5d-5528-bd8a-c573818c30ae",
+   "automation_capable": true,
+   "n_ties": 5,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "73933bad-8de6-58e3-9562-caf53375c048",
+   "automation_capable": true,
+   "n_ties": 6,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "4d4fc278-fe9f-59a1-8e77-513fb27891b6",
+   "automation_capable": true,
+   "n_ties": 7,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "7dbb8e68-4619-5cf2-868e-a49316389825",
+   "automation_capable": true,
+   "n_ties": 8,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "01c9d76f-26cd-5864-a9a1-a484385a858a",
+   "automation_capable": true,
+   "n_ties": 9,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "b2e94588-104f-590b-b4c1-1e527a8eb8ab",
+   "automation_capable": true,
+   "n_ties": 10,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "e32cbcc5-518a-55af-8d6d-253ad5953dbc",
+   "automation_capable": true,
+   "n_ties": 11,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "4595bd2f-78e0-5af3-abc4-d8c6033a022d",
+   "automation_capable": true,
+   "n_ties": 12,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "e2234af7-9031-595e-acaa-24dd1fa0ad1e",
+   "automation_capable": true,
+   "n_ties": 13,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "3ac7da0c-a546-52f2-bcf5-6db10f14d391",
+   "automation_capable": true,
+   "n_ties": 14,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "98a567db-beac-53a4-9702-9f334ccaac75",
+   "automation_capable": true,
+   "n_ties": 15,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "b20059b3-66dc-5b71-a8b5-d530fed718b8",
+   "automation_capable": true,
+   "n_ties": 16,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "f675739a-487c-5edc-8feb-a5ee7887d068",
+   "automation_capable": true,
+   "n_ties": 17,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "0253fb08-0afe-5792-b68d-ffeb16710b55",
+   "automation_capable": true,
+   "n_ties": 18,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "dede249a-9892-561a-bdad-de85d563a322",
+   "automation_capable": true,
+   "n_ties": 19,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "1745a74b-6658-5596-af0c-245f164879fd",
+   "automation_capable": true,
+   "n_ties": 20,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "f013f19b-ce47-5654-bd4f-2991cdf24ad2",
+   "automation_capable": true,
+   "n_ties": 21,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "da04a20f-b770-57f9-a73d-c28620887e0f",
+   "automation_capable": true,
+   "n_ties": 22,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "33a443a0-7461-55c8-b4aa-94362f25e57b",
+   "automation_capable": true,
+   "n_ties": 23,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "eead8f7e-ac8c-5523-8995-231be3af8497",
+   "automation_capable": true,
+   "n_ties": 24,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "cc2b5cdf-0c3e-51e6-9f79-e3bec3397751",
+   "automation_capable": true,
+   "n_ties": 25,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "700f398b-0511-5735-bb8e-f12b6e993c57",
+   "automation_capable": true,
+   "n_ties": 26,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "f39c1e1a-dba6-5452-93e8-7aea6752adb3",
+   "automation_capable": true,
+   "n_ties": 27,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "b4efc070-9c50-5ea3-b10a-86254167667a",
+   "automation_capable": true,
+   "n_ties": 28,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "d1f37dea-dac1-5e4d-a4cf-70232b309100",
+   "automation_capable": true,
+   "n_ties": 29,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "5e3dc8b7-c4a2-5cdf-a0cd-3e308257b101",
+   "automation_capable": true,
+   "n_ties": 30,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "e65ca9bd-9bea-5d9f-ba44-b1e5c547e8a2",
+   "automation_capable": true,
+   "n_ties": 31,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "bb41a31d-66b1-5376-b111-8a99cc62e773",
+   "automation_capable": true,
+   "n_ties": 32,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F3",
+   "switch_id": "79acd18c-1516-5a29-8ccd-8303e5b7c415",
+   "automation_capable": true,
+   "n_ties": 33,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F4",
+   "switch_id": "70fc7b01-cacf-595a-be4d-e63ddb063060",
+   "automation_capable": true,
+   "n_ties": 1,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F4",
+   "switch_id": "78327900-08ef-5532-a24c-e44e7f5df5e5",
+   "automation_capable": true,
+   "n_ties": 2,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F4",
+   "switch_id": "23016d0d-edf3-5ea1-bd0a-f45bacce397e",
+   "automation_capable": true,
+   "n_ties": 3,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F4",
+   "switch_id": "8d9db8c5-73d7-575c-baf6-1bf3acc9c5c8",
+   "automation_capable": true,
+   "n_ties": 4,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F4",
+   "switch_id": "b03751a9-dd5d-5528-bd8a-c573818c30ae",
+   "automation_capable": true,
+   "n_ties": 5,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F4",
+   "switch_id": "73933bad-8de6-58e3-9562-caf53375c048",
+   "automation_capable": true,
+   "n_ties": 6,
+   "m_automation": 1
+  },
+  {
+   "feeder_a": "F2",
+   "feeder_b": "F4",
+   "switch_id": "4d4fc278-fe9f-59a1-8e77-513fb27891b6",
+   "automation_capable": true,
+   "n_ties": 7,
+   "m_automation": 1
+  }
+ ],
+ "table14_eptl": [
+  {
+   "feeder_key": "F1",
+   "ep_percent": 100.0,
+   "tl_percent": 0.0,
+   "worst_zone": "a0551d24-1dd6-571e-aee5-18c64eb4ab2a",
+   "total_load_kw": 475.0,
+   "zone_count": 1
+  },
+  {
+   "feeder_key": "F2",
+   "ep_percent": 54.42,
+   "tl_percent": 45.58,
+   "worst_zone": "13dda4bd-f695-5212-884c-e8cb57f5afec",
+   "total_load_kw": 1130.0,
+   "zone_count": 3
+  },
+  {
+   "feeder_key": "F3",
+   "ep_percent": 100.0,
+   "tl_percent": 0.0,
+   "worst_zone": "8687c875-c7bc-575b-b730-d54756a89812",
+   "total_load_kw": 1345.0,
+   "zone_count": 3
+  },
+  {
+   "feeder_key": "F4",
+   "ep_percent": 100.0,
+   "tl_percent": 0.0,
+   "worst_zone": "b3191dcd-8fbc-5231-9da1-dbae51a2279f",
+   "total_load_kw": 1560.0,
+   "zone_count": 2
+  },
+  {
+   "feeder_key": "F5",
+   "ep_percent": 100.0,
+   "tl_percent": 0.0,
+   "worst_zone": "b4c60310-44c0-5dfc-902a-0b186a31c851",
+   "total_load_kw": 2000.0,
+   "zone_count": 1
+  },
+  {
+   "feeder_key": "F7",
+   "ep_percent": 100.0,
+   "tl_percent": 0.0,
+   "worst_zone": "7d2be184-7d60-5a33-9afa-ee811f5dcb22",
+   "total_load_kw": 1345.0,
+   "zone_count": 3
+  }
+ ],
+ "table15_rows": [
+  {
+   "feeder_key": "F1",
+   "zone": "a0551d24-1dd6-571e-aee5-18c64eb4ab2a",
+   "zone_no": 0,
+   "shed_kw": 475.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 475.0
+  },
+  {
+   "feeder_key": "F2",
+   "zone": "13dda4bd-f695-5212-884c-e8cb57f5afec",
+   "zone_no": 0,
+   "shed_kw": 615.0,
+   "restorable_kw": 515.0,
+   "feeder_load_kw": 1130.0
+  },
+  {
+   "feeder_key": "F2",
+   "zone": "a3ad3e68-f043-522c-a6ca-f1120247ed7a",
+   "zone_no": 1,
+   "shed_kw": 515.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 1130.0
+  },
+  {
+   "feeder_key": "F2",
+   "zone": "e8a6c6c2-2141-5dca-9768-7eeb063c99a9",
+   "zone_no": 2,
+   "shed_kw": 0.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 1130.0
+  },
+  {
+   "feeder_key": "F3",
+   "zone": "8687c875-c7bc-575b-b730-d54756a89812",
+   "zone_no": 0,
+   "shed_kw": 1345.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 1345.0
+  },
+  {
+   "feeder_key": "F3",
+   "zone": "bb6777d1-bb04-5894-b682-8e3798869800",
+   "zone_no": 1,
+   "shed_kw": 0.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 1345.0
+  },
+  {
+   "feeder_key": "F3",
+   "zone": "73f158a7-9666-55e9-b155-17910eed028a",
+   "zone_no": 2,
+   "shed_kw": 0.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 1345.0
+  },
+  {
+   "feeder_key": "F4",
+   "zone": "b3191dcd-8fbc-5231-9da1-dbae51a2279f",
+   "zone_no": 0,
+   "shed_kw": 1560.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 1560.0
+  },
+  {
+   "feeder_key": "F4",
+   "zone": "d350375f-1345-5110-bfdd-2263cdc5252f",
+   "zone_no": 1,
+   "shed_kw": 0.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 1560.0
+  },
+  {
+   "feeder_key": "F5",
+   "zone": "b4c60310-44c0-5dfc-902a-0b186a31c851",
+   "zone_no": 0,
+   "shed_kw": 2000.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 2000.0
+  },
+  {
+   "feeder_key": "F7",
+   "zone": "7d2be184-7d60-5a33-9afa-ee811f5dcb22",
+   "zone_no": 0,
+   "shed_kw": 1345.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 1345.0
+  },
+  {
+   "feeder_key": "F7",
+   "zone": "14578532-463b-5dc6-a695-f0b81af1b202",
+   "zone_no": 1,
+   "shed_kw": 0.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 1345.0
+  },
+  {
+   "feeder_key": "F7",
+   "zone": "967e28e9-51b7-5c8f-8e4a-f9555f9024b0",
+   "zone_no": 2,
+   "shed_kw": 0.0,
+   "restorable_kw": 0.0,
+   "feeder_load_kw": 1345.0
+  }
+ ],
+ "ranking": [
+  {
+   "feeder_key": "F5",
+   "rank": 1,
+   "score": 2.168035,
+   "raw": [
+    1.0,
+    100.0,
+    0.0,
+    2000.0,
+    169.5,
+    62.772
+   ],
+   "norm": [
+    0.047175,
+    0.180367,
+    0.199912,
+    0.254615,
+    0.381757,
+    0.214699
+   ],
+   "weighted": [
+    0.047175,
+    0.360734,
+    0.399825,
+    0.763845,
+    0.381757,
+    0.214699
+   ],
+   "ties_count": 1,
+   "ep_percent": 100.0,
+   "tl_percent": 0.0,
+   "load_priority_sum": 2000.0,
+   "lambda_per_year": 169.5,
+   "lambda_reducible": 19.5,
+   "r_minutes": 62.77
+  },
+  {
+   "feeder_key": "F4",
+   "rank": 2,
+   "score": 1.963178,
+   "raw": [
+    7.0,
+    100.0,
+    0.0,
+    1560.0,
+    159.5,
+    70.417
+   ],
+   "norm": [
+    0.006739,
+    0.180367,
+    0.199912,
+    0.1986,
+    0.359234,
+    0.240847
+   ],
+   "weighted": [
+    0.006739,
+    0.360734,
+    0.399825,
+    0.595799,
+    0.359234,
+    0.240847
+   ],
+   "ties_count": 7,
+   "ep_percent": 100.0,
+   "tl_percent": 0.0,
+   "load_priority_sum": 1560.0,
+   "lambda_per_year": 159.5,
+   "lambda_reducible": 19.5,
+   "r_minutes": 70.42
+  },
+  {
+   "feeder_key": "F7",
+   "rank": 3,
+   "score": 1.89157,
+   "raw": [
+    0.0,
+    100.0,
+    0.0,
+    1345.0,
+    11.0,
+    35.318
+   ],
+   "norm": [
+    0.471753,
+    0.180367,
+    0.199912,
+    0.171229,
+    0.024775,
+    0.120798
+   ],
+   "weighted": [
+    0.471753,
+    0.360734,
+    0.399825,
+    0.513686,
+    0.024775,
+    0.120798
+   ],
+   "ties_count": 0,
+   "ep_percent": 100.0,
+   "tl_percent": 0.0,
+   "load_priority_sum": 1345.0,
+   "lambda_per_year": 11.0,
+   "lambda_reducible": 4.0,
+   "r_minutes": 35.32
+  },
+  {
+   "feeder_key": "F1",
+   "rank": 4,
+   "score": 1.767682,
+   "raw": [
+    0.0,
+    100.0,
+    0.0,
+    475.0,
+    65.0,
+    60.685
+   ],
+   "norm": [
+    0.471753,
+    0.180367,
+    0.199912,
+    0.060471,
+    0.146396,
+    0.207561
+   ],
+   "weighted": [
+    0.471753,
+    0.360734,
+    0.399825,
+    0.181413,
+    0.146396,
+    0.207561
+   ],
+   "ties_count": 0,
+   "ep_percent": 100.0,
+   "tl_percent": 0.0,
+   "load_priority_sum": 475.0,
+   "lambda_per_year": 65.0,
+   "lambda_reducible": 9.5,
+   "r_minutes": 60.69
+  },
+  {
+   "feeder_key": "F3",
+   "rank": 5,
+   "score": 1.446694,
+   "raw": [
+    33.0,
+    100.0,
+    0.0,
+    1345.0,
+    27.0,
+    32.222
+   ],
+   "norm": [
+    0.00143,
+    0.180367,
+    0.199912,
+    0.171229,
+    0.060811,
+    0.110209
+   ],
+   "weighted": [
+    0.00143,
+    0.360734,
+    0.399825,
+    0.513686,
+    0.060811,
+    0.110209
+   ],
+   "ties_count": 33,
+   "ep_percent": 100.0,
+   "tl_percent": 0.0,
+   "load_priority_sum": 1345.0,
+   "lambda_per_year": 27.0,
+   "lambda_reducible": 8.0,
+   "r_minutes": 32.22
+  },
+  {
+   "feeder_key": "F2",
+   "rank": 6,
+   "score": 0.762842,
+   "raw": [
+    41.0,
+    54.4248,
+    45.5752,
+    1130.0,
+    12.0,
+    30.958
+   ],
+   "norm": [
+    0.001151,
+    0.098164,
+    0.000439,
+    0.143857,
+    0.027027,
+    0.105886
+   ],
+   "weighted": [
+    0.001151,
+    0.196329,
+    0.000877,
+    0.431572,
+    0.027027,
+    0.105886
+   ],
+   "ties_count": 41,
+   "ep_percent": 54.42,
+   "tl_percent": 45.58,
+   "load_priority_sum": 1130.0,
+   "lambda_per_year": 12.0,
+   "lambda_reducible": 5.0,
+   "r_minutes": 30.96
+  }
+ ],
+ "schemes": [
+  {
+   "id": "a592b0db-8947-52df-a6b7-f30e4d79b8a4",
+   "kind": "sequential_nc",
+   "feeders": [
+    "F5"
+   ],
+   "relations": [
+    "جدول ۱۷-الف",
+    "پیوست ب-۱",
+    "رابطه (۹)",
+    "رابطه (۱۰) — قاعده طلایی U×P"
+   ],
+   "note": "قطعه‌بندی تنه اصلی فیدر F5 به 3 زون با انحراف U×P = 1.414",
+   "switches": [
+    {
+     "node": "0d9da8a9-105f-5ef0-b85d-3d3995c4890e",
+     "feeder": "F5",
+     "kind": "NC",
+     "note": "قاعده طلایی U×P (رابطه ۱۰) — قطعه‌بندی متوالی NC"
+    },
+    {
+     "node": "12a53da8-62c1-58ed-bd95-838557776570",
+     "feeder": "F5",
+     "kind": "NC",
+     "note": "قاعده طلایی U×P (رابطه ۱۰) — قطعه‌بندی متوالی NC"
+    }
+   ],
+   "extra": {
+    "deviation": 1.41421,
+    "deviation_before": 0.0,
+    "trunk_nodes": 374
+   }
+  },
+  {
+   "id": "1cecce7d-6546-54cf-89e6-2dea1ea06593",
+   "kind": "sequential_nc",
+   "feeders": [
+    "F4"
+   ],
+   "relations": [
+    "جدول ۱۷-الف",
+    "پیوست ب-۱",
+    "رابطه (۹)",
+    "رابطه (۱۰) — قاعده طلایی U×P"
+   ],
+   "note": "قطعه‌بندی تنه اصلی فیدر F4 به 3 زون با انحراف U×P = 0.816",
+   "switches": [
+    {
+     "node": "0f049fe4-2b17-546e-809b-fa02916fd193",
+     "feeder": "F4",
+     "kind": "NC",
+     "note": "قاعده طلایی U×P (رابطه ۱۰) — قطعه‌بندی متوالی NC"
+    },
+    {
+     "node": "09b5f5e0-6683-562e-ad9a-c1e7cc9c3d24",
+     "feeder": "F4",
+     "kind": "NC",
+     "note": "قاعده طلایی U×P (رابطه ۱۰) — قطعه‌بندی متوالی NC"
+    }
+   ],
+   "extra": {
+    "deviation": 0.81555,
+    "deviation_before": 0.0,
+    "trunk_nodes": 417
+   }
+  },
+  {
+   "id": "1a14fdf2-1593-592f-8f3c-5e48a14d89bf",
+   "kind": "sequential_nc",
+   "feeders": [
+    "F7"
+   ],
+   "relations": [
+    "جدول ۱۷-الف",
+    "پیوست ب-۱",
+    "رابطه (۹)",
+    "رابطه (۱۰) — قاعده طلایی U×P"
+   ],
+   "note": "قطعه‌بندی تنه اصلی فیدر F7 به 3 زون با انحراف U×P = 1.283",
+   "switches": [
+    {
+     "node": "0c5f979f-759e-5dff-8d8a-1c8c1bdb5651",
+     "feeder": "F7",
+     "kind": "NC",
+     "note": "قاعده طلایی U×P (رابطه ۱۰) — قطعه‌بندی متوالی NC"
+    },
+    {
+     "node": "54a0789b-541e-5bfb-8fb0-3e546b7206b1",
+     "feeder": "F7",
+     "kind": "NC",
+     "note": "قاعده طلایی U×P (رابطه ۱۰) — قطعه‌بندی متوالی NC"
+    }
+   ],
+   "extra": {
+    "deviation": 1.28274,
+    "deviation_before": 0.0,
+    "trunk_nodes": 150
+   }
+  },
+  {
+   "id": "76289400-232c-5f6c-b56d-86c95d6cbe4c",
+   "kind": "one_half_switch",
+   "feeders": [
+    "F2",
+    "F3"
+   ],
+   "relations": [
+    "جدول ۱۷-ب",
+    "پیوست ب-۲",
+    "روابط (۱۱)-(۱۳)"
+   ],
+   "note": "طرح ۱٫۵ کلیدی بین F2 و F3 در گره 05326571-de99-59e7-882f-3ca818dbabe1",
+   "switches": [
+    {
+     "node": "05326571-de99-59e7-882f-3ca818dbabe1",
+     "feeder": "F2",
+     "kind": "NO",
+     "note": "کلید NO بین دو فیدر (رابطه ۱۱) — کلید موجود: 70fc7b01-cacf-595a-be4d-e63ddb063060"
+    },
+    {
+     "node": "c1704f58-2cf1-5949-abd4-15fffdd2139a",
+     "feeder": "F2",
+     "kind": "automation_upgrade",
+     "note": "کلید NC انتهایی فیدر (طرح ۱٫۵ کلیدی)"
+    },
+    {
+     "node": "fcbc8ea8-6dd9-5c7c-a988-746e20993038",
+     "feeder": "F3",
+     "kind": "automation_upgrade",
+     "note": "کلید NC انتهایی فیدر (طرح ۱٫۵ کلیدی)"
+    }
+   ],
+   "extra": {
+    "tie_id": "tie|F2|F3|05326571-de99-59e7-882f-3ca818dbabe1",
+    "tie_rule": "R1-overlap"
+   }
+  },
+  {
+   "id": "6edab98b-62e3-5ee7-8b21-0285aeb052ce",
+   "kind": "one_half_switch",
+   "feeders": [
+    "F2",
+    "F3"
+   ],
+   "relations": [
+    "جدول ۱۷-ب",
+    "پیوست ب-۲",
+    "روابط (۱۱)-(۱۳)"
+   ],
+   "note": "طرح ۱٫۵ کلیدی بین F2 و F3 در گره 05e7123c-f5fa-5ee4-b43d-1a27933b0b9a",
+   "switches": [
+    {
+     "node": "05e7123c-f5fa-5ee4-b43d-1a27933b0b9a",
+     "feeder": "F2",
+     "kind": "NO",
+     "note": "کلید NO بین دو فیدر (رابطه ۱۱) — کلید موجود: 78327900-08ef-5532-a24c-e44e7f5df5e5"
+    },
+    {
+     "node": "c1704f58-2cf1-5949-abd4-15fffdd2139a",
+     "feeder": "F2",
+     "kind": "automation_upgrade",
+     "note": "کلید NC انتهایی فیدر (طرح ۱٫۵ کلیدی)"
+    },
+    {
+     "node": "fcbc8ea8-6dd9-5c7c-a988-746e20993038",
+     "feeder": "F3",
+     "kind": "automation_upgrade",
+     "note": "کلید NC انتهایی فیدر (طرح ۱٫۵ کلیدی)"
+    }
+   ],
+   "extra": {
+    "tie_id": "tie|F2|F3|05e7123c-f5fa-5ee4-b43d-1a27933b0b9a",
+    "tie_rule": "R1-overlap"
+   }
+  },
+  {
+   "id": "8960c977-e720-5f50-a336-adbc0cd24250",
+   "kind": "one_half_switch",
+   "feeders": [
+    "F2",
+    "F3"
+   ],
+   "relations": [
+    "جدول ۱۷-ب",
+    "پیوست ب-۲",
+    "روابط (۱۱)-(۱۳)"
+   ],
+   "note": "طرح ۱٫۵ کلیدی بین F2 و F3 در گره 077ab2ea-d6cd-5036-a07d-a4e8367835de",
+   "switches": [
+    {
+     "node": "077ab2ea-d6cd-5036-a07d-a4e8367835de",
+     "feeder": "F2",
+     "kind": "NO",
+     "note": "کلید NO بین دو فیدر (رابطه ۱۱) — کلید موجود: 23016d0d-edf3-5ea1-bd0a-f45bacce397e"
+    },
+    {
+     "node": "c1704f58-2cf1-5949-abd4-15fffdd2139a",
+     "feeder": "F2",
+     "kind": "automation_upgrade",
+     "note": "کلید NC انتهایی فیدر (طرح ۱٫۵ کلیدی)"
+    },
+    {
+     "node": "fcbc8ea8-6dd9-5c7c-a988-746e20993038",
+     "feeder": "F3",
+     "kind": "automation_upgrade",
+     "note": "کلید NC انتهایی فیدر (طرح ۱٫۵ کلیدی)"
+    }
+   ],
+   "extra": {
+    "tie_id": "tie|F2|F3|077ab2ea-d6cd-5036-a07d-a4e8367835de",
+    "tie_rule": "R1-overlap"
+   }
+  },
+  {
+   "id": "b1fbd986-49bf-530b-b8ad-404c98e5e059",
+   "kind": "one_half_switch",
+   "feeders": [
+    "F2",
+    "F3"
+   ],
+   "relations": [
+    "جدول ۱۷-ب",
+    "پیوست ب-۲",
+    "روابط (۱۱)-(۱۳)"
+   ],
+   "note": "طرح ۱٫۵ کلیدی بین F2 و F3 در گره 1201cfb4-d430-5f4d-ba11-c99f2db19659",
+   "switches": [
+    {
+     "node": "1201cfb4-d430-5f4d-ba11-c99f2db19659",
+     "feeder": "F2",
+     "kind": "NO",
+     "note": "کلید NO بین دو فیدر (رابطه ۱۱) — کلید موجود: 8d9db8c5-73d7-575c-baf6-1bf3acc9c5c8"
+    },
+    {
+     "node": "c1704f58-2cf1-5949-abd4-15fffdd2139a",
+     "feeder": "F2",
+     "kind": "automation_upgrade",
+     "note": "کلید NC انتهایی فیدر (طرح ۱٫۵ کلیدی)"
+    },
+    {
+     "node": "fcbc8ea8-6dd9-5c7c-a988-746e20993038",
+     "feeder": "F3",
+     "kind": "automation_upgrade",
+     "note": "کلید NC انتهایی فیدر (طرح ۱٫۵ کلیدی)"
+    }
+   ],
+   "extra": {
+    "tie_id": "tie|F2|F3|1201cfb4-d430-5f4d-ba11-c99f2db19659",
+    "tie_rule": "R1-overlap"
+   }
+  },
+  {
+   "id": "ab827769-5efe-5d83-925d-10f7117539ab",
+   "kind": "one_half_switch",
+   "feeders": [
+    "F2",
+    "F3"
+   ],
+   "relations": [
+    "جدول ۱۷-ب",
+    "پیوست ب-۲",
+    "روابط (۱۱)-(۱۳)"
+   ],
+   "note": "طرح ۱٫۵ کلیدی بین F2 و F3 در گره 2b101dd0-79d6-5917-9414-5d521257bdef",
+   "switches": [
+    {
+     "node": "2b101dd0-79d6-5917-9414-5d521257bdef",
+     "feeder": "F2",
+     "kind": "NO",
+     "note": "کلید NO بین دو فیدر (رابطه ۱۱) — کلید موجود: b03751a9-dd5d-5528-bd8a-c573818c30ae"
+    },
+    {
+     "node": "c1704f58-2cf1-5949-abd4-15fffdd2139a",
+     "feeder": "F2",
+     "kind": "automation_upgrade",
+     "note": "کلید NC انتهایی فیدر (طرح ۱٫۵ کلیدی)"
+    },
+    {
+     "node": "fcbc8ea8-6dd9-5c7c-a988-746e20993038",
+     "feeder": "F3",
+     "kind": "automation_upgrade",
+     "note": "کلید NC انتهایی فیدر (طرح ۱٫۵ کلیدی)"
+    }
+   ],
+   "extra": {
+    "tie_id": "tie|F2|F3|2b101dd0-79d6-5917-9414-5d521257bdef",
+    "tie_rule": "R1-overlap"
+   }
+  }
+ ],
+ "ens_before_kwh": {
+  "F1": 31227.49,
+  "F2": 4055.09,
+  "F4": 291998.19,
+  "F7": 8031.82,
+  "F6": 0.0,
+  "F3": 17986.29,
+  "F5": 354661.8
+ },
+ "table18_comparison": [
+  {
+   "scheme_id": "a592b0db-8947-52df-a6b7-f30e4d79b8a4",
+   "kind": "sequential_nc",
+   "feeders": [
+    "F5"
+   ],
+   "n_switches": 2,
+   "e2_before_kwh": 354661.8,
+   "e1_after_kwh": 354661.8,
+   "ce_rials": 0.0,
+   "cn_rials": 4000000000.0,
+   "ce_over_cn": 0.0,
+   "selected": true
+  },
+  {
+   "scheme_id": "1cecce7d-6546-54cf-89e6-2dea1ea06593",
+   "kind": "sequential_nc",
+   "feeders": [
+    "F4"
+   ],
+   "n_switches": 2,
+   "e2_before_kwh": 291998.19,
+   "e1_after_kwh": 172439.59,
+   "ce_rials": 119558600.0,
+   "cn_rials": 4000000000.0,
+   "ce_over_cn": 0.02989,
+   "selected": true
+  },
+  {
+   "scheme_id": "1a14fdf2-1593-592f-8f3c-5e48a14d89bf",
+   "kind": "sequential_nc",
+   "feeders": [
+    "F7"
+   ],
+   "n_switches": 2,
+   "e2_before_kwh": 8031.82,
+   "e1_after_kwh": 7679.2,
+   "ce_rials": 352620.0,
+   "cn_rials": 4000000000.0,
+   "ce_over_cn": 8.8e-05,
+   "selected": true
+  },
+  {
+   "scheme_id": "76289400-232c-5f6c-b56d-86c95d6cbe4c",
+   "kind": "one_half_switch",
+   "feeders": [
+    "F2",
+    "F3"
+   ],
+   "n_switches": 3,
+   "e2_before_kwh": 22041.38,
+   "e1_after_kwh": 22041.38,
+   "ce_rials": 0.0,
+   "cn_rials": 6000000000.0,
+   "ce_over_cn": 0.0,
+   "selected": true
+  },
+  {
+   "scheme_id": "6edab98b-62e3-5ee7-8b21-0285aeb052ce",
+   "kind": "one_half_switch",
+   "feeders": [
+    "F2",
+    "F3"
+   ],
+   "n_switches": 3,
+   "e2_before_kwh": 22041.38,
+   "e1_after_kwh": 22041.38,
+   "ce_rials": 0.0,
+   "cn_rials": 6000000000.0,
+   "ce_over_cn": 0.0,
+   "selected": false
+  },
+  {
+   "scheme_id": "8960c977-e720-5f50-a336-adbc0cd24250",
+   "kind": "one_half_switch",
+   "feeders": [
+    "F2",
+    "F3"
+   ],
+   "n_switches": 3,
+   "e2_before_kwh": 22041.38,
+   "e1_after_kwh": 22041.38,
+   "ce_rials": 0.0,
+   "cn_rials": 6000000000.0,
+   "ce_over_cn": 0.0,
+   "selected": false
+  },
+  {
+   "scheme_id": "b1fbd986-49bf-530b-b8ad-404c98e5e059",
+   "kind": "one_half_switch",
+   "feeders": [
+    "F2",
+    "F3"
+   ],
+   "n_switches": 3,
+   "e2_before_kwh": 22041.38,
+   "e1_after_kwh": 22041.38,
+   "ce_rials": 0.0,
+   "cn_rials": 6000000000.0,
+   "ce_over_cn": 0.0,
+   "selected": false
+  },
+  {
+   "scheme_id": "ab827769-5efe-5d83-925d-10f7117539ab",
+   "kind": "one_half_switch",
+   "feeders": [
+    "F2",
+    "F3"
+   ],
+   "n_switches": 3,
+   "e2_before_kwh": 22041.38,
+   "e1_after_kwh": 22041.38,
+   "ce_rials": 0.0,
+   "cn_rials": 6000000000.0,
+   "ce_over_cn": 0.0,
+   "selected": false
+  }
+ ],
+ "recommendation": [
+  {
+   "feeder_key": "F5",
+   "rank": 1,
+   "scheme_id": "a592b0db-8947-52df-a6b7-f30e4d79b8a4",
+   "scheme_kind": "sequential_nc",
+   "n_switches": 2,
+   "ce_over_cn": 0.0,
+   "switches": [
+    {
+     "node": "0d9da8a9-105f-5ef0-b85d-3d3995c4890e",
+     "kind": "NC"
+    },
+    {
+     "node": "12a53da8-62c1-58ed-bd95-838557776570",
+     "kind": "NC"
+    }
+   ]
+  },
+  {
+   "feeder_key": "F4",
+   "rank": 2,
+   "scheme_id": "1cecce7d-6546-54cf-89e6-2dea1ea06593",
+   "scheme_kind": "sequential_nc",
+   "n_switches": 2,
+   "ce_over_cn": 0.02989,
+   "switches": [
+    {
+     "node": "0f049fe4-2b17-546e-809b-fa02916fd193",
+     "kind": "NC"
+    },
+    {
+     "node": "09b5f5e0-6683-562e-ad9a-c1e7cc9c3d24",
+     "kind": "NC"
+    }
+   ]
+  },
+  {
+   "feeder_key": "F7",
+   "rank": 3,
+   "scheme_id": "1a14fdf2-1593-592f-8f3c-5e48a14d89bf",
+   "scheme_kind": "sequential_nc",
+   "n_switches": 2,
+   "ce_over_cn": 8.8e-05,
+   "switches": [
+    {
+     "node": "0c5f979f-759e-5dff-8d8a-1c8c1bdb5651",
+     "kind": "NC"
+    },
+    {
+     "node": "54a0789b-541e-5bfb-8fb0-3e546b7206b1",
+     "kind": "NC"
+    }
+   ]
+  },
+  {
+   "feeder_key": "F1",
+   "rank": 4,
+   "scheme_id": null,
+   "scheme_kind": null,
+   "n_switches": 0,
+   "ce_over_cn": null,
+   "switches": []
+  },
+  {
+   "feeder_key": "F3",
+   "rank": 5,
+   "scheme_id": "76289400-232c-5f6c-b56d-86c95d6cbe4c",
+   "scheme_kind": "one_half_switch",
+   "n_switches": 3,
+   "ce_over_cn": 0.0,
+   "switches": [
+    {
+     "node": "05326571-de99-59e7-882f-3ca818dbabe1",
+     "kind": "NO"
+    },
+    {
+     "node": "c1704f58-2cf1-5949-abd4-15fffdd2139a",
+     "kind": "automation_upgrade"
+    },
+    {
+     "node": "fcbc8ea8-6dd9-5c7c-a988-746e20993038",
+     "kind": "automation_upgrade"
+    }
+   ]
+  },
+  {
+   "feeder_key": "F2",
+   "rank": 6,
+   "scheme_id": "76289400-232c-5f6c-b56d-86c95d6cbe4c",
+   "scheme_kind": "one_half_switch",
+   "n_switches": 3,
+   "ce_over_cn": 0.0,
+   "switches": [
+    {
+     "node": "05326571-de99-59e7-882f-3ca818dbabe1",
+     "kind": "NO"
+    },
+    {
+     "node": "c1704f58-2cf1-5949-abd4-15fffdd2139a",
+     "kind": "automation_upgrade"
+    },
+    {
+     "node": "fcbc8ea8-6dd9-5c7c-a988-746e20993038",
+     "kind": "automation_upgrade"
+    }
+   ]
+  }
+ ],
+ "issues": [
+  {
+   "code": "PLAC-AREA-STRICT",
+   "severity": "Information",
+   "message_fa": "تحلیل n-1 روی هسته قطعی فیدرها انجام شد (کلیدهای با وضعیت نامشخص = باز): 206 زون و 13122 یال. گستره کامل هر فیدر پس از تأیید نقاط NO (A-09) جایگزین و محاسبه تکرار می‌شود."
+  },
+  {
+   "code": "PLAC-CAP-UNKNOWN",
+   "severity": "Information",
+   "message_fa": "ظرفیت نامی فیدرها در GIS موجود نیست؛ کنترل ظرفیت پشتیبان رد شد (A-10). برای فعال‌سازی، feeder_rated_kw را تنظیم کنید."
+  },
+  {
+   "code": "PLAC-FEEDER-NOLOAD",
+   "severity": "Warning",
+   "message_fa": "فیدر F6: شاخص بار صفر است (بدون ترانس دارای ظرفیت)؛ از EP/TL و رتبه‌بندی کنار گذاشته شد."
+  },
+  {
+   "code": "PLAC-LOAD-CAT-DEFAULT",
+   "severity": "Information",
+   "message_fa": "دسته‌بندی بار (جدول ۱۲) برای هیچ نقطه باری ثبت نشده است؛ اولویت پیش‌فرض 1.0 برای همه بارها اعمال شد (تصمیم باز ۳ فاز ۳)."
+  },
+  {
+   "code": "PLAC-15-CAP-UNKNOWN",
+   "severity": "Information",
+   "message_fa": "طرح ۱٫۵ کلیدی بین F2 و F3: ظرفیت نامی نامشخص — شرط ۲/۳ رابطه (۱۱) کنترل نشد (A-10)."
+  },
+  {
+   "code": "PLAC-15-CAP-UNKNOWN",
+   "severity": "Information",
+   "message_fa": "طرح ۱٫۵ کلیدی بین F2 و F3: ظرفیت نامی نامشخص — شرط ۲/۳ رابطه (۱۱) کنترل نشد (A-10)."
+  },
+  {
+   "code": "PLAC-15-CAP-UNKNOWN",
+   "severity": "Information",
+   "message_fa": "طرح ۱٫۵ کلیدی بین F2 و F3: ظرفیت نامی نامشخص — شرط ۲/۳ رابطه (۱۱) کنترل نشد (A-10)."
+  },
+  {
+   "code": "PLAC-15-CAP-UNKNOWN",
+   "severity": "Information",
+   "message_fa": "طرح ۱٫۵ کلیدی بین F2 و F3: ظرفیت نامی نامشخص — شرط ۲/۳ رابطه (۱۱) کنترل نشد (A-10)."
+  },
+  {
+   "code": "PLAC-15-CAP-UNKNOWN",
+   "severity": "Information",
+   "message_fa": "طرح ۱٫۵ کلیدی بین F2 و F3: ظرفیت نامی نامشخص — شرط ۲/۳ رابطه (۱۱) کنترل نشد (A-10)."
+  },
+  {
+   "code": "PLAC-CAP-UNKNOWN",
+   "severity": "Information",
+   "message_fa": "ظرفیت نامی فیدرها تنظیم نشده؛ ظرفیت انتقال پشتیبان نامحدود فرض و صراحتاً ثبت شد (A-10) — CE/CN محافظه‌کارانه نیست و پیش از تصمیم نهایی باید ظرفیت‌ها وارد شود."
+  },
+  {
+   "code": "PLAC-LOAD-PROXY-NOTE",
+   "severity": "Information",
+   "message_fa": "بار زون‌ها با شاخص ظرفیت ترانس‌ها (kVA≈kW) محاسبه شد (تصمیم باز ۴ فاز ۳ — در انتظار تأیید کاربر)."
+  }
+ ],
+ "settings": {
+  "area_mode": "strict",
+  "n1": {
+   "load_proxy": "transformer_capacity",
+   "automation_only_transfer": true,
+   "feeder_rated_kw": null,
+   "capacity_check_active": false
+  },
+  "ranking": {
+   "weights": [
+    1,
+    2,
+    2,
+    3,
+    1,
+    1
+   ],
+   "default_load_priority": 1.0,
+   "criterion4_mode": "load_weighted",
+   "lambda_source": "total_random",
+   "inverse_zero_policy": "confirmed",
+   "anchors": {
+    "formula_1": "TAV122-02/00 بند ۷-۷-۵، فرمول (۱)، صفحه ۳۳",
+    "table_16": "جدول ۱۶ صفحه ۳۳ — وزن‌های ۱،۲،۲،۳،۱،۱",
+    "zero_inverse": "«معکوس مقادیر صفر برابر با مقدار 10» (V-01)"
+   }
+  },
+  "placement": {
+   "max_feeders": 3,
+   "max_tie_schemes": 5,
+   "target_zones": 3,
+   "candidate_mode": "all_trunk",
+   "feeder_rated_kw": null
+  },
+  "cost_model": {
+   "nc_new_rials": 2000000000.0,
+   "no_new_rials": 3000000000.0,
+   "automation_upgrade_rials": 1500000000.0,
+   "rial_per_kwh": 1000.0,
+   "switching_minutes": 10.0
+  },
+  "anchors": {
+   "tables_13_14_15": "TAV122-02/00 بند ۷-۷-۴ (گام‌های ۴-۵)",
+   "formula_1_table_16": "بند ۷-۷-۵ (گام ۶)، صفحه ۳۳",
+   "table_17": "بند ۷-۷-۶ (گام ۷) + پیوست ب",
+   "table_18": "بند ۷-۷-۷ (گام ۸)، صفحه ۳۵ — بیشینه CE/CN",
+   "relations": "پیوست ب، روابط (۸) تا (۱۳)"
+  }
+ },
+ "verdict": "PASS",
+ "run_id": "d00a0c44-077e-54a6-b997-25d01f04596a",
+ "tav_revision": "TAV122-02/00"
+}

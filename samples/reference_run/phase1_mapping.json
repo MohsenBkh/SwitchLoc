@@ -1,0 +1,192 @@
+[
+  {
+    "slot_key": "booster",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWABS.shp",
+    "layer_name": "ELWABS",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "T_FeederNa",
+      "service": "T__outserv",
+      "local_name": "T_nam_ght",
+      "switch_type": "T_type"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  },
+  {
+    "slot_key": "breaker",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWCBR.shp",
+    "layer_name": "ELWCBR",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "T_FeederNa",
+      "service": "T__outserv",
+      "rated_current": "T_jar_nami",
+      "local_name": "T_nam_ght",
+      "switch_type": "T_type"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  },
+  {
+    "slot_key": "switch_manual",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWDCS.shp",
+    "layer_name": "ELWDCS",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "T_FeederNa",
+      "service": "T__outserv",
+      "remote": "T_ctrl_otm",
+      "rated_current": "T_jar_nami",
+      "local_name": "T_nam_ght",
+      "switch_type": "T_type"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  },
+  {
+    "slot_key": "transformer",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWDTR.shp",
+    "layer_name": "ELWDTR",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "T_FeederNa",
+      "service": "T__outserv",
+      "capacity": "T_strn",
+      "local_name": "Name"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  },
+  {
+    "slot_key": "fuse_cutout",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWFCT.shp",
+    "layer_name": "ELWFCT",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "T_FeederNa",
+      "service": "T__outserv",
+      "rated_current": "T_jar_nami",
+      "local_name": "T_nam_ght"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  },
+  {
+    "slot_key": "source_feeder",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWFWT.shp",
+    "layer_name": "ELWFWT",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "T_feader",
+      "service": "T__outserv",
+      "rated_current": "T_jar_nami",
+      "local_name": "T_nam_ght"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  },
+  {
+    "slot_key": "mv_jumper",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWJUP.shp",
+    "layer_name": "ELWJUP",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "feeder",
+      "length": "Shape_STLe",
+      "service": "T__outserv",
+      "conductor": "T_jns_hadi",
+      "local_name": "T_nam_ght"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  },
+  {
+    "slot_key": "mv_line_network",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWMLN.shp",
+    "layer_name": "ELWMLN",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "Feeder",
+      "length": "Shape_STLe",
+      "local_name": "NAME"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  },
+  {
+    "slot_key": "mv_line_misc",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWMSC.shp",
+    "layer_name": "ELWMSC",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "Feeder",
+      "length": "Shape_STLe",
+      "service": "T__outserv",
+      "conductor": "T_jns_hadi",
+      "section": "T_cod_sath",
+      "local_name": "NAME"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  },
+  {
+    "slot_key": "mv_line_aerial",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWOML.shp",
+    "layer_name": "ELWOML",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "Feeder",
+      "length": "Shape_STLe",
+      "service": "T__outserv",
+      "conductor": "T_jns_hadi",
+      "section": "T_cod_sath",
+      "installation": "T_typ_shab",
+      "local_name": "NAME"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  },
+  {
+    "slot_key": "recloser",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWREC.shp",
+    "layer_name": "ELWREC",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "T_FeederNa",
+      "service": "T__outserv",
+      "local_name": "T_nam_ght",
+      "switch_type": "T_type"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  },
+  {
+    "slot_key": "mv_line_underground",
+    "file_path": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWUML.shp",
+    "layer_name": "ELWUML",
+    "field_map": {
+      "record_id": "T_MapID",
+      "feeder": "Feeder",
+      "length": "Shape_STLe",
+      "service": "T__outserv",
+      "conductor": "T_jns_hadi",
+      "section": "T_cod_sath",
+      "local_name": "NAME"
+    },
+    "enabled": true,
+    "confirmed_by": "phase1-acceptance",
+    "confirmed_at": "2026-10-31T20:59:29"
+  }
+]

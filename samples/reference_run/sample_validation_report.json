@@ -1,0 +1,366 @@
+{
+ "sample_dir": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09",
+ "input_sha256_head": {
+  "ELWABS.shp": "c6e6172346ee7c7c",
+  "ELWCBR.shp": "9ad26a4149369754",
+  "ELWDCS.shp": "76fbf79668979076",
+  "ELWDTR.shp": "09ec23faa544925e",
+  "ELWFCT.shp": "97f45ab259a3143d",
+  "ELWFWT.shp": "5beda524cee5e407",
+  "ELWJUP.shp": "7b1331f35472314b",
+  "ELWMLN.shp": "1e82a2018fca8abd",
+  "ELWMSC.shp": "d22727c8d1cf72e3",
+  "ELWOML.shp": "305b7c04fd6440ea",
+  "ELWREC.shp": "be231af9c6a64425",
+  "ELWUML.shp": "6dd4af1e68785177"
+ },
+ "layers_discovered": [
+  "ELWABS",
+  "ELWCBR",
+  "ELWDCS",
+  "ELWDTR",
+  "ELWFCT",
+  "ELWFWT",
+  "ELWJUP",
+  "ELWMLN",
+  "ELWMSC",
+  "ELWOML",
+  "ELWREC",
+  "ELWUML"
+ ],
+ "layer_count": 12,
+ "layer_stats": {
+  "ELWABS": {
+   "feature_count": 1,
+   "expected_count": 1,
+   "count_match": true,
+   "geometry_type": "POINTZ",
+   "field_count": 34,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  },
+  "ELWCBR": {
+   "feature_count": 25,
+   "expected_count": 25,
+   "count_match": true,
+   "geometry_type": "POINTZ",
+   "field_count": 34,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  },
+  "ELWDCS": {
+   "feature_count": 70,
+   "expected_count": 70,
+   "count_match": true,
+   "geometry_type": "POINTZ",
+   "field_count": 37,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  },
+  "ELWDTR": {
+   "feature_count": 627,
+   "expected_count": 627,
+   "count_match": true,
+   "geometry_type": "POINTZ",
+   "field_count": 41,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  },
+  "ELWFCT": {
+   "feature_count": 692,
+   "expected_count": 692,
+   "count_match": true,
+   "geometry_type": "POINTZ",
+   "field_count": 28,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  },
+  "ELWFWT": {
+   "feature_count": 7,
+   "expected_count": 7,
+   "count_match": true,
+   "geometry_type": "POINTZ",
+   "field_count": 35,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  },
+  "ELWJUP": {
+   "feature_count": 126,
+   "expected_count": 126,
+   "count_match": true,
+   "geometry_type": "POLYLINEZ",
+   "field_count": 28,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  },
+  "ELWMLN": {
+   "feature_count": 111,
+   "expected_count": 111,
+   "count_match": true,
+   "geometry_type": "POLYLINEZ",
+   "field_count": 18,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  },
+  "ELWMSC": {
+   "feature_count": 1,
+   "expected_count": 1,
+   "count_match": true,
+   "geometry_type": "POLYLINEZ",
+   "field_count": 30,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  },
+  "ELWOML": {
+   "feature_count": 12095,
+   "expected_count": 12095,
+   "count_match": true,
+   "geometry_type": "POLYLINEZ",
+   "field_count": 31,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  },
+  "ELWREC": {
+   "feature_count": 1,
+   "expected_count": 1,
+   "count_match": true,
+   "geometry_type": "POINTZ",
+   "field_count": 38,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  },
+  "ELWUML": {
+   "feature_count": 151,
+   "expected_count": 151,
+   "count_match": true,
+   "geometry_type": "POLYLINEZ",
+   "field_count": 33,
+   "crs_wkt_present": true,
+   "encoding": "UTF-8"
+  }
+ },
+ "feeder_distribution": {
+  "F4 - HATCHTCHIN": 6282,
+  "F5 - KHALKHAL": 4491,
+  "F1 - KHALKHAL": 1357,
+  "F7 - KHALKHAL": 627,
+  "F3 - KHALKHAL": 695,
+  "F2 - KHALKHAL": 400,
+  "F6 - KHALKHAL": 13,
+  "F5 - KOLOOR": 1
+ },
+ "missing_feeder_features": 41,
+ "remote_control_distribution": {
+  "yes": 38,
+  "no": 8,
+  "unknown": 13861
+ },
+ "service_state_distribution": {
+  "in": 1363,
+  "out": 4,
+  "unknown": 12540
+ },
+ "issue_counts": {
+  "total": 41,
+  "Error": 0,
+  "Warning": 0,
+  "Information": 41
+ },
+ "issues_by_code": {
+  "GIS-FEEDER-MISSING": 41
+ },
+ "sample_issues": [
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWDTR.shp",
+   "layer": "ELWDTR",
+   "record_id": "31729",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00001"
+   }
+  },
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWDTR.shp",
+   "layer": "ELWDTR",
+   "record_id": "42188",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00002"
+   }
+  },
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWDTR.shp",
+   "layer": "ELWDTR",
+   "record_id": "42189",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00003"
+   }
+  },
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWFCT.shp",
+   "layer": "ELWFCT",
+   "record_id": "ABELFCT13000060",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00004"
+   }
+  },
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWMLN.shp",
+   "layer": "ELWMLN",
+   "record_id": "7998",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00005"
+   }
+  },
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWOML.shp",
+   "layer": "ELWOML",
+   "record_id": "244966",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00006"
+   }
+  },
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWOML.shp",
+   "layer": "ELWOML",
+   "record_id": "318569",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00007"
+   }
+  },
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWOML.shp",
+   "layer": "ELWOML",
+   "record_id": "318570",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00008"
+   }
+  },
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWOML.shp",
+   "layer": "ELWOML",
+   "record_id": "318571",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00009"
+   }
+  },
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWOML.shp",
+   "layer": "ELWOML",
+   "record_id": "318573",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00010"
+   }
+  },
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWOML.shp",
+   "layer": "ELWOML",
+   "record_id": "318574",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00011"
+   }
+  },
+  {
+   "code": "GIS-FEEDER-MISSING",
+   "severity": "Information",
+   "message_fa": "نام فیدر در هیچ‌یک از فیلدهای شناخته‌شده موجود نیست.",
+   "source_file": "/home/z/my-project/work/sample_shp/Export_1404_08_17_12_34_09/ELWOML.shp",
+   "layer": "ELWOML",
+   "record_id": "318575",
+   "field": "Feeder/T_FeederNa/T_feader/T_name_fdr",
+   "current_value": "",
+   "suggestion_fa": "",
+   "impact_fa": "تخصیص به فیدر نیاز به تصمیم کاربر دارد.",
+   "status": "open",
+   "meta": {
+    "issue_id": "SL-00012"
+   }
+  }
+ ]
+}

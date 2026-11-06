@@ -1,0 +1,51 @@
+{
+  "project": "خلخال — نمونه واقعی ۱۲ لایه (فاز ۱)",
+  "verdict": "PASS",
+  "verdict_reason_fa": "هیچ Issue از رده Error حل‌نشده وجود ندارد؛ مدل canonical وارد فاز توپولوژی می‌شود.",
+  "total_features": 13907,
+  "summary": {
+    "project": "خلخال — نمونه واقعی ۱۲ لایه (فاز ۱)",
+    "nodes": 12689,
+    "branches": 12484,
+    "branches_excluded": 0,
+    "switches": 788,
+    "transformers": 627,
+    "loads": 627,
+    "feeders": 8,
+    "source_records": 13907,
+    "stats": {
+      "line_features": 12484,
+      "device_features": 1423,
+      "endpoint_points": 25644,
+      "clusters": 12650
+    }
+  },
+  "layers": {
+    "ELWABS": 1,
+    "ELWCBR": 25,
+    "ELWDCS": 70,
+    "ELWDTR": 627,
+    "ELWFCT": 692,
+    "ELWFWT": 7,
+    "ELWJUP": 126,
+    "ELWMLN": 111,
+    "ELWMSC": 1,
+    "ELWOML": 12095,
+    "ELWREC": 1,
+    "ELWUML": 151
+  },
+  "severity_counts": {
+    "Information": 42,
+    "Warning": 860
+  },
+  "code_counts": {
+    "GIS-SWITCH-STATE-UNKNOWN": 623,
+    "GIS-DUP-LINE": 201,
+    "GIS-FEEDER-MISSING": 41,
+    "GIS-ORPHAN-DEVICE": 32,
+    "GIS-TRANSFORMER-NO-CAPACITY": 3,
+    "GIS-SLOT-DEFERRED": 1,
+    "GIS-AMBIGUOUS-SNAP": 1
+  },
+  "error_issues": []
+}

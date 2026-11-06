@@ -1,0 +1,29 @@
+{
+ "what": "SwitchLoc فاز ۵ — خروجی GIS مطالعه جایابی کلید",
+ "project": "پروژه",
+ "placement_run_id": "d00a0c44-077e-54a6-b997-25d01f04596a",
+ "analysis_crs": "EPSG:32638 — EPSG:32638",
+ "analysis_epsg": 32638,
+ "geometry_crs": "EPSG:4326 (WGS84 — RFC 7946)",
+ "counts": {
+  "feeder_count": 7,
+  "zone_count": 513,
+  "switch_existing": 788,
+  "switch_proposed": 12,
+  "transformer_count": 627,
+  "branch_count": 12484,
+  "ens_before_kwh": 707960.6859662007,
+  "ens_after_kwh": 588049.4641374412,
+  "ens_saved_kwh": 119911.22182875942,
+  "best_ce_over_cn": 0.02989,
+  "best_scheme": "sequential_nc",
+  "top_feeder": "F5",
+  "tie_candidates": 41
+ },
+ "layers": {
+  "switchloc_network.geojson": "خطوط فیدر با فیدر ردیابی‌شده و زون",
+  "switchloc_switches.geojson": "کلیدهای موجود + منابع + ★ کلیدهای پیشنهادی",
+  "switchloc_zones.geojson": "زون‌های تعریف ۵-۲۱ با بار زون",
+  "switch_schedule.csv": "کاربرگ اجرایی کلیدها (اکسل‌پسند)"
+ }
+}
