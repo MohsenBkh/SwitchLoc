@@ -3,6 +3,7 @@
 from __future__ import annotations
 import os
 import sqlite3
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -12,23 +13,41 @@ from ..geography.places import PlaceGazetteer, PlaceMatch
 #: نام متغیر محیطی برای مسیر جایگزین بانک آفلاین مکان‌ها
 GAZETTEER_ENV_VAR = "SWITCHLOC_GAZETTEER"
 
+_REPO_LAYOUT = ("data", "geography", "ardabil_places.sqlite")
+
 
 def default_gazetteer_path() -> Path | None:
     """مسیر بانک آفلاین مکان‌های اردبیل را بدون ایجاد هیچ فایلی پیدا می‌کند.
 
-    ترتیب: 1) ``$SWITCHLOC_GAZETTEER`` (اگر به فایل موجود اشاره کند) →
-    ``data/geography/ardabil_places.sqlite`` کنار ریشهٔ مخزن/نصب →
-    ``None`` (بانک همراه برنامه نیست — هرگز پایگاه خالی ساخته نمی‌شود).
+    ترتیب (مسیرها محدود و از پیش‌تعیین‌شده‌اند — هیچ گردش نامحدودی تا ریشهٔ
+    فایل‌سیستم انجام نمی‌شود و هیچ فایلی ساخته/تغییر داده نمی‌شود):
+
+    1. ``$SWITCHLOC_GAZETTEER`` — اگر تنظیم شده باشد، مسیر همان است؛
+       اگر نبود، ``None`` برگردانده می‌شود (مسیر غلط سکوت نمی‌شود).
+    2. کنار فایل اجرایی: ``<dir(exe)>/data/geography/ardabil_places.sqlite``
+       (چیدمان نسخهٔ exe که BUILD.bat کنار خروجی کپی می‌کند).
+    3. داخل بستهٔ PyInstaller: ``sys._MEIPASS/data/geography/...``.
+    4. ریشهٔ مخزن (چیدمان src در توسعهٔ محلی).
+
+    در غیر این صورت ``None`` — پیشنهاد مکان غیرفعال می‌شود، نه اینکه
+    پایگاه خالی ساخته شود.
     """
     env = os.environ.get(GAZETTEER_ENV_VAR, "").strip()
     if env:
         env_path = Path(env)
-        if env_path.is_file():
-            return env_path
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "data" / "geography" / "ardabil_places.sqlite"
-        if candidate.is_file():
-            return candidate
+        return env_path if env_path.is_file() else None
+    candidates = []
+    exe = getattr(sys, "executable", None)
+    if exe:
+        candidates.append(Path(exe).resolve().parent
+                          .joinpath(*_REPO_LAYOUT))
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass).joinpath(*_REPO_LAYOUT))
+    candidates.append(Path(__file__).resolve().parents[3].joinpath(*_REPO_LAYOUT))
+    for c in candidates:
+        if c.is_file():
+            return c
     return None
 
 

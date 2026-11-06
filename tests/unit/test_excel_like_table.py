@@ -236,10 +236,34 @@ def test_default_gazetteer_path_prefers_env_override(tmp_path, monkeypatch):
 
 def test_default_gazetteer_path_falls_back_without_creating(monkeypatch, tmp_path):
     monkeypatch.setenv(GAZETTEER_ENV_VAR, str(tmp_path / "missing.sqlite"))
+    # مسیر exe و مسیر ماژول را هر دو به پوشهٔ موقتِ بدون data/ ببریم —
+    # نتیجهٔ «هیچ بانک معتبری نیست» باید قطعی و مستقل از ماشین باشد
     monkeypatch.setattr("switchloc.application.outage_review.__file__",
                         str(tmp_path / "pkg" / "outage_review.py"))
+    monkeypatch.setattr("sys.executable", str(tmp_path / "bin" / "python"))
+    monkeypatch.delattr("sys._MEIPASS", raising=False)
     assert default_gazetteer_path() is None
     assert not (tmp_path / "missing.sqlite").exists()   # هیچ فایلی ساخته نشد
+
+
+def test_default_gazetteer_path_returns_none_for_bad_env_value(monkeypatch, tmp_path):
+    """اگر متغیر محیطی به فایل ناموجود اشاره کند، هیچ جای دیگری سکوت‌وار
+    جایگزین نمی‌شود — پیشنهاد مکان غیرفعال می‌ماند (سکوت ممنوع)."""
+    monkeypatch.setenv(GAZETTEER_ENV_VAR, str(tmp_path / "missing.sqlite"))
+    assert default_gazetteer_path() is None
+
+
+def test_default_gazetteer_path_reads_exe_dir_layout(monkeypatch, tmp_path):
+    """چیدمان نسخهٔ exe: بانک کنار فایل اجرایی در پوشهٔ data/… پیدا شود."""
+    bank = tmp_path / "dist" / "data" / "geography" / "ardabil_places.sqlite"
+    bank.parent.mkdir(parents=True)
+    bank.write_bytes(b"")
+    exe = tmp_path / "dist" / "SwitchLoc.exe"
+    exe.write_bytes(b"")
+    monkeypatch.delenv(GAZETTEER_ENV_VAR, raising=False)
+    monkeypatch.setattr("sys.executable", str(exe))
+    monkeypatch.delattr("sys._MEIPASS", raising=False)
+    assert default_gazetteer_path() == bank
 
 
 def test_default_gazetteer_path_finds_repo_bank(monkeypatch):
