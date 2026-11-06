@@ -1,0 +1,440 @@
+# -*- coding: utf-8 -*-
+"""Map style dialog — تنظیمات نمایشی نقشه (درخواست کاربر).
+
+Features (per the user's two requests):
+
+  1. the feeder colour table opens pre-filled with the EXACT colours the
+     renderer assigns automatically (per-feeder palette — no shared
+     default code); every colour/thickness/marker is then editable;
+  2. MULTIPLE NAMED STYLES: the dialog keeps a book
+     ``{name: MapStyle}`` — «ثبت تغییرات» overwrites the active name,
+     «ذخیره با نام جدید…» creates one, «حذف استایل» removes one — and
+     the caller persists the book inside the project (project_kv →
+     ``map_styles``) so closing/reopening the project restores the
+     exact settings.
+
+Discipline: the pure helpers (`feeder_rows`, `collect_style`) are
+Qt-free and unit-tested; only `make_map_style_dialog` touches Qt.
+"""
+from __future__ import annotations
+
+from ..map_style import MARKER_CHOICES, MapStyle
+
+
+def feeder_rows(style: MapStyle, feeders: list) -> list:
+    """(feeder, colour) rows for the colour table — every modelled
+    feeder gets a row with the colour the renderer would use (style
+    override first, then the automatic per-feeder palette)."""
+    pal = style.palette_of(feeders=feeders or [])
+    return [[k, pal.get(k, style.unknown_color)]
+            for k in sorted(feeders or pal)]
+
+
+def collect_style(editor: dict) -> MapStyle:
+    """Editor state (dict of field→value) → MapStyle (validated)."""
+    st = MapStyle()
+    st.feeder_colors = {str(k): str(v) for k, v in
+                        (editor.get("feeder_colors") or {}).items()}
+    for key, val in editor.items():
+        if key == "feeder_colors":
+            continue
+        if hasattr(st, key):
+            cur = getattr(st, key)
+            try:
+                if isinstance(cur, bool):
+                    setattr(st, key, str(val).strip().lower()
+                            not in ("0", "false", "no", ""))
+                else:
+                    setattr(st, key, type(cur)(val))
+            except (TypeError, ValueError):
+                pass
+    return st
+
+
+_COLOR_ATTRS = (
+    ("switch_color", "رنگ کلید عمومی"),
+    ("fct_color", "رنگ FCT — فیوز کات‌اوت"),
+    ("dcs_color", "رنگ DCS — دیسکانکتور"),
+    ("cbr_color", "رنگ CBR — دژنکتور"),
+    ("rec_color", "رنگ REC — ریکلوزر"),
+    ("sec_color", "رنگ SEC — سکشنالایزر"),
+    ("unknown_device_color", "رنگ کلید نامشخص"),
+    ("no_tie_color", "رنگ open point / NO"),
+    ("source_color", "رنگ سورس"),
+    ("transformer_color", "رنگ ترانسفورماتور"),
+    ("proposed_color", "رنگ کلید پیشنهادی"),
+    ("manual_color", "رنگ کلید دستی"),
+    ("zone_label_color", "رنگ متن لیبل زون"),
+    ("zone_label_background_color", "رنگ زمینه لیبل زون"),
+    ("zone_selected_color", "رنگ محدوده زون انتخاب‌شده"),
+)
+_SIZE_ATTRS = (
+    ("switch_size", "سایز کلید عمومی", 1.0, 120.0, 1.0),
+    ("fct_size", "سایز FCT — فیوز کات‌اوت", 1.0, 120.0, 1.0),
+    ("dcs_size", "سایز DCS — دیسکانکتور", 1.0, 120.0, 1.0),
+    ("cbr_size", "سایز CBR — دژنکتور", 1.0, 120.0, 1.0),
+    ("rec_size", "سایز REC — ریکلوزر", 1.0, 120.0, 1.0),
+    ("sec_size", "سایز SEC — سکشنالایزر", 1.0, 120.0, 1.0),
+    ("unknown_device_size", "سایز کلید با نوع نامشخص", 1.0, 120.0, 1.0),
+    ("no_tie_size", "سایز open point / NO / Tie", 4.0, 160.0, 1.0),
+    ("source_size", "سایز سورس (سر فیدر)", 4.0, 300.0, 1.0),
+    ("transformer_size", "سایز ترانسفورماتور", 0.5, 60.0, 0.5),
+    ("proposed_size", "سایز کلید پیشنهادی (ستاره)", 5.0, 400.0, 1.0),
+    ("manual_size", "سایز کلید دستی ارزیابی‌شده", 5.0, 400.0, 1.0),
+    ("zone_label_size", "سایز متن برچسب زون", 2.0, 20.0, 0.5),
+    ("zone_label_alpha", "شفافیت متن زون", 0.1, 1.0, 0.05),
+    ("zone_label_background_alpha", "شفافیت زمینه لیبل", 0.0, 1.0, 0.05),
+    ("zone_selected_width", "ضخامت خطوط زون انتخاب‌شده", 1.0, 14.0, 0.5),
+    ("zone_selected_alpha", "شفافیت محدوده انتخاب‌شده", 0.1, 1.0, 0.05),
+)
+_MARKER_ATTRS = (
+    ("switch_marker", "نماد کلید عمومی"),
+    ("fct_marker", "نماد FCT — فیوز کات‌اوت"),
+    ("dcs_marker", "نماد DCS — دیسکانکتور"),
+    ("cbr_marker", "نماد CBR — دژنکتور"),
+    ("rec_marker", "نماد REC — ریکلوزر"),
+    ("sec_marker", "نماد SEC — سکشنالایزر"),
+    ("unknown_device_marker", "نماد کلید نامشخص"),
+    ("no_tie_marker", "نماد open point / NO"),
+    ("source_marker", "نماد سورس"),
+    ("transformer_marker", "نماد ترانسفورماتور"),
+    ("proposed_marker", "نماد کلید پیشنهادی"),
+    ("manual_marker", "نماد کلید دستی"),
+)
+_MARKER_FA = {"o": "دایره (o)", "s": "مربع (s)", "D": "لوزی (D)",
+              "d": "لوزی باریک (d)", "^": "مثلث بالا (^)",
+              "v": "مثلث پایین (v)", "<": "مثلث چپ (<)",
+              ">": "مثلث راست (>)", "P": "به‌علاوه پر (P)",
+              "X": "ضربدر پر (X)", "*": "ستاره (*)", "p": "پنج‌ضلعی (p)",
+              "h": "شش‌ضلعی (h)", "H": "شش‌ضلعی۲ (H)",
+              "8": "هشت‌ضلعی (8)", ".": "نقطه (.)"}
+
+
+def make_map_style_dialog(parent, feeders: list, current: MapStyle,
+                          book: dict | None = None,
+                          active_name: str = ""):  # pragma: no cover
+    """Return the dialog; caller does exec() then reads
+    ``dlg.result_style() / dlg.result_book() / dlg.result_active()``."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QPixmap
+    from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox,
+                                   QDialog, QDialogButtonBox,
+                                   QDoubleSpinBox, QFormLayout,
+                                   QHBoxLayout, QHeaderView, QInputDialog,
+                                   QLabel, QMessageBox, QPushButton,
+                                   QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
+                                   QVBoxLayout, QWidget, QTabWidget, QGridLayout)
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("SwitchLoc — Map style (تنظیمات نمایشی نقشه)")
+    dlg.setMinimumSize(680, 470)
+    dlg.resize(896, 656)
+    dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint |
+                       Qt.WindowType.WindowMinimizeButtonHint)
+
+    work = MapStyle.from_dict(current.as_dict())
+    names_book: dict[str, MapStyle] = {
+        str(k): MapStyle.from_dict(v)
+        for k, v in (book or {}).items() if isinstance(v, dict)}
+    active = {"name": active_name if active_name in names_book else
+              (next(iter(sorted(names_book)), ""))}
+
+    lay = QVBoxLayout(dlg)
+
+    # -- style book row -----------------------------------------------------
+    top = QHBoxLayout()
+    top.addWidget(QLabel("استایل:"))
+    cmb = QComboBox()
+    top.addWidget(cmb, 1)
+    btn_save = QPushButton("ثبت تغییرات در این استایل")
+    btn_save_as = QPushButton("ذخیره با نام جدید…")
+    btn_del = QPushButton("حذف استایل")
+    btn_reset = QPushButton("بازگشت به پیش‌فرض")
+    for b in (btn_save, btn_save_as, btn_del, btn_reset):
+        top.addWidget(b)
+    lay.addLayout(top)
+
+    tip = QLabel(
+        "«ثبت تغییرات» همان استایل فعال را به‌روز می‌کند؛ «ذخیره با نام "
+        "جدید» یک استایل مستقل می‌سازد. استایل‌ها داخل فایل پروژه ذخیره "
+        "می‌شوند و پس از بستن/بازکردن پروژه همان تنظیمات برمی‌گردد.")
+    tip.setWordWrap(True)
+    lay.addWidget(tip)
+
+    tabs = QTabWidget()
+    tabs.setDocumentMode(True)
+    lay.addWidget(tabs, 1)
+
+    # (a) feeder colours + widths ------------------------------------------
+    left = QWidget(); lv = QVBoxLayout(left); lv.setContentsMargins(2, 2, 2, 2)
+    lv.addWidget(QLabel("<b>رنگ و ضخامت فیدرها</b>"))
+    tbl = QTableWidget(0, 3)
+    tbl.setHorizontalHeaderLabels(["Feeder", "نمایش", "Color"])
+    tbl.horizontalHeader().setStretchLastSection(True)
+    tbl.verticalHeader().setVisible(False)
+    tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+    lv.addWidget(tbl, 1)
+    fw = QFormLayout()
+    sp_w = QDoubleSpinBox(); sp_w.setRange(0.1, 8.0); sp_w.setSingleStep(0.1)
+    sp_wf = QDoubleSpinBox(); sp_wf.setRange(0.1, 8.0); sp_wf.setSingleStep(0.1)
+    fw.addRow("ضخامت خط فیدر (کل شبکه):", sp_w)
+    fw.addRow("ضخامت خط در نمای تک‌فیدر:", sp_wf)
+    btn_unk = QPushButton(); btn_unk.setFixedWidth(84)
+    unk_swatch = QLabel(); unk_swatch.setFixedWidth(46)
+    unk_swatch.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    unk_hold = QWidget()
+    unk_lay = QHBoxLayout(unk_hold)
+    unk_lay.setContentsMargins(0, 0, 0, 0)
+    unk_lay.addWidget(btn_unk)
+    unk_lay.addWidget(unk_swatch)
+    fw.addRow("رنگ خطوط بدون برچسب:", unk_hold)
+    lv.addLayout(fw)
+    tabs.addTab(left, "فیدرها")
+
+    # (b) devices -----------------------------------------------------------
+    right = QWidget(); rv = QVBoxLayout(right); rv.setContentsMargins(2, 2, 2, 2)
+    rv.addWidget(QLabel("<b>نماد کلیدها، سورس، open point و …</b>"))
+    grp = QFormLayout()
+    zone_grp = QFormLayout()
+    spins: dict[str, QDoubleSpinBox] = {}
+    marks: dict[str, QComboBox] = {}
+    cols: dict[str, QPushButton] = {}
+    swatches: dict[str, QLabel] = {}
+
+    def _add_color(key: str, label: str, form) -> None:
+        b = QPushButton(); b.setFixedWidth(84)
+        sw = QLabel(); sw.setFixedWidth(46)
+        sw.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row = QHBoxLayout(); row.addWidget(b); row.addWidget(sw)
+        hold = QWidget(); hold.setLayout(row)
+        form.addRow(label, hold)
+        cols[key] = b
+        swatches[key] = sw
+
+    def _add_size(key: str, label: str, lo, hi, step, form) -> None:
+        sp = QDoubleSpinBox(); sp.setRange(lo, hi); sp.setSingleStep(step)
+        form.addRow(label, sp)
+        spins[key] = sp
+
+    def _add_marker(key: str, label: str, form) -> None:
+        cb = QComboBox()
+        for m in MARKER_CHOICES:
+            cb.addItem(_MARKER_FA.get(m, m), m)
+        form.addRow(label, cb)
+        marks[key] = cb
+
+    zone_size_keys = {"zone_label_size", "zone_label_alpha", "zone_label_background_alpha", "zone_selected_width", "zone_selected_alpha"}
+    zone_color_keys = {"zone_label_color", "zone_label_background_color", "zone_selected_color"}
+    for key, label, lo, hi, step in _SIZE_ATTRS:
+        _add_size(key, label, lo, hi, step, zone_grp if key in zone_size_keys else grp)
+    for key, label in _MARKER_ATTRS:
+        _add_marker(key, label, grp)
+    for key, label in _COLOR_ATTRS:
+        _add_color(key, label, zone_grp if key in zone_color_keys else grp)
+    grp_rows = QVBoxLayout(); grp_rows.addLayout(grp)
+    hold1 = QWidget(); hold1.setLayout(grp_rows)
+    controls_scroll = QScrollArea()
+    controls_scroll.setWidgetResizable(True)
+    controls_scroll.setWidget(hold1)
+    rv.addWidget(controls_scroll, 1)
+    tabs.addTab(right, "تجهیزات شبکه")
+
+    zone_page = QWidget()
+    zv = QVBoxLayout(zone_page)
+    zone_form_widget = QWidget(); zone_form_widget.setLayout(zone_grp)
+    zone_scroll = QScrollArea(); zone_scroll.setWidgetResizable(True)
+    zone_scroll.setWidget(zone_form_widget)
+    zv.addWidget(zone_scroll, 1)
+    chk_legend = QCheckBox("نمایش لجند روی نقشه")
+    chk_zones = QCheckBox("نمایش لیبل زون‌ها روی نقشه")
+    zv.addWidget(chk_legend)
+    zv.addWidget(chk_zones)
+    tabs.addTab(zone_page, "زون‌ها و لجند")
+
+    # -- pull (style → widgets) / events ------------------------------------
+    def _paint(lbl: QLabel, color: str) -> None:
+        pm = QPixmap(40, 14)
+        pm.fill(QColor(color if color else "#000000"))
+        lbl.setPixmap(pm)
+
+    def _load(st: MapStyle) -> None:
+        rows = feeder_rows(st, list(feeders or []))
+        tbl.setRowCount(len(rows))
+        tbl.blockSignals(True)
+        for i, (k, c) in enumerate(rows):
+            it0 = tbl.item(i, 0)
+            if it0 is None:
+                it0 = QTableWidgetItem(str(k))
+                it0.setFlags(it0.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                tbl.setItem(i, 0, it0)
+            it0.setText(str(k))
+            vis = QTableWidgetItem()
+            vis.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            vis.setCheckState(Qt.CheckState.Checked if st.visible_feeders is None or
+                              k in st.visible_feeders else Qt.CheckState.Unchecked)
+            tbl.setItem(i, 1, vis)
+            wrap = QWidget()
+            h = QHBoxLayout(); h.setContentsMargins(2, 2, 2, 2)
+            lbl = QLabel(); _paint(lbl, c)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            b = QPushButton("…"); b.setFixedWidth(40)
+
+            def go(_=False, _k=str(k), _lbl=lbl) -> None:
+                cur = work.feeder_colors.get(_k) or st.unknown_color
+                cc = QColorDialog.getColor(QColor(cur), dlg, "انتخاب رنگ")
+                if cc.isValid():
+                    work.feeder_colors[_k] = cc.name()
+                    _paint(_lbl, cc.name())
+            b.clicked.connect(go)
+            h.addWidget(lbl, 1)
+            h.addWidget(b)
+            wrap.setLayout(h)
+            tbl.setCellWidget(i, 2, wrap)
+        tbl.blockSignals(False)
+        sp_w.setValue(float(st.feeder_width))
+        sp_wf.setValue(float(st.feeder_width_filtered))
+        btn_unk.setText(st.unknown_color)
+        pm = QPixmap(40, 14); pm.fill(QColor(st.unknown_color))
+        unk_swatch.setPixmap(pm)
+        for key, _, _, _, _ in _SIZE_ATTRS:
+            spins[key].setValue(float(getattr(st, key)))
+        for key, _ in _MARKER_ATTRS:
+            idx = marks[key].findData(getattr(st, key))
+            marks[key].setCurrentIndex(max(0, idx))
+        for key, _ in _COLOR_ATTRS:
+            cols[key].setText(getattr(st, key))
+            _paint(swatches[key], getattr(st, key))
+        chk_legend.setChecked(bool(st.show_legend))
+        chk_zones.setChecked(bool(st.show_zone_labels))
+
+    def on_unk() -> None:
+        cc = QColorDialog.getColor(QColor(btn_unk.text()), dlg, "انتخاب رنگ")
+        if cc.isValid():
+            work.unknown_color = cc.name()
+            btn_unk.setText(cc.name())
+            pm = QPixmap(40, 14); pm.fill(QColor(cc.name()))
+            unk_swatch.setPixmap(pm)
+    btn_unk.clicked.connect(on_unk)
+
+    for key, _ in _COLOR_ATTRS:
+        def go(_=False, _k=key) -> None:
+            cur = getattr(work, _k)
+            cc = QColorDialog.getColor(QColor(cur), dlg, "انتخاب رنگ")
+            if cc.isValid():
+                setattr(work, _k, cc.name())
+                cols[_k].setText(cc.name())
+                _paint(swatches[_k], cc.name())
+        cols[key].clicked.connect(go)
+
+    def _wire_spin(key: str) -> None:
+        def on_val(v) -> None:
+            setattr(work, key, float(v))
+        spins[key].valueChanged.connect(on_val)
+    for key, _, _, _, _ in _SIZE_ATTRS:
+        _wire_spin(key)
+    # ضخامت خط فیدرها هم باید در مدل کار بنشیند (وگرنه تغییرش هدر می‌رفت)
+    sp_w.valueChanged.connect(
+        lambda v: setattr(work, "feeder_width", float(v)))
+    sp_wf.valueChanged.connect(
+        lambda v: setattr(work, "feeder_width_filtered", float(v)))
+
+    def _wire_marker(key: str) -> None:
+        def on_idx(_i: int) -> None:
+            setattr(work, key, marks[key].currentData())
+        marks[key].currentIndexChanged.connect(on_idx)
+    for key, _ in _MARKER_ATTRS:
+        _wire_marker(key)
+    chk_legend.toggled.connect(lambda on: setattr(work, "show_legend", bool(on)))
+    chk_zones.toggled.connect(lambda on: setattr(work, "show_zone_labels", bool(on)))
+
+    # -- book actions ---------------------------------------------------------
+    def refresh_combo() -> None:
+        cmb.blockSignals(True)
+        cmb.clear()
+        for name in sorted(names_book):
+            cmb.addItem(name)
+        if not names_book:
+            cmb.addItem("(بدون استایل ذخیره‌شده)")
+        if active["name"] in names_book:
+            cmb.setCurrentText(active["name"])
+        cmb.blockSignals(False)
+
+    def on_combo(text: str) -> None:
+        if text in names_book:
+            active["name"] = text
+            work.__dict__.update(MapStyle.from_dict(
+                names_book[text].as_dict()).__dict__)
+            _load(work)
+    cmb.currentTextChanged.connect(on_combo)
+
+    def on_save() -> None:
+        name = active["name"] or "پیش‌فرض"
+        names_book[name] = MapStyle.from_dict(work.as_dict())
+        active["name"] = name
+        refresh_combo()
+        QMessageBox.information(dlg, "Map style",
+                                f"تغییرات در استایل «{name}» ثبت شد.")
+
+    def on_save_as() -> None:
+        name, ok = QInputDialog.getText(
+            dlg, "ذخیره با نام جدید", "نام استایل:",
+            text=f"استایل {len(names_book) + 1}")
+        name = (name or "").strip()
+        if not ok or not name:
+            return
+        names_book[name] = MapStyle.from_dict(work.as_dict())
+        active["name"] = name
+        refresh_combo()
+
+    def on_del() -> None:
+        if not names_book:
+            return
+        name = active["name"] or next(iter(sorted(names_book)))
+        if QMessageBox.question(dlg, "حذف استایل",
+                                f"استایل «{name}» حذف شود؟") != \
+                QMessageBox.StandardButton.Yes:
+            return
+        names_book.pop(name, None)
+        active["name"] = next(iter(sorted(names_book)), "")
+        refresh_combo()
+        if names_book:
+            work.__dict__.update(
+                MapStyle.from_dict(names_book[active["name"]].as_dict()).__dict__)
+        else:
+            work.__dict__.update(
+                MapStyle.default_for(feeders=list(feeders or [])).__dict__)
+        _load(work)
+
+    def on_reset() -> None:
+        work.__dict__.update(
+            MapStyle.default_for(feeders=list(feeders or [])).__dict__)
+        _load(work)
+    btn_save.clicked.connect(on_save)
+    btn_save_as.clicked.connect(on_save_as)
+    btn_del.clicked.connect(on_del)
+    btn_reset.clicked.connect(on_reset)
+
+    def _visibility_changed(_item) -> None:
+        work.visible_feeders = [str(tbl.item(i, 0).text())
+                                for i in range(tbl.rowCount())
+                                if tbl.item(i, 1) is not None and
+                                tbl.item(i, 1).checkState() == Qt.CheckState.Checked]
+    tbl.itemChanged.connect(_visibility_changed)
+
+    btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                            QDialogButtonBox.StandardButton.Cancel)
+    btns.accepted.connect(dlg.accept)
+    btns.rejected.connect(dlg.reject)
+    lay.addWidget(btns)
+
+    # init
+    refresh_combo()
+    if names_book and active["name"] in names_book:
+        work = MapStyle.from_dict(names_book[active["name"]].as_dict())
+    _load(work)
+
+    dlg.result_style = lambda: MapStyle.from_dict(work.as_dict())  # type: ignore
+    dlg.result_book = lambda: {k: v.as_dict()
+                               for k, v in names_book.items()}    # type: ignore
+    dlg.result_active = lambda: active["name"]                     # type: ignore
+    return dlg
