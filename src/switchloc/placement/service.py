@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..domain.entities import CanonicalNetwork
+from ..level1.transfer import barrier_cut_nodes
 from ..level1.n_minus_1 import (NMinusOneResult, NMinusOneSettings,
                                 run_n_minus_one)
 from ..level1.ranking import RankingResult, RankingSettings, rank_feeders
@@ -161,7 +162,9 @@ def _spare_map(result_n1: NMinusOneResult,
     """ظرفیت پشتیبان هر فیدر برای انتقال (kW).
 
     اولویت: رزرو قابل استفاده مدل ظرفیت (نامی − پیک — نیاز ۹)؛ در نبود
-    آن، ظرفیت نامی قدیمی (A-10) و بدون آن، نامحدود با پرچم صریح.
+    آن، ظرفیت نامی قدیمی (A-10). اگر هیچ‌کدام موجود نباشد، ظرفیت انتقال
+    صفر منظور می‌شود (سیاست محافظه‌کارانهٔ v1.9.1 — انتقال تأییدنشده
+    هرگز فرض بی‌نهایت نمی‌شود) و هشدار صریح ثبت می‌شود.
     """
     if capacity_map:
         out = {}
@@ -472,14 +475,15 @@ class PlacementEngine:
             "rial_per_kwh": st.cost.rial_per_kwh,
             "switching_minutes": st.cost.switching_minutes,
         })
+        barriers = barrier_cut_nodes(graph, net, ties)
         spare = _spare_map(n1, st.placement.feeder_rated_kw, cap_map)
         if not spare:
             eco.issues.append((
                 "PLAC-CAP-UNKNOWN", "Information",
-                "ظرفیت فیدرها تنظیم نشده؛ ظرفیت انتقال پشتیبان نامحدود فرض "
-                "و صراحتاً ثبت شد (A-10) — طرح‌های انتقالی در وضعیت «نیازمند "
-                "تأیید ظرفیت» می‌مانند و پیش از تصمیم نهایی باید ظرفیت‌ها "
-                "وارد شود (نیاز ۹)."))
+                "ظرفیت رزرو فیدرها تنظیم نشده؛ ظرفیت انتقال پشتیبان صفر "
+                "منظور شد (سیاست محافظه‌کارانهٔ v1.9.1 — انتقال تأییدنشده "
+                "هرگز فرض نمی‌شود). طرح‌های انتقالی تا ورود ظرفیت‌ها "
+                "«نیازمند تأیید ظرفیت» می‌مانند (نیاز ۹)."))
         trace_of = {t.feeder_key: t for t in traces}
         node_trees = {k: build_feeder_tree(graph, trace_of[k],
                                            edge_set_of.get(k, set()), node_load)
@@ -513,7 +517,8 @@ class PlacementEngine:
                 segs, lam_of.get(key, 0.0), r_of.get(key, 0.0),
                 st.cost.switching_minutes,
                 transfers_for(key, segs),
-                total_length_m=tree.sub_len.get(tree.order[0]))
+                total_length_m=tree.sub_len.get(tree.order[0]),
+                barrier_nodes=barriers)
             ens_before[key] = cap
         eco.ens_before_kwh = ens_before
 
@@ -546,7 +551,8 @@ class PlacementEngine:
                 val, _ = ens_of_configuration(
                     segs, lam_of.get(key, 0.0), r_of.get(key, 0.0),
                     st.cost.switching_minutes, tmap,
-                    total_length_m=tree.sub_len.get(tree.order[0]))
+                    total_length_m=tree.sub_len.get(tree.order[0]),
+                    barrier_nodes=barriers)
                 after[key] = val
             eco.ens_after_kwh[sc.id] = after
         eco.comparisons = compare_schemes(schemes, ens_before,
