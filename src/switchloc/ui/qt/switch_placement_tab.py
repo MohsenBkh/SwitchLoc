@@ -170,7 +170,13 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
 
             self.cmb_method = QComboBox()
             for key in EENS_METHOD_ORDER:       # دایرکشنال، یکنواخت، دستی
-                self.cmb_method.addItem(EENS_METHOD_FA[key], key)
+                # متن کامل روش‌ها در کمبو جا نمی‌شد و بریده می‌شد؛ توضیح
+                # کامل در برچسب زیر فرم و در tooltip آیتم هست.
+                self.cmb_method.addItem(
+                    str(EENS_METHOD_FA[key]).split(" — ", 1)[0], key)
+                self.cmb_method.setItemData(
+                    self.cmb_method.count() - 1, EENS_METHOD_FA[key],
+                    Qt.ItemDataRole.ToolTipRole)
             self.cmb_method.setCurrentIndex(
                 max(0, self.cmb_method.findData("uniform")))
             form.addRow("روش EENS:", self.cmb_method)
@@ -476,7 +482,8 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
             for name in ("summary_table", "results_table", "detail_table"):
                 table = getattr(self, name, None)
                 if table is not None and table.columnCount():
-                    self._fit_columns(table)
+                    self._fit_columns(
+                        table, allow_scroll=(name == "detail_table"))
 
         def _add_locked_row(self, form, label_text: str, widget) -> None:
             """ردیف فرم؛ نشان «[قفل]» هنگام قفل‌شدن به متن برچسب می‌چسبد."""
