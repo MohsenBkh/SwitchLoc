@@ -138,7 +138,8 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
     from PySide6.QtWidgets import (QCheckBox, QColorDialog, QComboBox,
                                    QDialog, QDialogButtonBox,
                                    QDoubleSpinBox, QFormLayout,
-                                   QHBoxLayout, QHeaderView, QInputDialog,
+                                   QGroupBox, QHBoxLayout, QHeaderView,
+                                   QInputDialog, QSpinBox,
                                    QLabel, QMessageBox, QPushButton,
                                    QScrollArea, QSplitter, QTableWidget, QTableWidgetItem,
                                    QVBoxLayout, QWidget, QTabWidget, QGridLayout)
@@ -296,6 +297,66 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
     chk_outage_links = QCheckBox("خط اتصال خاموشی به مرکز زون متأثر")
     for cb in (chk_outages, chk_outage_labels, chk_outage_links):
         ov.addWidget(cb)
+
+    # --- چیدمان برچسب‌ها: نزدیک نقطه + خط راهنما (اصلاح پراکندگی) --------
+    lbl_box = QGroupBox("چیدمان برچسب‌ها (نزدیک نقطه، با خط راهنما)")
+    lbl_form = QFormLayout(lbl_box)
+    sp_lbl_levels = QSpinBox()
+    sp_lbl_levels.setRange(0, 8)
+    sp_lbl_levels.setValue(3)
+    sp_lbl_levels.setToolTip(
+        "حداکثر تعداد پله‌ای که برچسب برای فرار از هم‌پوشانی جابه‌جا می‌شود؛"
+        " عدد بزرگ = پراکندگی زیاد برچسب‌ها (مشکل قبلی).")
+    lbl_form.addRow("حداکثر پلهٔ جابه‌جایی:", sp_lbl_levels)
+    sp_lbl_offset = QDoubleSpinBox()
+    sp_lbl_offset.setRange(0.0, 40.0)
+    sp_lbl_offset.setDecimals(1)
+    sp_lbl_offset.setSingleStep(0.5)
+    sp_lbl_offset.setValue(4.0)
+    lbl_form.addRow("فاصلهٔ افقی از نقطه (point):", sp_lbl_offset)
+    chk_lbl_leader = QCheckBox("خط راهنما از برچسب به نقطهٔ خاموشی")
+    chk_lbl_leader.setChecked(True)
+    lbl_form.addRow("", chk_lbl_leader)
+    ov.addWidget(lbl_box)
+
+    # --- توزیع رنگی مسیر بر اساس تکرار خاموشی (DIgSILENT-style) ---------
+    heat_box = QGroupBox("توزیع رنگی مسیر فیدرها بر اساس تکرار خاموشی")
+    heat_form = QFormLayout(heat_box)
+    chk_heat = QCheckBox("توزیع رنگی فعال باشد")
+    heat_form.addRow("", chk_heat)
+    sp_heat_radius = QDoubleSpinBox()
+    sp_heat_radius.setRange(10.0, 5000.0)
+    sp_heat_radius.setDecimals(0)
+    sp_heat_radius.setSingleStep(50.0)
+    sp_heat_radius.setValue(300.0)
+    sp_heat_radius.setToolTip(
+        "هر خاموشی به یال‌هایی که در این شعاع آن هستند نسبت داده می‌شود.")
+    heat_form.addRow("شعاع اثر هر خاموشی (m):", sp_heat_radius)
+    sp_heat_width = QDoubleSpinBox()
+    sp_heat_width.setRange(0.5, 12.0)
+    sp_heat_width.setDecimals(1)
+    sp_heat_width.setSingleStep(0.2)
+    sp_heat_width.setValue(2.4)
+    heat_form.addRow("ضخامت خط رنگی (point):", sp_heat_width)
+
+    heat_table = QTableWidget(0, 2)
+    heat_table.setHorizontalHeaderLabels(["حد بالا (تعداد)", "رنگ"])
+    heat_table.horizontalHeader().setSectionResizeMode(
+        QHeaderView.ResizeMode.Stretch)
+    heat_table.setMinimumHeight(96)
+    heat_table.setToolTip(
+        "خالی گذاشتن «حد بالا» یعنی آخرین سطح (بی‌نهایت). برای تغییر رنگ "
+        "روی خانهٔ رنگ دوبار کلیک کنید.")
+    heat_form.addRow("سطوح:", heat_table)
+    heat_btns = QHBoxLayout()
+    btn_add_level = QPushButton("افزودن سطح")
+    btn_del_level = QPushButton("حذف سطح")
+    heat_btns.addWidget(btn_add_level)
+    heat_btns.addWidget(btn_del_level)
+    heat_btns.addStretch(1)
+    heat_form.addRow("", heat_btns)
+    ov.addWidget(heat_box)
+
     tabs.addTab(outage_page, "خاموشی‌ها")
 
     # -- pull (style → widgets) / events ------------------------------------
@@ -356,6 +417,13 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
         chk_outages.setChecked(bool(st.show_outages))
         chk_outage_labels.setChecked(bool(st.show_outage_labels))
         chk_outage_links.setChecked(bool(st.show_outage_links))
+        sp_lbl_levels.setValue(int(getattr(st, "outage_label_max_levels", 3)))
+        sp_lbl_offset.setValue(float(getattr(st, "outage_label_offset_pt", 4.0)))
+        chk_lbl_leader.setChecked(bool(getattr(st, "outage_label_leader", True)))
+        chk_heat.setChecked(bool(getattr(st, "outage_heat_enabled", False)))
+        sp_heat_radius.setValue(float(getattr(st, "outage_heat_radius_m", 300.0)))
+        sp_heat_width.setValue(float(getattr(st, "outage_heat_width", 2.4)))
+        _fill_heat_table()
 
     def on_unk() -> None:
         cc = QColorDialog.getColor(QColor(btn_unk.text()), dlg, "انتخاب رنگ")
@@ -401,6 +469,100 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
         lambda on: setattr(work, "show_outage_labels", bool(on)))
     chk_outage_links.toggled.connect(
         lambda on: setattr(work, "show_outage_links", bool(on)))
+    sp_lbl_levels.valueChanged.connect(
+        lambda v: setattr(work, "outage_label_max_levels", int(v)))
+    sp_lbl_offset.valueChanged.connect(
+        lambda v: setattr(work, "outage_label_offset_pt", float(v)))
+    chk_lbl_leader.toggled.connect(
+        lambda on: setattr(work, "outage_label_leader", bool(on)))
+    chk_heat.toggled.connect(
+        lambda on: setattr(work, "outage_heat_enabled", bool(on)))
+    sp_heat_radius.valueChanged.connect(
+        lambda v: setattr(work, "outage_heat_radius_m", float(v)))
+    sp_heat_width.valueChanged.connect(
+        lambda v: setattr(work, "outage_heat_width", float(v)))
+
+    # ---- سطوح توزیع رنگی: جدول ویرایش‌پذیر ----
+    def _heat_rows() -> list:
+        levels = list(getattr(work, "outage_heat_levels", []) or [])
+        heat_table.blockSignals(True)
+        heat_table.setRowCount(len(levels))
+        for row, lvl in enumerate(levels):
+            top = lvl.get("max")
+            item_top = QTableWidgetItem(
+                "" if top is None else f"{float(top):g}")
+            heat_table.setItem(row, 0, item_top)
+            item_c = QTableWidgetItem(str(lvl.get("color") or "#c62828"))
+            try:
+                item_c.setBackground(QColor(str(lvl.get("color") or "#c62828")))
+            except Exception:                     # noqa: BLE001
+                pass
+            heat_table.setItem(row, 1, item_c)
+        heat_table.blockSignals(False)
+        return levels
+
+    def _commit_heat() -> None:
+        levels = []
+        for row in range(heat_table.rowCount()):
+            top_item = heat_table.item(row, 0)
+            color_item = heat_table.item(row, 1)
+            raw = (top_item.text().strip() if top_item is not None else "")
+            color = (color_item.text().strip() if color_item is not None
+                     else "#c62828")
+            try:
+                top = None if raw in ("", "∞", "-") else float(raw)
+            except ValueError:
+                top = None
+            label = ("بی‌نهایت" if top is None else f"≤ {top:g}")
+            levels.append({"max": top, "color": color, "label": label})
+        work.outage_heat_levels = levels
+
+    _fill_heat_table = _heat_rows
+
+    def _on_heat_edit(_item=None) -> None:
+        _commit_heat()
+
+    def _pick_heat_color(row: int, _col: int = 0) -> None:
+        if row < 0 or row >= heat_table.rowCount():
+            return
+        item = heat_table.item(row, 1)
+        cur = item.text() if item is not None else "#c62828"
+        cc = QColorDialog.getColor(QColor(cur), dlg, "رنگ سطح")
+        if cc.isValid():
+            item.setText(cc.name())
+            try:
+                item.setBackground(QColor(cc.name()))
+            except Exception:                     # noqa: BLE001
+                pass
+            _commit_heat()
+
+    heat_table.itemChanged.connect(_on_heat_edit)
+    heat_table.cellDoubleClicked.connect(_pick_heat_color)
+
+    def _add_level() -> None:
+        levels = _heat_rows()
+        last_top = None
+        for lvl in reversed(levels):
+            if lvl.get("max") is not None:
+                last_top = float(lvl["max"])
+                break
+        new_top = (last_top or 10.0) * 2.0
+        levels.insert(max(0, len(levels) - 1),
+                      {"max": new_top, "color": "#6a1b9a",
+                       "label": f"≤ {new_top:g}"})
+        work.outage_heat_levels = levels
+        _heat_rows()
+
+    def _del_level() -> None:
+        row = heat_table.currentRow()
+        levels = _heat_rows()
+        if 0 <= row < len(levels) and len(levels) > 1:
+            levels.pop(row)
+            work.outage_heat_levels = levels
+            _heat_rows()
+
+    btn_add_level.clicked.connect(_add_level)
+    btn_del_level.clicked.connect(_del_level)
 
     # -- book actions ---------------------------------------------------------
     def refresh_combo() -> None:

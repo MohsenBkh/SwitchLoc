@@ -29,7 +29,7 @@ pytestmark = pytest.mark.skipif(
     not HAS_QT, reason="PySide6.QtWidgets is not importable")
 
 EXPECTED_TABS = ["Data Import", "Topology", "Placement",
-                 "Sectionalizer & EENS", "Dashboard", "Map"]
+                 "Switch placement & EENS", "Dashboard", "Map"]
 
 
 @pytest.fixture()
@@ -76,6 +76,6 @@ def test_desktop_shell_builds_with_sectionalizer_tab(app, monkeypatch, tmp_path)
     assert bars, "نوار تب اصلی با ترتیب انتظار یافت نشد"
     bar = bars[0]
     names = [bar.tabText(i) for i in range(bar.count())]
-    sec = bar.widget(names.index("Sectionalizer & EENS"))
-    assert type(sec).__name__ == "SectionalizerTab"
+    sec = bar.widget(names.index("Switch placement & EENS"))
+    assert type(sec).__name__ == "SwitchPlacementTab"
     assert hasattr(sec, "show_result") and hasattr(sec, "apply_settings")

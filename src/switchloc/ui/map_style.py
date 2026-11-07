@@ -30,6 +30,34 @@ FEEDER_COLORS = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e",
                  "#aec7e8", "#ffbb78", "#98df8a", "#c5b0d5", "#c49c94"]
 UNKNOWN_COLOR = "#7f7f7f"
 
+#: سطوح پیش‌فرض «توزیع رنگی مسیر بر اساس تکرار خاموشی»
+#: هر سطح: حد بالای تعداد خاموشی (``max``؛ None = بی‌نهایت) و رنگ آن.
+DEFAULT_OUTAGE_HEAT_LEVELS = [
+    {"max": 2, "color": "#2e7d32", "label": "< ۲ خاموشی"},
+    {"max": 10, "color": "#ef6c00", "label": "۲ تا ۱۰ خاموشی"},
+    {"max": None, "color": "#c62828", "label": "> ۱۰ خاموشی"},
+]
+
+def _clean_heat_levels(value) -> list[dict]:
+    """سطوح توزیع رنگی را اعتبارسنجی می‌کند (حد بالا + رنگ معتبر)."""
+    out: list[dict] = []
+    for item in list(value or []):
+        if not isinstance(item, dict):
+            continue
+        color = str(item.get("color") or "").strip()
+        if not color.startswith("#") or len(color) not in (4, 7):
+            continue
+        raw_max = item.get("max")
+        try:
+            top = None if raw_max in (None, "", "None") else float(raw_max)
+        except (TypeError, ValueError):
+            continue
+        out.append({"max": top, "color": color,
+                    "label": str(item.get("label") or "").strip()
+                    or ("بی‌نهایت" if top is None else f"≤ {top:g}")})
+    return out or [dict(x) for x in DEFAULT_OUTAGE_HEAT_LEVELS]
+
+
 #: valid Matplotlib marker codes offered in the style dialog
 MARKER_CHOICES = ("o", "s", "D", "d", "^", "v", "<", ">", "P", "X", "*",
                   "p", "h", "H", "8", ".")
@@ -115,6 +143,17 @@ class MapStyle:
     outage_label_alpha: float = 0.95
     show_outage_labels: bool = True
     show_outage_links: bool = True
+    # -- توزیع رنگی مسیر فیدرها بر اساس تکرار خاموشی (DIgSILENT-style) ----
+    outage_heat_enabled: bool = False
+    outage_heat_radius_m: float = 300.0
+    outage_heat_width: float = 2.4
+    outage_heat_alpha: float = 0.95
+    outage_heat_levels: list = field(
+        default_factory=lambda: [dict(x) for x in DEFAULT_OUTAGE_HEAT_LEVELS])
+    # -- چیدمان برچسب‌ها (فاصلهٔ کم و خط راهنما به‌جای پراکندگی) ----------
+    outage_label_offset_pt: float = 4.0
+    outage_label_max_levels: int = 3
+    outage_label_leader: bool = True
     outage_link_color: str = "#8e24aa"
     outage_link_width: float = 1.0
     outage_link_alpha: float = 0.55
@@ -192,6 +231,11 @@ class MapStyle:
             cur = getattr(st, k)
             if isinstance(cur, dict):
                 setattr(st, k, {str(a): str(b) for a, b in (v or {}).items()})
+            elif k == "outage_heat_levels":
+                try:
+                    st.outage_heat_levels = _clean_heat_levels(v)
+                except Exception:                  # noqa: BLE001
+                    pass                      # keep the default
             elif k in ("visible_feeders", "hidden_outage_ids"):
                 setattr(st, k, None if v is None else
                         sorted({str(x) for x in v}))

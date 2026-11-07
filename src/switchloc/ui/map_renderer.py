@@ -123,6 +123,8 @@ class NetworkMapRenderer:
         #: برچسب‌های «نام (تعداد)» لایهٔ خاموشی که پس از نهایی‌شدن محدودهٔ
         #: محورها رسم می‌شوند (تا جداسازی عمودی برچسب‌ها دقیق باشد)
         self._pending_outage_labels: list = []
+        #: افسانهٔ توزیع رنگی: [(color, label, edges)]
+        self._heat_legend: list = []
 
     # ------------------------------------------------------------------
     def render(self, path: str, title: str = "",
@@ -416,6 +418,51 @@ class NetworkMapRenderer:
                            label=f"Outage — {status_fa.get(status, status or 'بدون وضعیت')}")
                 self._drawn.add("outage")
 
+            # --- توزیع رنگی مسیر فیدرها بر اساس تکرار خاموشی ------------
+            if getattr(st, "outage_heat_enabled", False) and visible:
+                try:
+                    from ..application.outage_review import (
+                        assign_heat_level, outage_heat_counts)
+                    counts = outage_heat_counts(
+                        visible, self.graph,
+                        radius_m=float(getattr(st, "outage_heat_radius_m", 300.0)))
+                except Exception:                 # noqa: BLE001
+                    counts = {}
+                seg_by_color: dict[str, list] = {}
+                legend_by_color: dict[str, dict] = {}
+                for eid, n in counts.items():
+                    level = assign_heat_level(
+                        n, getattr(st, "outage_heat_levels", []) or [])
+                    if level is None:
+                        continue
+                    edge = self.graph.edges.get(eid)
+                    if edge is None:
+                        continue
+                    a = self.graph.nodes.get(edge.a)
+                    bb = self.graph.nodes.get(edge.b)
+                    if a is None or bb is None:
+                        continue
+                    if a.coord is None or bb.coord is None:
+                        continue
+                    color = str(level.get("color") or "#c62828")
+                    seg_by_color.setdefault(color, []).append(
+                        (self._c(a.coord), self._c(bb.coord)))
+                    legend_by_color.setdefault(color, {
+                        "label": str(level.get("label") or ""),
+                        "count": 0})
+                    legend_by_color[color]["count"] += 1
+                self._heat_legend = []
+                for color, segments in seg_by_color.items():
+                    ax.add_collection(LineCollection(
+                        segments, colors=color,
+                        linewidths=float(getattr(st, "outage_heat_width", 2.4)),
+                        alpha=float(getattr(st, "outage_heat_alpha", 0.95)),
+                        zorder=5.5))
+                    self._drawn.add("outage_heat")
+                for color, meta in legend_by_color.items():
+                    self._heat_legend.append(
+                        (color, meta["label"], meta["count"]))
+
             # برچسب‌ها یک‌بار به‌ازای هر مکان («نام (تعداد)») و پس از
             # نهایی‌شدن محدودهٔ محورها رسم می‌شوند تا روی هم نیفتند.
             if st.show_outage_labels and visible:
@@ -505,13 +552,19 @@ class NetworkMapRenderer:
         return sign * step_pt * ((k + 1) // 2)
 
     def _draw_outage_labels(self, ax, st) -> None:
-        """برچسب خاموشی‌ها را بدون هم‌پوشانی می‌چیند.
+        """برچسب خاموشی‌ها را **نزدیک همان نقطه** می‌چیند (اصلاح درخواست کاربر).
 
-        هر مکان یک برچسب «نام (تعداد)» دارد؛ اگر چند برچسب در یک محدودهٔ
-        کوچک بیفتند (چند نام در یک محل)، به‌صورت پلکانی بالا/پایین جابه‌جا
-        می‌شوند تا خوانا بمانند (درخواست کاربر).
+        مشکل قبلی: پله‌های عمودی تا ۲۴ گام ادامه می‌یافت و برچسب‌ها صدها متر
+        از نقطهٔ خود دور می‌شدند (تصویر ارسالی کاربر). اصلاح:
+
+        * حداکثر ``outage_label_max_levels`` پله (پیش‌فرض ۳) — بیشتر از آن
+          جابه‌جا نمی‌شویم.
+        * اگر هیچ پلهٔ آزادی نبود، برچسب روی **نزدیک‌ترین** پله با کمترین
+          هم‌پوشانی می‌نشیند و یک **خط راهنمای نازک** به نقطهٔ خود وصل می‌شود
+          (``outage_label_leader``) تا ارتباط گم نشود.
+        * برچسب‌های پرتکرار (تعداد بیشتر) اول جا می‌گیرند.
         """
-        groups = self._pending_outage_labels or []
+        groups = list(self._pending_outage_labels or [])
         if not groups:
             return
         try:
@@ -520,7 +573,25 @@ class NetworkMapRenderer:
             fontsize = 5.0
         per_pt = self._data_per_point(ax, fontsize)
         step_pt = max(fontsize * 1.35, 6.0)
+        base_dx_pt = float(getattr(st, "outage_label_offset_pt", 4.0))
+        max_levels = max(0, int(getattr(st, "outage_label_max_levels", 3)))
+        show_leader = bool(getattr(st, "outage_label_leader", True))
+        try:
+            va_top = str(st.outage_label_alpha if st.outage_label_alpha
+                         is not None else 1.0)
+            va_top = float(va_top)
+        except (TypeError, ValueError):
+            va_top = 1.0
+
+        # پرتکرارها اول — بهترین جای‌ها به آن‌ها می‌رسد
+        groups = sorted(groups, key=lambda g: -int(g.get("count") or 0))
         placed: list[tuple[float, float, float, float]] = []
+
+        def _overlaps(box) -> int:
+            return sum(1 for b in placed
+                       if box[0] < b[2] and box[2] > b[0] and
+                       box[1] < b[3] and box[3] > b[1])
+
         for g in groups:
             text = str(g.get("text") or "")
             if not text:
@@ -529,32 +600,41 @@ class NetworkMapRenderer:
                 gx, gy = float(g["x"]), float(g["y"])
             except (KeyError, TypeError, ValueError):
                 continue
-            # اندازهٔ تقریبی کادر برچسب در واحد داده (۰٫۵۸ em به‌ازای هر نویسه)
+            count = int(g.get("count") or 0)
+            # کادر تقریبی برچسب در واحد داده
             text_w = max(0.58 * fontsize * per_pt * len(text), per_pt * 2.0)
             text_h = 1.45 * fontsize * per_pt
-            dx = 4.0 * per_pt                       # فاصلهٔ افقی از نشانگر
-            chosen = None
-            for k in range(0, 24):
+            dx = base_dx_pt * per_pt
+            best = None                    # (overlaps, level_index, dy_pt, box)
+            for k in range(max_levels + 1):
                 dy_pt = self._label_offset_pt(k, step_pt)
                 dy = dy_pt * per_pt
                 box = (gx + dx, gy + dy - text_h / 2.0,
                        gx + dx + text_w, gy + dy + text_h / 2.0)
-                if not any(box[0] < b[2] and box[2] > b[0] and
-                           box[1] < b[3] and box[3] > b[1] for b in placed):
-                    placed.append(box)
-                    chosen = dy_pt
+                hits = _overlaps(box)
+                if hits == 0:
+                    best = (0, k, dy_pt, box)
                     break
-            if chosen is None:                      # همهٔ پله‌ها پر: آخرین پله
-                k = len(placed)
-                chosen = self._label_offset_pt(k, step_pt)
-                dy = chosen * per_pt
-                placed.append((gx + dx, gy + dy - text_h / 2.0,
-                               gx + dx + text_w, gy + dy + text_h / 2.0))
-            ax.annotate(text, (gx, gy), xytext=(4.0, chosen),
-                        textcoords="offset points", fontsize=fontsize,
-                        color=st.outage_label_color,
-                        alpha=st.outage_label_alpha, zorder=12,
-                        ha="left", va="center")
+                if best is None or hits < best[0]:
+                    best = (hits, k, dy_pt, box)
+            if best is None:
+                continue
+            _hits, _k, dy_pt, box = best
+            placed.append(box)
+            arrow = None
+            if show_leader and abs(dy_pt) > 0.1:
+                arrow = dict(arrowstyle="-", color=st.outage_label_color,
+                             lw=0.45, alpha=min(0.85, va_top),
+                             shrinkA=0.0, shrinkB=3.0)
+            ax.annotate(
+                text, (gx, gy),
+                xytext=(base_dx_pt, dy_pt), textcoords="offset points",
+                fontsize=fontsize, color=st.outage_label_color,
+                alpha=st.outage_label_alpha, zorder=12,
+                ha="left", va="center",
+                bbox=dict(boxstyle="round,pad=0.12", fc="white",
+                          ec="none", alpha=0.35 if count else 0.0),
+                arrowprops=arrow)
 
     # ------------------------------------------------------------------
     def _c(self, coord):
@@ -742,6 +822,11 @@ class NetworkMapRenderer:
                                   lw=max(1.0, st.outage_link_width),
                                   linestyle="dashed",
                                   label="Outage → affected zone"))
+        for color, label, n_edges in (getattr(self, "_heat_legend", []) or []):
+            handles.append(Line2D([], [], color=color,
+                                  lw=max(1.5, st.outage_heat_width),
+                                  label=f"Outage density — {label} "
+                                        f"({n_edges} segments)"))
         if "opt_sectionalizer" in drawn:
             handles.append(Line2D([], [], color=st.opt_sec_color,
                                   marker=st.opt_sec_marker, linestyle="None",

@@ -97,9 +97,9 @@ def suggest_event_places(records: Iterable, gazetteer: PlaceGazetteer,
         # The outage workbook's «نام پست» is the primary location field
         # (often a village, farm, BTS site or other named place). Search it
         # first; notes/device are supplementary context, not substitutes.
-        station = str(getattr(rec, "substation", "") or "").strip()
-        context = " ".join(x for x in (getattr(rec, "notes", ""),
-                                       getattr(rec, "device_raw", "")) if x)
+        station = str(_attr_or_dict(rec, "substation") or "").strip()
+        context = " ".join(x for x in (_attr_or_dict(rec, "notes"),
+                                       _attr_or_dict(rec, "device_raw")) if x)
         # Prefer «نام پست» alone. Searching a concatenation of notes and
         # equipment first creates spurious substring matches for generic
         # words; contextual fallback is used only when the primary field has
@@ -109,8 +109,8 @@ def suggest_event_places(records: Iterable, gazetteer: PlaceGazetteer,
         if not matches and context:
             text = " ".join(x for x in (station, context) if x)
             matches = gazetteer.search(text, limit=limit)
-        out.append(OutagePlaceSuggestion(str(getattr(rec, "id", "")), text,
-                                         tuple(matches)))
+        out.append(OutagePlaceSuggestion(str(_attr_or_dict(rec, "id") or ""),
+                                         text, tuple(matches)))
     return out
 
 
@@ -731,3 +731,128 @@ class OutageReviewStore:
     def confirmed_event_to_zone(self) -> dict[str, str]:
         return {eid: r['zone_id'] for eid, r in self.load().items()
                 if r['status'] == 'confirmed'}
+
+# ---------------------------------------------------------------------------
+# توزیع رنگی مسیر بر اساس تکرار خاموشی + رتبه‌بندی مکان‌ها
+# ---------------------------------------------------------------------------
+def _point_segment_distance(px: float, py: float, ax: float, ay: float,
+                            bx: float, by: float) -> float:
+    """کمترین فاصلهٔ نقطه تا پاره‌خط (واحد: متر)."""
+    dx, dy = bx - ax, by - ay
+    if dx == 0.0 and dy == 0.0:
+        return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
+    t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)
+    t = max(0.0, min(1.0, t))
+    cx, cy = ax + t * dx, ay + t * dy
+    return ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
+
+
+def outage_heat_counts(points: Iterable[dict], graph, *,
+                       radius_m: float = 300.0) -> dict[str, int]:
+    """تعداد خاموشی‌های نزدیک هر یال (متناسب با تکرار در طول فیدر).
+
+    هر نقطهٔ خاموشی به **همهٔ** یال‌هایی که در شعاع ``radius_m`` آن هستند
+    نسبت داده می‌شود (یک خاموشی می‌تواند روی چند یال مجاور اثر بگذارد);
+    خروجی: ``{edge_id: count}``. یال‌های بدون مختصات نادیده گرفته می‌شوند.
+    """
+    pts: list[tuple[float, float]] = []
+    for pt in points or ():
+        try:
+            pts.append((float(pt["x"]), float(pt["y"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    out: dict[str, int] = {}
+    if not pts or graph is None:
+        return out
+    radius = max(1.0, float(radius_m))
+    for eid, edge in (getattr(graph, "edges", {}) or {}).items():
+        a = getattr(graph.nodes, "get", lambda *_: None)(edge.a)
+        b = getattr(graph.nodes, "get", lambda *_: None)(edge.b)
+        if a is None or b is None or a.coord is None or b.coord is None:
+            continue
+        ax, ay = float(a.coord[0]), float(a.coord[1])
+        bx, by = float(b.coord[0]), float(b.coord[1])
+        if max(ax, bx) + radius < min(p[0] for p in pts) or \
+                min(ax, bx) - radius > max(p[0] for p in pts) or \
+                max(ay, by) + radius < min(p[1] for p in pts) or \
+                min(ay, by) - radius > max(p[1] for p in pts):
+            continue
+        n = sum(1 for px, py in pts
+                if _point_segment_distance(px, py, ax, ay, bx, by) <= radius)
+        if n:
+            out[str(eid)] = int(n)
+    return out
+
+
+def assign_heat_level(count: int, levels: Iterable[dict]) -> dict | None:
+    """سطح رنگی متناظر با تعداد خاموشی (None = بدون رنگ)."""
+    try:
+        value = int(count)
+    except (TypeError, ValueError):
+        return None
+    if value <= 0:
+        return None
+    fallback = None
+    for lvl in levels or ():
+        top = lvl.get("max")
+        if top is None:
+            return dict(lvl)
+        try:
+            if value <= float(top):
+                return dict(lvl)
+        except (TypeError, ValueError):
+            continue
+        fallback = dict(lvl)
+    return fallback
+
+
+def outage_place_ranking(points: Iterable[dict], *,
+                         limit: int | None = None) -> list[dict]:
+    """رتبه‌بندی مکان‌های خاموشی (درخواست کاربر: جدول رتبه‌بندی).
+
+    هر ردیف: رتبه، مکان، فیدر، تعداد خاموشی، سهم درصدی، توزیع وضعیت
+    (تأیید/در انتظار/رد)، مرکز مختصات و شمارهٔ زون غالب.
+    """
+    groups: dict[tuple[str, str], dict] = {}
+    total = 0
+    for pt in points or ():
+        try:
+            x, y = float(pt["x"]), float(pt["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        total += 1
+        name = str(pt.get("place") or pt.get("label") or "").strip() or "—"
+        feeder = str(pt.get("feeder") or "").strip()
+        key = (feeder, name)
+        g = groups.setdefault(key, {
+            "place": name, "feeder": feeder, "count": 0,
+            "x_sum": 0.0, "y_sum": 0.0,
+            "confirmed": 0, "pending": 0, "rejected": 0,
+            "zones": {},
+        })
+        g["count"] += 1
+        g["x_sum"] += x
+        g["y_sum"] += y
+        status = str(pt.get("status") or "pending")
+        if status in ("confirmed", "pending", "rejected"):
+            g[status] += 1
+        zone_id = str(pt.get("zone_id") or "")
+        if zone_id:
+            g["zones"][zone_id] = g["zones"].get(zone_id, 0) + 1
+
+    rows = []
+    for g in groups.values():
+        n = g["count"]
+        zone_id = max(g["zones"], key=g["zones"].get) if g["zones"] else ""
+        rows.append({
+            "place": g["place"], "feeder": g["feeder"], "count": n,
+            "share_percent": round(100.0 * n / total, 2) if total else 0.0,
+            "x": round(g["x_sum"] / n, 3), "y": round(g["y_sum"] / n, 3),
+            "confirmed": g["confirmed"], "pending": g["pending"],
+            "rejected": g["rejected"], "zone_id": zone_id,
+        })
+    rows.sort(key=lambda r: (-r["count"], r["feeder"], r["place"]))
+    for i, r in enumerate(rows, start=1):
+        r["rank"] = i
+    return rows[:int(limit)] if limit else rows
+

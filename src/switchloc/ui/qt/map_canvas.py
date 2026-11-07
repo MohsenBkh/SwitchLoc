@@ -654,7 +654,8 @@ def make_map_canvas(parent=None, osm_fetch=None):
                                    QHBoxLayout, QLabel, QListWidget,
                                    QListWidgetItem, QPushButton, QSizePolicy,
                                    QVBoxLayout, QWidget, QToolButton, QMenu,
-                                   QTreeWidget, QTreeWidgetItem, QFileDialog)
+                                   QTreeWidget, QTreeWidgetItem, QFileDialog,
+                                   QSplitter, QMessageBox)
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
     from matplotlib.figure import Figure
 
@@ -758,7 +759,10 @@ def make_map_canvas(parent=None, osm_fetch=None):
             left_col = QVBoxLayout(left_col_holder)
             left_col.setContentsMargins(0, 0, 0, 0)
             left_col.setSpacing(4)
-            left_col.addWidget(switch_box, 1)
+            # پنل‌ها در یک QSplitter عمودی می‌آیند تا مرزشان قابل جابه‌جایی باشد
+            self.left_split = QSplitter(Qt.Orientation.Vertical)
+            self.left_split.setChildrenCollapsible(True)
+            self.left_split.addWidget(switch_box)
 
             # --- لایهٔ خاموشی‌های دارای مختصات --------------------------
             outage_box = QGroupBox("لایهٔ خاموشی‌ها — دارای مختصات")
@@ -781,6 +785,11 @@ def make_map_canvas(parent=None, osm_fetch=None):
             obtn.addWidget(self.btn_outage_all)
             obtn.addWidget(self.btn_outage_none)
             ov.addLayout(obtn)
+            self.btn_outage_rank = QPushButton("رتبه‌بندی مکان‌های خاموشی")
+            self.btn_outage_rank.setToolTip(
+                "جدول مکان‌های خاموشی بر اساس تعداد تکرار (درخواست کاربر)")
+            self.btn_outage_rank.clicked.connect(self.show_outage_ranking)
+            ov.addWidget(self.btn_outage_rank)
             self.outage_list = QTreeWidget()
             self.outage_list.setHeaderHidden(True)
             self.outage_list.setToolTip(
@@ -788,7 +797,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
                 "رخداد را حذف می‌کند و در تنظیمات نقشه ذخیره می‌شود.")
             self.outage_list.itemChanged.connect(self._outage_item_changed)
             ov.addWidget(self.outage_list, 1)
-            left_col.addWidget(outage_box, 1)
+            self.left_split.addWidget(outage_box)
+            self.left_split.setSizes([320, 280])
+            left_col.addWidget(self.left_split, 1)
             self.outage_panel = outage_box
             root.addWidget(left_col_holder, 0)
 
@@ -1186,6 +1197,25 @@ def make_map_canvas(parent=None, osm_fetch=None):
                     sorted(self._hidden_outage_ids)
             if self.on_outages_changed is not None:
                 self.on_outages_changed()
+
+        def show_outage_ranking(self) -> None:
+            """جدول رتبه‌بندی مکان‌های خاموشی (درخواست کاربر — بند ۷)."""
+            from .outage_ranking_dialog import show_outage_ranking_dialog
+            points = [p for p in (self._outage_points or [])
+                      if str(p.get("id", "")) not in self._hidden_outage_ids]
+            if not points:
+                QMessageBox.information(
+                    self, "رتبه‌بندی مکان‌های خاموشی",
+                    "هیچ خاموشی دارای مختصات و قابل نمایشی وجود ندارد.")
+                return
+
+            def _focus(x: float, y: float, row: dict) -> None:
+                try:
+                    self.set_highlight_point((x, y))
+                except Exception:                   # noqa: BLE001
+                    pass
+
+            show_outage_ranking_dialog(self, points, on_focus=_focus)
 
         def _on_outages_master_toggle(self, on: bool) -> None:
             if self._renderer is not None and self._renderer.style is not None:

@@ -366,7 +366,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     from ..qt.dashboard_tab import make_dashboard_tab
     from ..qt.map_canvas import make_map_canvas
     from ..qt.mapping_wizard import MappingWizardPage
-    from ..qt.sectionalizer_tab import make_sectionalizer_tab
+    from ..qt.switch_placement_tab import make_sectionalizer_tab
     from ...application.import_service import ImportService, ImportSettings
     from ...application.outage_service import OutageService, OutageSettings
     from ...application.outage_review import (OutageReviewStore,
@@ -375,9 +375,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                               outage_map_points,
                                               plan_review_rows,
                                               suggest_event_places)
-    from ...application.sectionalizer_service import (
-        SectionalizerAppSettings, SectionalizerService)
-    from ...reliability.sectionalizer import SectionalizerSettings
+    from ...application.switch_placement_service import (
+        SwitchPlacementAppSettings, SwitchPlacementService)
+    from ...reliability.switch_placement import SwitchPlacementSettings
     from ...gis.crs import transform_wgs84_to_project
     from ...reliability.zone_outages import calculate_zone_up
     from ...geography.places import PlaceGazetteer
@@ -2579,23 +2579,33 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                "و مقایسه اقتصادی (خروجی کامل گام‌های ۴-۸):"))
     plac_rcol.addWidget(plac_panel, 1)
 
-    # ---------------- Sectionalizer & EENS tab (بخش جدید) -------------------
+    # --------------- روش جایابی بهینهٔ کلید و کاهش EENS ----------------------
     def do_sectionalizer() -> None:
-        """اجرای موتور بهینه‌سازی سکشنالایزر روی پروژهٔ باز."""
+        """اجرای موتور جایابی بهینهٔ کلید روی پروژهٔ باز."""
         db = state.get("db")
         if not db:
             QMessageBox.warning(
-                win, "Sectionalizer & EENS",
+                win, "روش جایابی بهینهٔ کلید",
                 "ابتدا پروژه را باز یا وارد کنید؛ نتیجه در همان فایل پروژه "
                 "ذخیره می‌شود.")
             return
         cfg = dict(sec_tab.settings() or {})
         state["sectionalizer_settings"] = cfg
-        engine = SectionalizerSettings(
+        engine = SwitchPlacementSettings(
+            switch_type=str(cfg.get("switch_type", "sectionalizer")),
             total_failure_rate_per_year=float(
                 cfg.get("total_failure_rate_per_year", 30.0)),
             repair_time_min=float(cfg.get("repair_time_min", 50.0)),
             restoration_time_min=float(cfg.get("restoration_time_min", 20.0)),
+            manual_restoration_time_min=float(
+                cfg.get("manual_restoration_time_min", 30.0)),
+            transient_max_duration_min=float(
+                cfg.get("transient_max_duration_min", 3.0)),
+            transient_interruption_min=float(
+                cfg.get("transient_interruption_min", 1.0)),
+            reclose_time_min=float(cfg.get("reclose_time_min", 0.25)),
+            reclose_success_probability=float(
+                cfg.get("reclose_success_probability", 0.7)),
             max_sectionalizers=int(cfg.get("max_sectionalizers", 3)),
             min_candidate_depth=int(cfg.get("min_candidate_depth", 3)),
             max_downstream_load_ratio=float(
@@ -2603,16 +2613,20 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             restoration_model=str(cfg.get("restoration_model", "uniform")),
             use_existing_switches=bool(cfg.get("use_existing_switches", True)),
         )
-        app_settings = SectionalizerAppSettings(
+        backup = float(cfg.get("backup_kw") or 0.0)
+        app_settings = SwitchPlacementAppSettings(
             user="ui-user", persist=True, engine=engine,
+            method=str(cfg.get("method", "uniform")),
             load_model=dict(state.get("load_model") or {}),
             failure_rate_source=str(cfg.get("failure_rate_source", "outage")),
+            backup_kw=({k: backup for k in (study_feeder_keys() or ())}
+                       if backup > 0 else {}),
             feeder_keys=tuple(study_feeder_keys() or ()),
             report_dir=str(_reports_dir()))
         net, topo = state.get("net"), state.get("topo")
 
         def work():
-            return SectionalizerService(app_settings).run(
+            return SwitchPlacementService(app_settings).run(
                 str(db), net=net, topo=topo)
 
         def _sec_nodes_of(study) -> list:
@@ -2632,13 +2646,13 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             sec_tab.show_result(res)
             refresh_map()
             status_msg(
-                f"بهینه‌سازی سکشنالایزر: EENS "
+                f"جایابی کلید: EENS "
                 f"{res.study.baseline_eens_kwh / 1000.0:,.2f} → "
                 f"{res.study.best_eens_kwh / 1000.0:,.2f} MWh/سال "
                 f"(کاهش {res.study.improvement_percent:.2f}%)")
             if res.warnings:
                 QMessageBox.information(
-                    win, "Sectionalizer & EENS",
+                    win, "روش جایابی بهینهٔ کلید",
                     f"اجرا کامل شد؛ {len(res.warnings)} هشدار:\n• "
                     + "\n• ".join(res.warnings))
 
@@ -2733,7 +2747,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     tabs.addTab(import_tab, "Data Import")
     tabs.addTab(topo_tab, "Topology")
     tabs.addTab(plac_tab, "Placement")
-    tabs.addTab(sec_tab, "Sectionalizer & EENS")
+    tabs.addTab(sec_tab, "Switch placement & EENS")
     tabs.addTab(dash_tab, "Dashboard")
     tabs.addTab(map_tab, "Map")
 

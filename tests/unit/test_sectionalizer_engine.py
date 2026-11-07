@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""موتور بهینه‌سازی سکشنالایزر و کاهش EENS — آزمون‌های تحلیلی.
+"""روش جایابی بهینهٔ کلید و کاهش EENS — آزمون‌های تحلیلی (موتور).
 
 لنگرهای عددی از خودِ فرمول کد مرجع محاسبه شده‌اند (نه از خروجی برنامه):
 
@@ -302,4 +302,4 @@ def test_study_dict_and_markdown_are_json_safe():
     payload = json.loads(json.dumps(study.as_dict(), default=str))
     assert payload["feeders"][0]["feeder_key"] == "F1"
     md = study.to_markdown()
-    assert "بهینه‌سازی سکشنالایزر" in md and "| F1 |" in md
+    assert "جایابی بهینهٔ کلید" in md and "| F1 |" in md

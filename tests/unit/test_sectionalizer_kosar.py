@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""آزمون پذیرش موتور سکشنالایزر روی شبکهٔ واقعی کوثر.
+"""آزمون پذیرش روش جایابی بهینهٔ کلید روی شبکهٔ واقعی کوثر.
 
 شبکهٔ واقعی: ``Kosar GIS.sqlite`` (۵ فیدر F3/F4/F5/F6/F7، ۷٬۷۹۹ گره،
 ۸٬۰۸۹ خط). آزمون‌ها **فقط‌خواندنی** هستند: پروژه با ``persist=False``
@@ -150,7 +150,7 @@ def test_service_writes_report_without_touching_the_project(kosar, tmp_path):
     payload = json.loads((tmp_path / "sectionalizer_eens_report.json").read_text(
         encoding="utf-8"))
     assert payload["study"]["feeders"][0]["feeder_key"] == "F3"
-    assert "بهینه‌سازی سکشنالایزر" in Path(res.report_md).read_text(
+    assert "جایابی بهینهٔ کلید" in Path(res.report_md).read_text(
         encoding="utf-8")
     # فقط‌خواندنی: هیچ کلید جدیدی در project_kv نوشته نشده است
     conn = sqlite3.connect(str(DB))
@@ -178,7 +178,7 @@ def test_persisted_study_roundtrip_on_a_project_copy(tmp_path):
     payload = load_persisted_study(str(db))
     assert payload is not None
     assert payload["study"]["feeders"][0]["feeder_key"] == "F3"
-    assert payload["markdown"] and "بهینه‌سازی سکشنالایزر" in payload["markdown"]
+    assert payload["markdown"] and "جایابی بهینهٔ کلید" in payload["markdown"]
     assert payload["settings"]["user"] == "pytest"
     assert payload["algo_version"].startswith("SwitchLoc")
     # تنظیمات ران هم برای بازسازی وضعیت ذخیره شده است

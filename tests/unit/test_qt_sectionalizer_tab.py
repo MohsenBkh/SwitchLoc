@@ -86,12 +86,14 @@ def test_settings_roundtrip(app):
         "use_existing_switches": False,
     })
     s = tab.settings()
+    # «منبع λ/r = configured» یعنی روش دستی (کاربر مقادیر را وارد می‌کند)
     assert s["failure_rate_source"] == "configured"
+    assert s["method"] == "manual"
     assert s["total_failure_rate_per_year"] == pytest.approx(42.5)
     assert s["max_sectionalizers"] == 4
     assert s["min_candidate_depth"] == 2
     assert s["max_downstream_load_ratio"] == pytest.approx(0.55)
-    assert s["restoration_model"] == "directional"
+    assert s["restoration_model"] == "uniform"   # روش دستی: بدون مدل بازیابی
     assert s["use_existing_switches"] is False
     # مقدار ناشناخته/تهی نباید ویجت را بشکند
     tab.apply_settings(None)
@@ -110,8 +112,9 @@ def test_run_and_settings_callbacks_fire(app):
     assert seen["changed"]["max_sectionalizers"] == 5
     tab.sp_repair.setValue(90.0)
     assert seen["changed"]["repair_time_min"] == pytest.approx(90.0)
-    tab.cmb_model.setCurrentIndex(tab.cmb_model.findData("directional"))
+    tab.cmb_method.setCurrentIndex(tab.cmb_method.findData("directional"))
     assert seen["changed"]["restoration_model"] == "directional"
+    assert seen["changed"]["method"] == "directional"
     tab.chk_existing.setChecked(False)
     assert seen["changed"]["use_existing_switches"] is False
 
@@ -138,7 +141,7 @@ def test_show_result_fills_tables_and_enables_map(app):
              for i in range(detail.rowCount())]
     assert sum(marks) == len(selected_ids := [c.node for f in study.feeders
                                               if f.best for c in f.best.selected])
-    assert "بهینه‌سازی سکشنالایزر" in tab.panel.toPlainText()
+    assert "روش جایابی بهینهٔ کلید" in tab.panel.toPlainText()
     selected = tab.selected_nodes()
     assert selected and all(isinstance(n, str) for n in selected)
     assert tab.btn_map.isEnabled()
