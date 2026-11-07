@@ -551,18 +551,34 @@ class NetworkMapRenderer:
         sign = 1.0 if k % 2 == 1 else -1.0
         return sign * step_pt * ((k + 1) // 2)
 
+    _LABEL_DIRECTIONS = (
+        (1.0, 0.0, "left", "center"),      # راست نقطه
+        (1.0, 1.0, "left", "center"),      # راست-بالا
+        (1.0, -1.0, "left", "center"),     # راست-پایین
+        (-1.0, 0.0, "right", "center"),    # چپ نقطه
+        (-1.0, 1.0, "right", "center"),
+        (-1.0, -1.0, "right", "center"),
+        (0.0, 1.4, "center", "bottom"),    # بالا
+        (0.0, -1.4, "center", "top"),      # پایین
+    )
+
     def _draw_outage_labels(self, ax, st) -> None:
-        """برچسب خاموشی‌ها را **نزدیک همان نقطه** می‌چیند (اصلاح درخواست کاربر).
+        """برچسب خاموشی‌ها را **چسبیده به نقطهٔ خودشان** می‌چیند.
 
-        مشکل قبلی: پله‌های عمودی تا ۲۴ گام ادامه می‌یافت و برچسب‌ها صدها متر
-        از نقطهٔ خود دور می‌شدند (تصویر ارسالی کاربر). اصلاح:
+        دو شکست قبلی و راه‌حل واحد:
 
-        * حداکثر ``outage_label_max_levels`` پله (پیش‌فرض ۳) — بیشتر از آن
-          جابه‌جا نمی‌شویم.
-        * اگر هیچ پلهٔ آزادی نبود، برچسب روی **نزدیک‌ترین** پله با کمترین
-          هم‌پوشانی می‌نشیند و یک **خط راهنمای نازک** به نقطهٔ خود وصل می‌شود
-          (``outage_label_leader``) تا ارتباط گم نشود.
-        * برچسب‌های پرتکرار (تعداد بیشتر) اول جا می‌گیرند.
+        * **روی‌هم‌افتادن** — نسخهٔ اول همهٔ برچسب‌ها را در یک ستون عمودی
+          می‌گذاشت؛ با چند نقطهٔ نزدیک، متن‌ها هم‌پوشان می‌شدند.
+        * **پراکندگی غیرواقعی** (تصویر ارسالی کاربر) — نسخهٔ دوم نردبان
+          عمودی بی‌کران (۲۴ پله) داشت و برچسب را صدها متر از نقطه دور
+          می‌کرد.
+
+        راه‌حل: برای هر برچسب فقط **۸ جهتِ چسبیده به نقطه** در
+        ``outage_label_max_levels`` حلقهٔ کوچک (پیش‌فرض ۳) آزمایش می‌شود؛
+        اولین جای بدون هم‌پوشانی انتخاب می‌شود، وگرنه کم‌ترین هم‌پوشانی.
+        هر جابه‌جایی (غیر از «راست نقطه») یک **خط راهنمای نازک** به نقطه
+        می‌گیرد تا انتساب برچسب به نقطه گم نشود. برچسب‌های پرتکرار اول
+        جای می‌گیرند.
         """
         groups = list(self._pending_outage_labels or [])
         if not groups:
@@ -573,17 +589,16 @@ class NetworkMapRenderer:
             fontsize = 5.0
         per_pt = self._data_per_point(ax, fontsize)
         step_pt = max(fontsize * 1.35, 6.0)
-        base_dx_pt = float(getattr(st, "outage_label_offset_pt", 4.0))
-        max_levels = max(0, int(getattr(st, "outage_label_max_levels", 3)))
+        base_pt = float(getattr(st, "outage_label_offset_pt", 4.0))
+        rings = max(0, int(getattr(st, "outage_label_max_levels", 3)))
         show_leader = bool(getattr(st, "outage_label_leader", True))
         try:
-            va_top = str(st.outage_label_alpha if st.outage_label_alpha
-                         is not None else 1.0)
-            va_top = float(va_top)
+            leader_alpha = min(0.85, float(st.outage_label_alpha
+                                           if st.outage_label_alpha is not None
+                                           else 1.0))
         except (TypeError, ValueError):
-            va_top = 1.0
+            leader_alpha = 0.85
 
-        # پرتکرارها اول — بهترین جای‌ها به آن‌ها می‌رسد
         groups = sorted(groups, key=lambda g: -int(g.get("count") or 0))
         placed: list[tuple[float, float, float, float]] = []
 
@@ -601,37 +616,45 @@ class NetworkMapRenderer:
             except (KeyError, TypeError, ValueError):
                 continue
             count = int(g.get("count") or 0)
-            # کادر تقریبی برچسب در واحد داده
             text_w = max(0.58 * fontsize * per_pt * len(text), per_pt * 2.0)
             text_h = 1.45 * fontsize * per_pt
-            dx = base_dx_pt * per_pt
-            best = None                    # (overlaps, level_index, dy_pt, box)
-            for k in range(max_levels + 1):
-                dy_pt = self._label_offset_pt(k, step_pt)
-                dy = dy_pt * per_pt
-                box = (gx + dx, gy + dy - text_h / 2.0,
-                       gx + dx + text_w, gy + dy + text_h / 2.0)
-                hits = _overlaps(box)
-                if hits == 0:
-                    best = (0, k, dy_pt, box)
+            best = None            # (hits, dx_pt, dy_pt, ha, va, box)
+            for ring in range(rings + 1):
+                radius = base_pt + ring * step_pt
+                for ux, uy, ha, va in self._LABEL_DIRECTIONS:
+                    dx_pt, dy_pt = ux * radius, uy * radius
+                    # کادر برچسب حول نقطهٔ لنگر (با توجه به ha/va)
+                    left = gx + dx_pt * per_pt
+                    left -= (text_w if ha == "right" else
+                             0.0 if ha == "left" else text_w / 2.0)
+                    mid_y = gy + dy_pt * per_pt
+                    bottom = mid_y - (0.0 if va == "bottom" else
+                                      text_h if va == "top" else text_h / 2.0)
+                    box = (left, bottom, left + text_w, bottom + text_h)
+                    hits = _overlaps(box)
+                    if hits == 0:
+                        best = (0, dx_pt, dy_pt, ha, va, box)
+                        break
+                    if best is None or hits < best[0]:
+                        best = (hits, dx_pt, dy_pt, ha, va, box)
+                if best is not None and best[0] == 0:
                     break
-                if best is None or hits < best[0]:
-                    best = (hits, k, dy_pt, box)
             if best is None:
                 continue
-            _hits, _k, dy_pt, box = best
+            _hits, dx_pt, dy_pt, ha, va, box = best
             placed.append(box)
+            displaced = abs(dx_pt) > 0.1 or abs(dy_pt) > 0.1
             arrow = None
-            if show_leader and abs(dy_pt) > 0.1:
+            if show_leader and displaced:
                 arrow = dict(arrowstyle="-", color=st.outage_label_color,
-                             lw=0.45, alpha=min(0.85, va_top),
-                             shrinkA=0.0, shrinkB=3.0)
+                             lw=0.45, alpha=leader_alpha,
+                             shrinkA=0.5, shrinkB=3.0)
             ax.annotate(
                 text, (gx, gy),
-                xytext=(base_dx_pt, dy_pt), textcoords="offset points",
+                xytext=(dx_pt, dy_pt), textcoords="offset points",
                 fontsize=fontsize, color=st.outage_label_color,
                 alpha=st.outage_label_alpha, zorder=12,
-                ha="left", va="center",
+                ha=ha, va=va,
                 bbox=dict(boxstyle="round,pad=0.12", fc="white",
                           ec="none", alpha=0.35 if count else 0.0),
                 arrowprops=arrow)

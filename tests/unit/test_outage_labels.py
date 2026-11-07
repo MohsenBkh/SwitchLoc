@@ -155,13 +155,21 @@ def test_renderer_shows_one_label_per_place_with_the_count():
 
 
 def test_two_names_at_the_same_place_are_staggered():
+    """دو نام هم‌مکان باید از هم جدا شوند — در هر جهتی، نه فقط عمودی.
+
+    نسخهٔ جدید (v1.12) هشت جهتِ چسبیده به نقطه را آزمایش می‌کند؛ پس
+    جداسازی می‌تواند افقی باشد. شرط درست: هیچ دو برچسبی لنگر یکسان نداشته
+    باشند و جابه‌جایی از یک حد کوچک بیشتر نشود (نه پراکندگی راه دور).
+    """
     anns = _render_labels([_pt("کرندق", 50.0, 0.0), _pt("نوده", 51.0, 0.0)])
     texts = [a[0] for a in anns]
     assert set(texts) == {"کرندق (1)", "نوده (1)"}
-    offsets = sorted(a[1][1] for a in anns)
-    assert len(set(offsets)) == 2, "برچسب‌های هم‌مکان باید عمودی از هم جدا شوند"
-    assert offsets[0] == 0.0                         # برچسب اول سرجای خودش
-    assert offsets[1] >= 6.0                         # دومی یک پله بالا می‌رود
+    anchors = [a[1] for a in anns]
+    assert len(set(anchors)) == 2, "برچسب‌های هم‌مکان باید از هم جدا شوند"
+    assert anchors[0] == (4.0, 0.0)                  # برچسب اول سرجای خودش
+    dx, dy = anchors[1]
+    assert max(abs(dx), abs(dy)) <= 4.0 + 3 * 8.0, \
+        "جابه‌جایی برچسب باید محدود به حلقه‌های نزدیک باشد"
 
 
 def test_far_apart_labels_are_not_shifted():
