@@ -130,7 +130,9 @@ class NetworkMapRenderer:
                manual_nodes=None, highlight_point=None,
                zone_load_kw: dict | None = None, selected_zone: str | None = None,
                hidden_switch_ids=None, zone_up_mwh: dict | None = None,
-               zone_outage_hours: dict | None = None) -> str:
+               zone_outage_hours: dict | None = None,
+               outage_points=None, sectionalizer_nodes=None,
+               hidden_outage_ids=None) -> str:
         """Render to a PNG file (headless Agg) and return the path."""
         fig = plt.figure(figsize=figsize, constrained_layout=True)
         try:
@@ -144,7 +146,10 @@ class NetworkMapRenderer:
                              selected_zone=selected_zone,
                              hidden_switch_ids=hidden_switch_ids,
                              zone_up_mwh=zone_up_mwh,
-                             zone_outage_hours=zone_outage_hours)
+                             zone_outage_hours=zone_outage_hours,
+                             outage_points=outage_points,
+                             sectionalizer_nodes=sectionalizer_nodes,
+                             hidden_outage_ids=hidden_outage_ids)
             fig.savefig(path, dpi=dpi)
         finally:
             plt.close(fig)
@@ -179,7 +184,9 @@ class NetworkMapRenderer:
                     selected_zone: str | None = None,
                     hidden_switch_ids=None, zone_up_mwh: dict | None = None,
                     zone_outage_hours: dict | None = None,
-                    manual_tie_pairs=None, zone_label_positions=None) -> None:
+                    manual_tie_pairs=None, zone_label_positions=None,
+                    outage_points=None, sectionalizer_nodes=None,
+                    hidden_outage_ids=None) -> None:
         """Draw onto an existing Matplotlib figure (Qt canvas shares this).
 
         ``proposed_nodes``: node ids of Phase-4 proposed switch locations
@@ -192,6 +199,16 @@ class NetworkMapRenderer:
 
         ``style``: MapStyle override for THIS render (falls back to
         ``self.style``).
+
+        ``outage_points``: رخدادهای خاموشیِ دارای مختصات در CRS پروژه —
+        هر آیتم ``{"id", "x", "y", "label", "status", "feeder",
+        "zone_x", "zone_y", "zone_label"}``. نمایش با رنگ وضعیت و
+        (اختیاری) خط اتصال به مرکز زونِ متأثر؛ همهٔ پارامترهای نمایشی از
+        ``MapStyle`` می‌آیند تا در تب «خاموشی‌ها» قابل تنظیم باشند.
+
+        ``sectionalizer_nodes``: گره‌های پیشنهادی موتور بهینه‌سازی
+        سکشنالایزر (نماد × بنفش، قابل خاموش‌کردن با
+        ``style.show_opt_sectionalizers``).
 
         ``rotate``: منسوخ — چرخش ۹۰° حذف شد (بازخورد کاربر: منظور از
         landscape پر شدن «تمام فضای قاب» بود، نه چرخش تصویر). برای
@@ -338,6 +355,94 @@ class NetworkMapRenderer:
                     tie_segments, colors="#d81b60", linewidths=2.0,
                     linestyles="dashed", zorder=6, label="Manual inter-feeder tie"))
                 self._drawn.add("manual_tie")
+
+        # --- lایهٔ خاموشی‌های دارای مختصات (درخواست کاربر) --------------
+        if outage_points and st.show_outages:
+            # فهرست پنهان: پارامتر صریح، وگرنه همان انتخاب ذخیره‌شده در سبک
+            # پروژه (تا گزارش‌های headless هم همان چیزی را بدهند که نقشه)
+            hidden_out = {str(x) for x in
+                          (hidden_outage_ids if hidden_outage_ids is not None
+                           else (st.hidden_outage_ids or ()))}
+            by_status: dict[str, list] = {}
+            links = []
+            for pt in outage_points:
+                try:
+                    pid = str(pt.get("id", ""))
+                    if pid and pid in hidden_out:
+                        continue
+                    fk = str(pt.get("feeder", "") or "")
+                    if feeder_filter is not None and fk and not _feeder_selected(
+                            fk, feeder_filter):
+                        continue
+                    x, y = float(pt["x"]), float(pt["y"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                status = str(pt.get("status", "") or "pending")
+                by_status.setdefault(status, []).append((x, y, pt))
+                zx, zy = pt.get("zone_x"), pt.get("zone_y")
+                if st.show_outage_links and zx is not None and zy is not None:
+                    try:
+                        links.append(((x, y), (float(zx), float(zy))))
+                    except (TypeError, ValueError):
+                        pass
+            if links:
+                ax.add_collection(LineCollection(
+                    links, colors=st.outage_link_color,
+                    linewidths=st.outage_link_width,
+                    alpha=st.outage_link_alpha, linestyles="dashed",
+                    zorder=8, label="Outage → zone link"))
+                self._drawn.add("outage_link")
+            status_color = {
+                "confirmed": st.outage_confirmed_color,
+                "rejected": st.outage_rejected_color,
+                "pending": st.outage_pending_color,
+            }
+            status_fa = {"confirmed": "تأیید مهندسی",
+                         "rejected": "رد رخداد", "pending": "در انتظار بررسی"}
+            for status in ("confirmed", "pending", "rejected", ""):
+                items = by_status.get(status)
+                if not items:
+                    continue
+                color = status_color.get(status, st.outage_color)
+                ax.scatter([p[0] for p in items], [p[1] for p in items],
+                           s=st.outage_size, marker=st.outage_marker,
+                           facecolors=color, edgecolors="white",
+                           linewidths=0.8, alpha=st.outage_alpha, zorder=11,
+                           label=f"Outage — {status_fa.get(status, status or 'بدون وضعیت')}")
+                if st.show_outage_labels:
+                    for x, y, pt in items:
+                        text = str(pt.get("label", "") or "")
+                        if not text:
+                            continue
+                        ax.annotate(text, (x, y), xytext=(4, 4),
+                                    textcoords="offset points",
+                                    fontsize=st.outage_label_size,
+                                    color=st.outage_label_color,
+                                    alpha=st.outage_label_alpha, zorder=12)
+                self._drawn.add("outage")
+
+        # --- سکشنالایزرهای پیشنهادی موتور EENS -------------------------
+        if sectionalizer_nodes and st.show_opt_sectionalizers:
+            sx, sy = [], []
+            for item in sectionalizer_nodes:
+                try:
+                    if isinstance(item, dict):
+                        x, y = float(item["x"]), float(item["y"])
+                    else:
+                        nd = self.graph.nodes.get(item)
+                        if nd is None or nd.coord is None:
+                            continue
+                        x, y = map(float, nd.coord)
+                except (KeyError, TypeError, ValueError):
+                    continue
+                sx.append(x)
+                sy.append(y)
+            if sx:
+                self._drawn.add("opt_sectionalizer")
+                ax.scatter(sx, sy, s=st.opt_sec_size, marker=st.opt_sec_marker,
+                           facecolors="none", edgecolors=st.opt_sec_color,
+                           linewidths=1.6, zorder=13,
+                           label="Proposed sectionalizer (EENS)")
 
         if highlight_point is not None:
             hx, hy = map(float, highlight_point)
@@ -532,6 +637,26 @@ class NetworkMapRenderer:
                                   markerfacecolor="none", linestyle="None",
                                   markersize=8,
                                   label="Transformer-terminal device (not a feeder zone cut)"))
+        if "outage" in drawn:
+            handles.append(Line2D([], [], color=st.outage_confirmed_color,
+                                  marker=st.outage_marker, linestyle="None",
+                                  markersize=8, label="Outage — تأیید مهندسی"))
+            handles.append(Line2D([], [], color=st.outage_pending_color,
+                                  marker=st.outage_marker, linestyle="None",
+                                  markersize=8, label="Outage — در انتظار بررسی"))
+            handles.append(Line2D([], [], color=st.outage_rejected_color,
+                                  marker=st.outage_marker, linestyle="None",
+                                  markersize=8, label="Outage — رد رخداد"))
+        if "outage_link" in drawn:
+            handles.append(Line2D([], [], color=st.outage_link_color,
+                                  lw=max(1.0, st.outage_link_width),
+                                  linestyle="dashed",
+                                  label="Outage → affected zone"))
+        if "opt_sectionalizer" in drawn:
+            handles.append(Line2D([], [], color=st.opt_sec_color,
+                                  marker=st.opt_sec_marker, linestyle="None",
+                                  markersize=9, markerfacecolor="none",
+                                  label="Proposed sectionalizer (EENS)"))
         if "coordinate" in drawn:
             handles.append(Line2D([], [], color="#ff00aa", marker="X",
                                   linestyle="None", markersize=9,

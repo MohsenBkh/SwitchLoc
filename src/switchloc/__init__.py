@@ -55,6 +55,6 @@ Phase-1 scope (unchanged, docs/PHASE1_REPORT.md):
 - level1.formulas   : audited TAV122-02/00 kernels (official anchors V-01..V-05)
 """
 
-__version__ = "1.10.3"
+__version__ = "1.11.0"
 APP_NAME = "SwitchLoc"
 TAV_REFERENCE = "TAV122-02/00"

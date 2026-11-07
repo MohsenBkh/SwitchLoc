@@ -366,11 +366,19 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     from ..qt.dashboard_tab import make_dashboard_tab
     from ..qt.map_canvas import make_map_canvas
     from ..qt.mapping_wizard import MappingWizardPage
+    from ..qt.sectionalizer_tab import make_sectionalizer_tab
     from ...application.import_service import ImportService, ImportSettings
     from ...application.outage_service import OutageService, OutageSettings
     from ...application.outage_review import (OutageReviewStore,
+                                              build_zone_geometries,
                                               default_gazetteer_path,
+                                              outage_map_points,
+                                              plan_review_rows,
                                               suggest_event_places)
+    from ...application.sectionalizer_service import (
+        SectionalizerAppSettings, SectionalizerService)
+    from ...reliability.sectionalizer import SectionalizerSettings
+    from ...gis.crs import transform_wgs84_to_project
     from ...reliability.zone_outages import calculate_zone_up
     from ...geography.places import PlaceGazetteer
     from ...application.topology_service import TopologyService, TopologySettings
@@ -413,11 +421,21 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                    "map_style_name": "",
                    "report_project_name": "",    # نام پروژه در گزارش (مورد ۴)
                    "plan_reviews": {},           # تأیید نهایی مهندسی
-                   "_loading": False, "dirty": False}
+                   "outage_reviews": {},         # بازبینی ذخیره‌شدهٔ زون/مکان
+                   "outage_points": [],          # خاموشی‌های دارای مختصات (نقشه)
+                   "outage_points_built": False,  # لایهٔ نقشه یک‌بار ساخته شود
+                   "zone_geometries": None,      # هندسهٔ زون‌ها (کش)
+                   "zone_geometry_topo": None,   # توپولوژی متناظر کش
+                   "gazetteer": None,            # بانک آفلاین مکان‌ها (کش)
+                   "sectionalizer": None,        # نتیجهٔ موتور EENS
+                   "sectionalizer_settings": {},  # تنظیمات تب (پروژه)
+                   "outage_last_save": "",       # پیام آخرین ذخیرهٔ بازبینی
+                   "_loading": False, "_loading_kv": False, "dirty": False}
 
     step("Preparing map canvas…")
     map_tab = make_map_canvas(win)
     dash_tab = make_dashboard_tab(win)
+    sec_tab = make_sectionalizer_tab(win)
 
     # ---------------- Dashboard refresh ----------------------------------
     def refresh_dashboard() -> None:
@@ -487,22 +505,46 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             store.set_kv("map_style_active", active_name)
             store.set_kv("report_project_name",
                          state.get("report_project_name") or "")
+            # تنظیمات تب بهینه‌سازی سکشنالایزر (با پروژه ذخیره/بازگردانده می‌شود)
+            if state.get("sectionalizer_settings"):
+                store.set_kv("sectionalizer_settings",
+                             dict(state["sectionalizer_settings"]))
             store.close()
             state["dirty"] = True
         except Exception as exc:                   # noqa: BLE001
             _write_log(_fmt_exc(exc))
 
     def _load_project_kv(path: str) -> None:
+        state["_loading_kv"] = True
+        try:
+            _load_project_kv_inner(path)
+        finally:
+            state["_loading_kv"] = False
+
+    def _load_project_kv_inner(path: str) -> None:
         try:
             store = ProjectStore(str(path))
             book = store.get_kv("map_styles") or {}
             name = store.get_kv("map_style_active") or ""
             state["report_project_name"] = store.get_kv(
                 "report_project_name") or ""
+            sec_settings = store.get_kv("sectionalizer_settings") or {}
+            sec_study = store.get_kv("sectionalizer_study") or None
             store.close()
         except Exception as exc:                   # noqa: BLE001
             _log.warning("project settings of %s not loaded: %s", path, exc)
             return
+        if isinstance(sec_settings, dict) and sec_settings:
+            state["sectionalizer_settings"] = dict(sec_settings)
+            eng = dict(sec_settings.get("engine") or {})
+            eng.setdefault("failure_rate_source",
+                           sec_settings.get("failure_rate_source"))
+            try:
+                sec_tab.apply_settings(eng)
+            except Exception as exc:               # noqa: BLE001
+                _log.warning("sectionalizer settings not applied: %s", exc)
+        if isinstance(sec_study, dict) and sec_study.get("study"):
+            state["sectionalizer_persisted"] = sec_study
         if isinstance(book, dict) and book:
             from ..map_style import MapStyle
             state["map_styles_book"] = book
@@ -537,6 +579,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             state["map_style"] = map_tab._renderer.style
         _persist_project_kv()
     map_tab.on_feeders_changed = _persist_map_feeders
+    # تغییر روشن/خاموشی خاموشی‌ها در استایل نقشه ذخیره می‌شود
+    map_tab.on_outages_changed = _persist_map_feeders
 
     # ---------------- feeder keys of the open project ---------------------
     def feeder_keys() -> list:
@@ -908,6 +952,26 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             f"Feeders: {s.get('feeders', 0)}\n\n"
             "Next: enter the per-feeder outage files (if available), then "
             "run topology.")
+        # کش‌های وابسته به پروژه پاک می‌شوند (هندسهٔ زون، مختصات خاموشی‌ها)
+        state["zone_geometries"] = None
+        state["zone_geometry_topo"] = None
+        state["outage_reviews"] = {}
+        state["outage_points"] = []
+        state["outage_points_built"] = False
+        state["sectionalizer"] = None
+        state["sectionalizer_map_nodes"] = []
+        persisted = state.get("sectionalizer_persisted") or None
+        if isinstance(persisted, dict) and persisted.get("study"):
+            try:
+                sec_tab.show_persisted(persisted)
+                state["sectionalizer_map_nodes"] = [
+                    {"id": c.get("node"), "x": float(c["coord"][0]),
+                     "y": float(c["coord"][1]), "label": c.get("label", "")}
+                    for f in (persisted["study"].get("feeders") or [])
+                    for c in ((f.get("best") or {}).get("selected") or [])
+                    if c.get("coord")]
+            except Exception as exc:               # noqa: BLE001
+                _log.warning("persisted sectionalizer study not shown: %s", exc)
         refresh_scope_choices()
         refresh_outage_feeder_table()
         refresh_manual_feeders()
@@ -945,150 +1009,188 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         pass
     right_col.addWidget(outage_panel, 1)
 
+    # ---------------- خاموشی‌های دارای مختصات (نقشه) --------------------
+    def outage_gazetteer():
+        """بانک آفلاین مکان‌ها — یک‌بار بارگذاری؛ نبود فایل = غیرفعال."""
+        if state.get("gazetteer") is None:
+            path = default_gazetteer_path()
+            try:
+                state["gazetteer"] = PlaceGazetteer(path) if path else False
+            except Exception as exc:               # noqa: BLE001
+                _log.warning("gazetteer unavailable: %s", exc)
+                state["gazetteer"] = False
+        return state["gazetteer"] or None
+
+    def outage_suggestions(records) -> dict:
+        gaz = outage_gazetteer()
+        if gaz is None:
+            return {}
+        try:
+            return {x.event_id: x for x in suggest_event_places(records, gaz)}
+        except Exception as exc:                   # noqa: BLE001
+            _log.warning("place suggestions failed: %s", exc)
+            return {}
+
+    def load_outage_reviews() -> dict:
+        db = state.get("db")
+        if state.get("outage_reviews"):
+            return dict(state["outage_reviews"])
+        if not db:
+            return {}
+        try:
+            state["outage_reviews"] = OutageReviewStore(str(db)).load()
+        except Exception as exc:                   # noqa: BLE001
+            _log.warning("outage reviews not readable: %s", exc)
+            state["outage_reviews"] = {}
+        return dict(state["outage_reviews"])
+
+    def zone_geometry_map() -> dict:
+        """هندسهٔ زون‌ها برای انتساب خودکار (کش‌شده روی همان توپولوژی)."""
+        topo = state.get("topo")
+        if topo is None:
+            return {}
+        if state.get("zone_geometry_topo") is not topo:
+            state["zone_geometries"] = build_zone_geometries(topo.graph,
+                                                             topo.zones)
+            state["zone_geometry_topo"] = topo
+        return state.get("zone_geometries") or {}
+
+    def outage_point_transform():
+        crs = project_crs()
+        if not crs:
+            return None
+
+        def _tr(lat, lon):
+            return transform_wgs84_to_project(lat, lon, crs)
+        return _tr
+
+    def rebuild_outage_points() -> list:
+        """رخدادهای دارای مختصات را برای لایهٔ نقشه آماده می‌کند.
+
+        منطق در ``application.outage_review.outage_map_points`` است (بدون Qt
+        و آزمون‌پذیر)؛ این‌جا فقط کش حالت و ورودی‌های پروژه بسته می‌شود.
+        """
+        recs = list(getattr(state.get("outage"), "records", []) or [])
+        if not recs:
+            state["outage_points"] = []
+            state["outage_points_built"] = True
+            return []
+        points = outage_map_points(
+            recs, geometries=zone_geometry_map(), saved=load_outage_reviews(),
+            suggestions=outage_suggestions(recs),
+            transform=outage_point_transform())
+        state["outage_points"] = points
+        state["outage_points_built"] = True
+        return points
+
     def review_outage_locations() -> None:
-        """Engineer confirms event place and affected zone; no auto-assignment."""
+        """بازبینی محل/زون با انتخاب خودکار زون و پیش‌فرض تأیید مهندسی."""
         records = list(getattr(state.get("outage"), "records", []) or [])
         topo = state.get("topo")
         if not records or topo is None or not getattr(topo, "zones", None):
-            QMessageBox.information(win, "Outage review",
-                                    "ابتدا فایل خاموشی را وارد و تحلیل توپولوژی را اجرا کنید.")
+            QMessageBox.information(
+                win, "Outage review",
+                "ابتدا فایل خاموشی را وارد و تحلیل توپولوژی را اجرا کنید.")
             return
         db_path = state.get("db")
         if not db_path:
+            QMessageBox.information(
+                win, "Outage review",
+                "پروژه را ذخیره کنید؛ بازبینی داخل فایل پروژه ذخیره می‌شود.")
             return
-        # بانک آفلاین مکان‌ها — هرگز پایگاه خالی ساخته نمی‌شود؛
-        # نبود فایل فقط پیشنهاد مکان را غیرفعال می‌کند
-        gaz_path = default_gazetteer_path()
-        gaz = PlaceGazetteer(gaz_path) if gaz_path else None
-        suggestions = ({x.event_id: x
-                        for x in suggest_event_places(records, gaz)}
-                       if gaz is not None else {})
-        zones = list(topo.zones.zones)
-        zone_labels = [(f"{z.feeder} | Zone {z.zone_no} | {z.id}", z.id) for z in zones]
-        store = OutageReviewStore(db_path)
-        saved = store.load()
-        dlg = QDialog(win)
-        dlg.setWindowTitle("بازبینی محل و زون رخدادهای خاموشی")
-        dlg.resize(1380, 760)
-        dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint |
-                           Qt.WindowType.WindowMinimizeButtonHint)
-        layout = QVBoxLayout(dlg)
+        # بانک آفلاین مکان‌ها — هرگز پایگاه خالی ساخته نمی‌شود
+        gaz = outage_gazetteer()
+        suggestions = outage_suggestions(records)
+        geoms = zone_geometry_map()
+        saved = load_outage_reviews()
+        transform = outage_point_transform()
+        crs = project_crs() or ""
+        plans = plan_review_rows(
+            records, suggestions=suggestions, saved=saved, geometries=geoms,
+            project_crs=crs, transform=transform)
         if gaz is not None:
-            bank_line = (f"تعداد مکان‌های ثبت‌شده در بانک آفلاین: {gaz.count():,}. ")
+            try:
+                bank_line = (f"تعداد مکان‌های ثبت‌شده در بانک آفلاین: "
+                             f"{gaz.count():,}. ")
+            except Exception:                      # noqa: BLE001
+                bank_line = ""
         else:
-            bank_line = ("بانک آفلاین مکان‌ها یافت نشد؛ پیشنهاد مکان غیرفعال است "
-                         "(برای فعال‌سازی، متغیر محیطی SWITCHLOC_GAZETTEER را "
-                         "به مسیر فایل بانک اشاره دهید). ")
-        base_info = (bank_line +
-                     "پیشنهاد نام مکان صرفاً راهنماست و فقط زونی که مهندس صریحاً "
-                     "انتخاب و تأیید کند ذخیره می‌شود؛ رخدادهای بدون انتساب در "
-                     "محاسبات زون توزیع نمی‌شوند. "
-                     "جدول مانند اکسل است: کلیک روی سرستون یا شمارهٔ ردیف کل خط را "
-                     "انتخاب می‌کند (Ctrl: افزودن/برداشتن خط، Shift: بازهٔ متوالی)؛ "
-                     "Ctrl+C نسخه‌برداری و Ctrl+V جایگذاری است — سطر/ستون/بازهٔ "
-                     "کامل قابل کپی است (فرمت TSV قابل درج در اکسل).")
-        info = QLabel(base_info)
-        info.setWordWrap(True)
-        layout.addWidget(info)
-        from ..qt.widgets import make_excel_like, make_table_item
-        table = QTableWidget(len(records), 8, dlg)
-        table.setHorizontalHeaderLabels(["رخداد", "نام پست", "فیدر", "تاریخ", "توضیحات", "مکان پیشنهادی", "زون متاثر (تأیید مهندس)", "وضعیت"])
-        table.setWordWrap(True)
-        table.setAlternatingRowColors(True)
-        table.setColumnWidth(0, 90); table.setColumnWidth(1, 150)
-        table.setColumnWidth(2, 75); table.setColumnWidth(3, 95)
-        table.setColumnWidth(4, 320); table.setColumnWidth(5, 170)
-        table.setColumnWidth(6, 250); table.setColumnWidth(7, 110)
-        for i, rec in enumerate(records):
-            table.setItem(i, 0, make_table_item(str(rec.event_no or rec.id)))
-            table.setItem(i, 1, make_table_item(str(rec.substation or "—")))
-            table.setItem(i, 2, make_table_item(str(rec.feeder_key or rec.feeder_raw)))
-            table.setItem(i, 3, make_table_item(str(rec.date_j or "")))
-            table.setItem(i, 4, make_table_item(str(rec.notes or rec.cause_raw or "")))
-            sug = suggestions.get(str(rec.id))
-            place_box = QComboBox()
-            place_box.addItem("بدون مکان تأییدشده", "")
-            if sug:
-                for m in sug.matches:
-                    place_box.addItem(
-                        f"{m.place.name} ({m.confidence}) — "
-                        f"{m.place.lat:.5f}, {m.place.lon:.5f}",
-                        m.place.place_id)
-            old = saved.get(str(rec.id), {})
-            old_pid = old.get("place_id", "")
-            ix = place_box.findData(old_pid)
-            if ix >= 0: place_box.setCurrentIndex(ix)
-            table.setCellWidget(i, 5, place_box)
-            zone_box = QComboBox()
-            zone_box.addItem("— انتخاب زون —", "")
-            from ...topology.tracing import feeder_key as _norm_fk
-            rec_fk = str(rec.feeder_key or _norm_fk(rec.feeder_raw) or "").strip()
-            feeder_zones = [(label, zid) for label, zid in zone_labels
-                            if not rec_fk or label.split(" | ", 1)[0] == rec_fk]
-            for label, zid in feeder_zones: zone_box.addItem(label, zid)
-            zi = zone_box.findData(old.get("zone_id", ""))
-            if zi >= 0: zone_box.setCurrentIndex(zi)
-            table.setCellWidget(i, 6, zone_box)
-            status_box = QComboBox()
-            status_box.addItem("در انتظار بررسی", "pending")
-            status_box.addItem("تأیید مهندس", "confirmed")
-            status_box.addItem("رد رخداد", "rejected")
-            status_box.setCurrentIndex(max(0, status_box.findData(old.get("status", "pending"))))
-            table.setCellWidget(i, 7, status_box)
-            table.setRowHeight(i, 48)
-
-        def _paste_note(pasted, skipped):
-            info.setText(base_info +
-                         f" — نتیجهٔ آخرین جایگذاری: {pasted} سلول "
-                         f"نوشته شد، {skipped} سلول رد شد "
-                         "(سلول‌های فقط‌خواندنی و کمبوباکس‌های بدون "
-                         "گزینهٔ منطبق رد می‌شوند).")
-
-        # اکسل‌مانند: انتخاب سطر/ستون با هدر + کپی/پیست سطر/ستون کامل
-        make_excel_like(table, paste=True, on_paste=_paste_note)
-        layout.addWidget(table, 1)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        layout.addWidget(buttons)
-        buttons.rejected.connect(dlg.reject)
-        def save_reviews():
-            n = 0
-            for i, rec in enumerate(records):
-                zone_box = table.cellWidget(i, 6)
-                status_box = table.cellWidget(i, 7)
-                place_box = table.cellWidget(i, 5)
-                zid, status = zone_box.currentData(), status_box.currentData()
-                if status == "pending" or (status == "confirmed" and not zid):
-                    continue
-                place_id = place_box.currentData() or ""
-                place_name = place_box.currentText() if place_id else ""
-                store.save(str(rec.id), str(zid), place_id=str(place_id),
-                           place_name=place_name, reviewer="engineer-ui", status=str(status))
-                rec.review_status = "confirmed" if status == "confirmed" else "rejected"
-                n += 1
-            state["outage_zone_assignments"] = store.confirmed_event_to_zone()
-            state["dirty"] = True
-            coverage = (getattr(state.get("outage"), "levels", {}) or {}).get("coverage") or {}
-            exposure_years = float(coverage.get("exposure_years") or 0.0)
-            if exposure_years > 0 and state.get("topo") is not None:
-                from ..dashboard_data import zone_load_map
-                loads = zone_load_map(state["topo"], state.get("net"),
-                                      state.get("load_model") or {},
-                                      placement=(state["plc"].result if state.get("plc") else None))
-                if any(float(v or 0) > 0 for v in loads.values()):
-                    metrics = calculate_zone_up(records, state["outage_zone_assignments"],
-                                                loads, exposure_years)
-                    state["zone_up_mwh"] = {z: m.up_mwh_per_year for z, m in metrics.items()}
-                    state["zone_outage_hours"] = {z: m.outage_hours_per_year for z, m in metrics.items()}
-                    refresh_map()
-                    summary = f"شاخص‌های زون نیز محاسبه شد؛ مبنای مواجهه {exposure_years:.4f} سال."
-                else:
-                    summary = "بار زون در مدل بار فعلی قابل محاسبه نیست؛ شاخص U×P تا تکمیل بار نامشخص می‌ماند."
+            bank_line = ("بانک آفلاین مکان‌ها یافت نشد؛ پیشنهاد مکان غیرفعال "
+                         "است (متغیر محیطی SWITCHLOC_GAZETTEER را به مسیر "
+                         "بانک اشاره دهید). ")
+        if not crs:
+            bank_line += ("CRS پروژه مشخص نیست؛ جای‌گذاری مختصات پیشنهادها "
+                          "روی زون ممکن نیست. ")
+        auto = sum(1 for p in plans if p.zone_id)
+        from ..qt.outage_review_dialog import make_outage_review_dialog
+        dlg = make_outage_review_dialog(
+            win, records=records, plans=plans, geometries=geoms,
+            transform=transform, bank_line=bank_line,
+            info_extra=(f"انتخاب خودکار زون: {auto} از {len(plans)} ردیف "
+                        "تشخیص داده شد."))
+        if not dlg.exec():
+            return
+        decisions, skipped, no_zone = dlg.decisions()
+        store = OutageReviewStore(str(db_path))
+        by_id = {str(getattr(r, "id", "")): r for r in records}
+        n = 0
+        failed = 0
+        for d in decisions:
+            try:
+                store.save(d["event_id"], d["zone_id"],
+                           place_id=d.get("place_id") or "",
+                           place_name=d.get("place_name") or "",
+                           reviewer="engineer-ui", status=d["status"],
+                           coord_x=d.get("coord_x"), coord_y=d.get("coord_y"),
+                           zone_basis=d.get("zone_basis") or "")
+            except ValueError:
+                failed += 1
+                continue
+            rec = by_id.get(d["event_id"])
+            if rec is not None:
+                rec.review_status = ("confirmed" if d["status"] == "confirmed"
+                                     else "rejected")
+            n += 1
+        state["outage_reviews"] = store.load()
+        state["outage_zone_assignments"] = store.confirmed_event_to_zone()
+        state["dirty"] = True
+        rebuild_outage_points()
+        coverage = (getattr(state.get("outage"), "levels", {}) or {}).get(
+            "coverage") or {}
+        exposure_years = float(coverage.get("exposure_years") or 0.0)
+        if exposure_years > 0 and state.get("topo") is not None:
+            from ..dashboard_data import zone_load_map
+            loads = zone_load_map(state["topo"], state.get("net"),
+                                  state.get("load_model") or {},
+                                  placement=(state["plc"].result
+                                             if state.get("plc") else None))
+            if any(float(v or 0) > 0 for v in loads.values()):
+                metrics = calculate_zone_up(records,
+                                            state["outage_zone_assignments"],
+                                            loads, exposure_years)
+                state["zone_up_mwh"] = {z: m.up_mwh_per_year
+                                        for z, m in metrics.items()}
+                state["zone_outage_hours"] = {z: m.outage_hours_per_year
+                                              for z, m in metrics.items()}
+                summary = (f"شاخص‌های زون نیز محاسبه شد؛ مبنای مواجهه "
+                           f"{exposure_years:.4f} سال.")
             else:
-                summary = "پوشش زمانی معتبر در دسترس نیست؛ شاخص سالانه U×P محاسبه نشد."
-            QMessageBox.information(dlg, "ذخیره بازبینی", f"{n} انتساب/رد مهندسی ذخیره شد. رخدادهای تأییدنشده بدون انتساب باقی ماندند.\n{summary}")
-            dlg.accept()
-        buttons.accepted.connect(save_reviews)
-        dlg.exec()
+                summary = ("بار زون در مدل بار فعلی قابل محاسبه نیست؛ شاخص "
+                           "U×P تا تکمیل بار نامشخص می‌ماند.")
+        else:
+            summary = ("پوشش زمانی معتبر در دسترس نیست؛ شاخص سالانه U×P "
+                       "محاسبه نشد.")
+        refresh_map()
+        skipped_txt = ""
+        if skipped:
+            skipped_txt = (f"\n{skipped} ردیف بدون تصمیم ماند "
+                           f"({no_zone} ردیف تأییدشده بدون زون بود).")
+        failed_txt = f"\n{failed} ردیف به‌دلیل داده ناقص ذخیره نشد." if failed else ""
+        QMessageBox.information(
+            dlg, "ذخیره بازبینی",
+            f"{n} انتساب/رد مهندسی ذخیره شد.{skipped_txt}{failed_txt}\n"
+            f"{summary}\nنقشه با لایهٔ خاموشی‌های دارای مختصات به‌روز شد.")
+        refresh_dashboard()
 
     btn_review_outages.clicked.connect(lambda *_: review_outage_locations())
 
@@ -1130,9 +1232,13 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         def done(res) -> None:
             state["dirty"] = True
             state["outage"] = res
+            state["outage_points"] = []          # لایهٔ نقشه از نو ساخته می‌شود
+            state["outage_points_built"] = False
             btn_review_outages.setEnabled(bool(res.records) and state.get("topo") is not None)
             outage_panel.setPlainText(fmt_outage_result(res))
             refresh_dashboard()
+            rebuild_outage_points()
+            refresh_map()
             QMessageBox.information(
                 win, "Outage analysis ready",
                 f"Verdict: {res.verdict}\n"
@@ -1188,9 +1294,13 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         def done(res) -> None:
             state["dirty"] = True
             state["outage"] = res
+            state["outage_points"] = []
+            state["outage_points_built"] = False
             btn_review_outages.setEnabled(bool(res.records) and state.get("topo") is not None)
             outage_panel.setPlainText(fmt_outage_result(res))
             refresh_dashboard()
+            rebuild_outage_points()
+            refresh_map()
             QMessageBox.information(
                 win, "Outage analysis ready (per-feeder files)",
                 f"Verdict: {res.verdict}\n"
@@ -2469,6 +2579,103 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                "و مقایسه اقتصادی (خروجی کامل گام‌های ۴-۸):"))
     plac_rcol.addWidget(plac_panel, 1)
 
+    # ---------------- Sectionalizer & EENS tab (بخش جدید) -------------------
+    def do_sectionalizer() -> None:
+        """اجرای موتور بهینه‌سازی سکشنالایزر روی پروژهٔ باز."""
+        db = state.get("db")
+        if not db:
+            QMessageBox.warning(
+                win, "Sectionalizer & EENS",
+                "ابتدا پروژه را باز یا وارد کنید؛ نتیجه در همان فایل پروژه "
+                "ذخیره می‌شود.")
+            return
+        cfg = dict(sec_tab.settings() or {})
+        state["sectionalizer_settings"] = cfg
+        engine = SectionalizerSettings(
+            total_failure_rate_per_year=float(
+                cfg.get("total_failure_rate_per_year", 30.0)),
+            repair_time_min=float(cfg.get("repair_time_min", 50.0)),
+            restoration_time_min=float(cfg.get("restoration_time_min", 20.0)),
+            max_sectionalizers=int(cfg.get("max_sectionalizers", 3)),
+            min_candidate_depth=int(cfg.get("min_candidate_depth", 3)),
+            max_downstream_load_ratio=float(
+                cfg.get("max_downstream_load_ratio", 0.8)),
+            restoration_model=str(cfg.get("restoration_model", "uniform")),
+            use_existing_switches=bool(cfg.get("use_existing_switches", True)),
+        )
+        app_settings = SectionalizerAppSettings(
+            user="ui-user", persist=True, engine=engine,
+            load_model=dict(state.get("load_model") or {}),
+            failure_rate_source=str(cfg.get("failure_rate_source", "outage")),
+            feeder_keys=tuple(study_feeder_keys() or ()),
+            report_dir=str(_reports_dir()))
+        net, topo = state.get("net"), state.get("topo")
+
+        def work():
+            return SectionalizerService(app_settings).run(
+                str(db), net=net, topo=topo)
+
+        def _sec_nodes_of(study) -> list:
+            out = []
+            for f in getattr(study, "feeders", []) or []:
+                for c in (f.best.selected if f.best else []):
+                    if c.coord is not None:
+                        out.append({"id": c.node, "x": float(c.coord[0]),
+                                    "y": float(c.coord[1]),
+                                    "label": c.label})
+            return out
+
+        def done(res) -> None:
+            state["sectionalizer"] = res
+            state["dirty"] = True
+            state["sectionalizer_map_nodes"] = _sec_nodes_of(res.study)
+            sec_tab.show_result(res)
+            refresh_map()
+            status_msg(
+                f"بهینه‌سازی سکشنالایزر: EENS "
+                f"{res.study.baseline_eens_kwh / 1000.0:,.2f} → "
+                f"{res.study.best_eens_kwh / 1000.0:,.2f} MWh/سال "
+                f"(کاهش {res.study.improvement_percent:.2f}%)")
+            if res.warnings:
+                QMessageBox.information(
+                    win, "Sectionalizer & EENS",
+                    f"اجرا کامل شد؛ {len(res.warnings)} هشدار:\n• "
+                    + "\n• ".join(res.warnings))
+
+        def _ok(res) -> None:
+            sec_tab.set_busy(False)
+            done(res)
+
+        def _fail(exc) -> None:
+            sec_tab.set_busy(False, "اجرا ناموفق بود.")
+            error_box(win, "Sectionalizer optimization failed")(exc)
+
+        sec_tab.set_busy(True, "در حال محاسبه…")
+        run_task(win, "بهینه‌سازی سکشنالایزر و EENS…", work, _ok, _fail,
+                 title="Sectionalizer & EENS")
+
+    def show_sectionalizer_on_map(nodes=None) -> None:
+        """نمایش پیشنهادهای انتخاب‌شده روی نقشه (فیلتر بر اساس گره‌ها)."""
+        chosen = {str(n) for n in (nodes or []) if n}
+        if chosen:
+            cached = list(state.get("sectionalizer_map_nodes") or [])
+            filtered = [n for n in cached if str(n.get("id")) in chosen]
+            if filtered:
+                state["sectionalizer_map_nodes"] = filtered
+        tabs.setCurrentWidget(map_tab)
+        refresh_map()
+
+    sec_tab.on_run = lambda settings=None: do_sectionalizer()
+    sec_tab.on_show_map = show_sectionalizer_on_map
+    def _persist_sec_settings(d=None) -> None:
+        if d is not None:
+            state["sectionalizer_settings"] = dict(d or {})
+        # هنگام بازکردن پروژه، apply_settings ویجت‌ها را تغییر می‌دهد؛ آن
+        # رویداد نباید KV ذخیره‌شده را بازنویسی کند.
+        if state.get("db") and not state.get("_loading_kv"):
+            _persist_project_kv()          # با هر تغییر در KV پروژه ذخیره شود
+    sec_tab.on_settings_changed = _persist_sec_settings
+
     # ---------------- Map tab ------------------------------------------------
     def refresh_map() -> None:
         topo = state.get("topo")
@@ -2498,6 +2705,16 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         zone_loads = zone_load_map(
             display_topo, state.get("net"), state.get("load_model") or {},
             placement=None if state.get("manual_zone_result") else plc_result)
+        # سکشنالایزرهای پیشنهادی موتور EENS (درخواست کاربر — مورد ۱)
+        sec_nodes = list(state.get("sectionalizer_map_nodes") or [])
+        # لایهٔ خاموشی‌های دارای مختصات (درخواست کاربر — مورد ۴)
+        if state.get("outage") is not None and \
+                not state.get("outage_points_built"):
+            rebuild_outage_points()
+        hidden_outages = set()
+        if state.get("map_style") is not None:
+            hidden_outages = {str(x) for x in
+                              (state["map_style"].hidden_outage_ids or [])}
         map_tab.show_network(renderer, title="SwitchLoc — Network Map",
                              proposed_nodes=proposed, crs=crs,
                              manual_nodes=manual or None,
@@ -2506,6 +2723,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                              zone_up_mwh=state.get("zone_up_mwh") or {},
                              zone_outage_hours=state.get("zone_outage_hours") or {},
                              manual_tie_pairs=state.get("manual_tie_pairs") or [],
+                             outage_points=state.get("outage_points") or [],
+                             hidden_outage_ids=hidden_outages,
+                             sectionalizer_nodes=sec_nodes,
                              feeder_filter=(state.get("scope")
                                             if isinstance(state.get("scope"), str)
                                             else "__ALL__"))
@@ -2513,6 +2733,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     tabs.addTab(import_tab, "Data Import")
     tabs.addTab(topo_tab, "Topology")
     tabs.addTab(plac_tab, "Placement")
+    tabs.addTab(sec_tab, "Sectionalizer & EENS")
     tabs.addTab(dash_tab, "Dashboard")
     tabs.addTab(map_tab, "Map")
 
@@ -2529,10 +2750,15 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             "<li><b>Placement</b>: تنظیمات مهندسی (مدل بار Load Scaling، "
             "ظرفیت نیاز ۹، هزینه‌ها)، اجرای جایابی، جایابی دستی کلید با "
             "کلیک روی نقشه یا مختصات UTM، و تأیید نهایی طرح.</li>"
+            "<li><b>Sectionalizer &amp; EENS</b>: بهینه‌سازی محل "
+            "سکشنالایزر با روش تحلیلی کد مرجع (تخصیص λ متناسب با طول، "
+            "زمان تعمیر/بازیابی) و نمایش پیشنهادها روی نقشه.</li>"
             "<li><b>Dashboard</b>: نمای مدیریتی (λ/r، رتبه، ENS، جدول آشتی "
             "ترانس‌ها).</li>"
             "<li><b>Map</b>: نقشه تعاملی — اسکرول زوم، درگ جابجایی، دابل‌کلیک "
-            "زوم، انتخاب محدوده (ذره‌بین)، پس‌زمینه OSM.</li>"
+            "زوم، انتخاب محدوده (ذره‌بین)، پس‌زمینه OSM، لایهٔ خاموشی‌های "
+            "دارای مختصات (روشن/خاموش تک‌تک) و تنظیمات نمایشی آن در تب "
+            "«خاموشی‌ها»ی Map style.</li>"
             "</ol>"
             "<b>جداول</b>: کلیک روی هدر ستون = مرتب‌سازی؛ Ctrl+C = کپی "
             "(TSV سازگار با Excel)؛ در جدول‌های ورودی Ctrl+V = چسباندن."

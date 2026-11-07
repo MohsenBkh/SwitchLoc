@@ -67,6 +67,14 @@ _COLOR_ATTRS = (
     ("zone_label_color", "رنگ متن لیبل زون"),
     ("zone_label_background_color", "رنگ زمینه لیبل زون"),
     ("zone_selected_color", "رنگ محدوده زون انتخاب‌شده"),
+    # --- لایهٔ خاموشی‌های دارای مختصات (تب جدید) ---
+    ("outage_color", "رنگ خاموشی بدون وضعیت"),
+    ("outage_confirmed_color", "رنگ خاموشی تأیید مهندسی"),
+    ("outage_pending_color", "رنگ خاموشی در انتظار بررسی"),
+    ("outage_rejected_color", "رنگ خاموشی رد‌شده"),
+    ("outage_label_color", "رنگ متن برچسب خاموشی"),
+    ("outage_link_color", "رنگ خط اتصال خاموشی → زون"),
+    ("opt_sec_color", "رنگ سکشنالایزر پیشنهادی (EENS)"),
 )
 _SIZE_ATTRS = (
     ("switch_size", "سایز کلید عمومی", 1.0, 120.0, 1.0),
@@ -86,6 +94,14 @@ _SIZE_ATTRS = (
     ("zone_label_background_alpha", "شفافیت زمینه لیبل", 0.0, 1.0, 0.05),
     ("zone_selected_width", "ضخامت خطوط زون انتخاب‌شده", 1.0, 14.0, 0.5),
     ("zone_selected_alpha", "شفافیت محدوده انتخاب‌شده", 0.1, 1.0, 0.05),
+    # --- لایهٔ خاموشی ---
+    ("outage_size", "سایز نماد خاموشی", 5.0, 400.0, 1.0),
+    ("outage_alpha", "شفافیت نماد خاموشی", 0.1, 1.0, 0.05),
+    ("outage_label_size", "سایز متن برچسب خاموشی", 2.0, 20.0, 0.5),
+    ("outage_label_alpha", "شفافیت متن خاموشی", 0.1, 1.0, 0.05),
+    ("outage_link_width", "ضخامت خط اتصال خاموشی → زون", 0.2, 6.0, 0.1),
+    ("outage_link_alpha", "شفافیت خط اتصال خاموشی", 0.1, 1.0, 0.05),
+    ("opt_sec_size", "سایز سکشنالایزر پیشنهادی (EENS)", 10.0, 500.0, 5.0),
 )
 _MARKER_ATTRS = (
     ("switch_marker", "نماد کلید عمومی"),
@@ -100,6 +116,8 @@ _MARKER_ATTRS = (
     ("transformer_marker", "نماد ترانسفورماتور"),
     ("proposed_marker", "نماد کلید پیشنهادی"),
     ("manual_marker", "نماد کلید دستی"),
+    ("outage_marker", "نماد خاموشی"),
+    ("opt_sec_marker", "نماد سکشنالایزر پیشنهادی (EENS)"),
 )
 _MARKER_FA = {"o": "دایره (o)", "s": "مربع (s)", "D": "لوزی (D)",
               "d": "لوزی باریک (d)", "^": "مثلث بالا (^)",
@@ -196,6 +214,7 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
     rv.addWidget(QLabel("<b>نماد کلیدها، سورس، open point و …</b>"))
     grp = QFormLayout()
     zone_grp = QFormLayout()
+    outage_grp = QFormLayout()
     spins: dict[str, QDoubleSpinBox] = {}
     marks: dict[str, QComboBox] = {}
     cols: dict[str, QPushButton] = {}
@@ -225,12 +244,20 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
 
     zone_size_keys = {"zone_label_size", "zone_label_alpha", "zone_label_background_alpha", "zone_selected_width", "zone_selected_alpha"}
     zone_color_keys = {"zone_label_color", "zone_label_background_color", "zone_selected_color"}
+
+    def _form_for(key: str, default):
+        if key.startswith("outage_"):
+            return outage_grp
+        if key in zone_size_keys or key in zone_color_keys:
+            return zone_grp
+        return default
+
     for key, label, lo, hi, step in _SIZE_ATTRS:
-        _add_size(key, label, lo, hi, step, zone_grp if key in zone_size_keys else grp)
+        _add_size(key, label, lo, hi, step, _form_for(key, grp))
     for key, label in _MARKER_ATTRS:
-        _add_marker(key, label, grp)
+        _add_marker(key, label, _form_for(key, grp))
     for key, label in _COLOR_ATTRS:
-        _add_color(key, label, zone_grp if key in zone_color_keys else grp)
+        _add_color(key, label, _form_for(key, grp))
     grp_rows = QVBoxLayout(); grp_rows.addLayout(grp)
     hold1 = QWidget(); hold1.setLayout(grp_rows)
     controls_scroll = QScrollArea()
@@ -250,6 +277,26 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
     zv.addWidget(chk_legend)
     zv.addWidget(chk_zones)
     tabs.addTab(zone_page, "زون‌ها و لجند")
+
+    # (d) لایهٔ خاموشی‌های دارای مختصات — تب مستقل (درخواست کاربر) ------
+    outage_page = QWidget()
+    ov = QVBoxLayout(outage_page)
+    ov.addWidget(QLabel(
+        "<b>نمایش خاموشی‌های دارای مختصات</b> — رنگ بر اساس وضعیت بازبینی، "
+        "اندازه/نماد، برچسب و خط اتصال به زون متأثر؛ روشن/خاموش کردن تک‌تک "
+        "رخدادها از پنل «لایهٔ خاموشی‌ها» در تب نقشه انجام می‌شود."))
+    outage_form_widget = QWidget()
+    outage_form_widget.setLayout(outage_grp)
+    outage_scroll = QScrollArea()
+    outage_scroll.setWidgetResizable(True)
+    outage_scroll.setWidget(outage_form_widget)
+    ov.addWidget(outage_scroll, 1)
+    chk_outages = QCheckBox("نمایش لایهٔ خاموشی‌ها روی نقشه")
+    chk_outage_labels = QCheckBox("نمایش برچسب شمارهٔ رخداد روی نقشه")
+    chk_outage_links = QCheckBox("خط اتصال خاموشی به مرکز زون متأثر")
+    for cb in (chk_outages, chk_outage_labels, chk_outage_links):
+        ov.addWidget(cb)
+    tabs.addTab(outage_page, "خاموشی‌ها")
 
     # -- pull (style → widgets) / events ------------------------------------
     def _paint(lbl: QLabel, color: str) -> None:
@@ -306,6 +353,9 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
             _paint(swatches[key], getattr(st, key))
         chk_legend.setChecked(bool(st.show_legend))
         chk_zones.setChecked(bool(st.show_zone_labels))
+        chk_outages.setChecked(bool(st.show_outages))
+        chk_outage_labels.setChecked(bool(st.show_outage_labels))
+        chk_outage_links.setChecked(bool(st.show_outage_links))
 
     def on_unk() -> None:
         cc = QColorDialog.getColor(QColor(btn_unk.text()), dlg, "انتخاب رنگ")
@@ -346,6 +396,11 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
         _wire_marker(key)
     chk_legend.toggled.connect(lambda on: setattr(work, "show_legend", bool(on)))
     chk_zones.toggled.connect(lambda on: setattr(work, "show_zone_labels", bool(on)))
+    chk_outages.toggled.connect(lambda on: setattr(work, "show_outages", bool(on)))
+    chk_outage_labels.toggled.connect(
+        lambda on: setattr(work, "show_outage_labels", bool(on)))
+    chk_outage_links.toggled.connect(
+        lambda on: setattr(work, "show_outage_links", bool(on)))
 
     # -- book actions ---------------------------------------------------------
     def refresh_combo() -> None:

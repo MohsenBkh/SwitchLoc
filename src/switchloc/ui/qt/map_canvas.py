@@ -157,7 +157,9 @@ class MapCanvasMixin:
                      manual_nodes=None, highlight_point=None,
                      zone_load_kw=None, selected_zone=None,
                      hidden_switch_ids=None, zone_up_mwh=None,
-                     zone_outage_hours=None, manual_tie_pairs=None) -> None:
+                     zone_outage_hours=None, manual_tie_pairs=None,
+                     outage_points=None, sectionalizer_nodes=None,
+                     hidden_outage_ids=None) -> None:
         del rotate                            # rotation removed (feedback)
         previous_renderer = self.map_renderer
         previous_highlight = getattr(self, "_last_highlight_point", None)
@@ -191,6 +193,9 @@ class MapCanvasMixin:
                              zone_up_mwh=zone_up_mwh,
                              zone_outage_hours=zone_outage_hours,
                              manual_tie_pairs=manual_tie_pairs,
+                             outage_points=outage_points,
+                             sectionalizer_nodes=sectionalizer_nodes,
+                             hidden_outage_ids=hidden_outage_ids,
                              zone_label_positions=self._zone_label_positions)
         if not self.fig.get_constrained_layout():
             # the interactive map must use the WHOLE widget: matplotlib's
@@ -702,6 +707,11 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._selected_zone = None
             self._manual_tie_pairs = []
             self._hidden_switch_ids: set[str] = set()
+            # لایهٔ خاموشی‌های دارای مختصات (درخواست کاربر)
+            self._outage_points: list = []
+            self._hidden_outage_ids: set[str] = set()
+            self._opt_sec_nodes: list = []
+            self.on_outages_changed = None
             self.on_style_request = None
             self.on_zone_selected = None
             self.on_feeders_changed = None
@@ -744,7 +754,43 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.btn_switch_panel.setText("Hide panel")
             self.btn_switch_panel.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             self.btn_switch_panel.clicked.connect(self._toggle_switch_panel)
-            root.addWidget(switch_box, 0)
+            left_col_holder = QWidget()
+            left_col = QVBoxLayout(left_col_holder)
+            left_col.setContentsMargins(0, 0, 0, 0)
+            left_col.setSpacing(4)
+            left_col.addWidget(switch_box, 1)
+
+            # --- لایهٔ خاموشی‌های دارای مختصات --------------------------
+            outage_box = QGroupBox("لایهٔ خاموشی‌ها — دارای مختصات")
+            outage_box.setMinimumWidth(220)
+            outage_box.setMaximumWidth(340)
+            ov = QVBoxLayout(outage_box)
+            self.chk_outages = QCheckBox("نمایش خاموشی‌ها روی نقشه")
+            self.chk_outages.setToolTip(
+                "روشن/خاموش کردن کل لایهٔ خاموشی‌های دارای مختصات؛ "
+                "هر رکورد هم به‌صورت جداگانه قابل روشن/خاموش است.")
+            self.chk_outages.toggled.connect(self._on_outages_master_toggle)
+            ov.addWidget(self.chk_outages)
+            self.outage_count = QLabel("0 خاموشی دارای مختصات")
+            ov.addWidget(self.outage_count)
+            obtn = QHBoxLayout()
+            self.btn_outage_all = QPushButton("نمایش همه")
+            self.btn_outage_none = QPushButton("پنهان کردن همه")
+            self.btn_outage_all.clicked.connect(lambda: self._set_all_outages(True))
+            self.btn_outage_none.clicked.connect(lambda: self._set_all_outages(False))
+            obtn.addWidget(self.btn_outage_all)
+            obtn.addWidget(self.btn_outage_none)
+            ov.addLayout(obtn)
+            self.outage_list = QTreeWidget()
+            self.outage_list.setHeaderHidden(True)
+            self.outage_list.setToolTip(
+                "هر ردیف یک رخداد خاموشی است؛ برداشتن تیک فقط نمایش همان "
+                "رخداد را حذف می‌کند و در تنظیمات نقشه ذخیره می‌شود.")
+            self.outage_list.itemChanged.connect(self._outage_item_changed)
+            ov.addWidget(self.outage_list, 1)
+            left_col.addWidget(outage_box, 1)
+            self.outage_panel = outage_box
+            root.addWidget(left_col_holder, 0)
 
             map_pane = QWidget()
             lay = QVBoxLayout(map_pane)
@@ -861,7 +907,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
                          crs: str = "", manual_nodes=None,
                          highlight_point=None, feeder_filter=None,
                          zone_load_kw=None, zone_up_mwh=None,
-                         zone_outage_hours=None, manual_tie_pairs=None) -> None:
+                         zone_outage_hours=None, manual_tie_pairs=None,
+                         outage_points=None, sectionalizer_nodes=None,
+                         hidden_outage_ids=None) -> None:
             self._renderer = renderer
             if not self.zone_labels.isChecked():
                 self._selected_zone = None
@@ -875,6 +923,12 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._zone_up_mwh = dict(zone_up_mwh or {})
             self._zone_outage_hours = dict(zone_outage_hours or {})
             self._manual_tie_pairs = list(manual_tie_pairs or [])
+            self._opt_sec_nodes = list(sectionalizer_nodes or [])
+            if outage_points is not None:
+                self.set_outage_points(outage_points)
+            if hidden_outage_ids is not None:
+                self._hidden_outage_ids = {str(x) for x in hidden_outage_ids}
+            self._sync_outage_checks()
             keys = sorted({t.feeder_key for t in
                            getattr(renderer, "traces", []) if t.feeder_key})
             selected_before = getattr(self, "_selected_feeders", None)
@@ -1039,7 +1093,128 @@ def make_map_canvas(parent=None, osm_fetch=None):
                 hidden_switch_ids=self._hidden_switch_ids,
                 zone_up_mwh=self._zone_up_mwh,
                 zone_outage_hours=self._zone_outage_hours,
-                manual_tie_pairs=self._manual_tie_pairs)
+                manual_tie_pairs=self._manual_tie_pairs,
+                outage_points=self._outage_points,
+                sectionalizer_nodes=self._opt_sec_nodes,
+                hidden_outage_ids=self._hidden_outage_ids)
+
+        # ------------------------------------------------------------------
+        # لایهٔ خاموشی‌های دارای مختصات
+        # ------------------------------------------------------------------
+        def set_outage_points(self, points) -> None:
+            """رخدادهای دارای مختصات را در لایهٔ نقشه می‌گذارد.
+
+            ``points``: فهرست دیکشنری با کلیدهای
+            ``id``, ``x``, ``y``, ``label``, ``status``, ``feeder``,
+            ``zone_x``, ``zone_y`` (همه در CRS پروژه).  فهرست خالی
+            یعنی هیچ رخداد دارای مختصاتی وجود ندارد و پنل صریحاً همین
+            را می‌گوید.
+            """
+            self._outage_points = [dict(p) for p in (points or [])]
+            valid = {str(p.get("id", "")) for p in self._outage_points}
+            self._hidden_outage_ids.intersection_update(valid)
+            self._rebuild_outage_list()
+            self._apply()
+
+        def _rebuild_outage_list(self) -> None:
+            self.outage_list.blockSignals(True)
+            self.outage_list.clear()
+            groups = {}
+            for pt in self._outage_points:
+                fk = str(pt.get("feeder", "") or "بدون فیدر")
+                if fk not in groups:
+                    top = QTreeWidgetItem([fk])
+                    top.setFlags(top.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                                 | Qt.ItemFlag.ItemIsAutoTristate)
+                    top.setCheckState(0, Qt.CheckState.Checked)
+                    self.outage_list.addTopLevelItem(top)
+                    groups[fk] = top
+                pid = str(pt.get("id", ""))
+                status_fa = {"confirmed": "تأیید مهندسی",
+                             "rejected": "رد شده",
+                             "pending": "در انتظار"}.get(
+                                 str(pt.get("status", "")), "—")
+                item = QTreeWidgetItem([f"{pt.get('label', pid)} — {status_fa}"])
+                item.setData(0, Qt.ItemDataRole.UserRole, pid)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    0, Qt.CheckState.Unchecked if pid in self._hidden_outage_ids
+                    else Qt.CheckState.Checked)
+                groups[fk].addChild(item)
+            self.outage_list.expandAll()
+            self.outage_list.blockSignals(False)
+            total = len(self._outage_points)
+            self.outage_count.setText(
+                f"{total} خاموشی دارای مختصات | "
+                f"{total - len(self._hidden_outage_ids)} قابل نمایش")
+            visible = (self._renderer is not None
+                       and bool(getattr(self._renderer.style, "show_outages", True)))
+            self.chk_outages.blockSignals(True)
+            self.chk_outages.setChecked(visible)
+            self.chk_outages.blockSignals(False)
+
+        def _sync_outage_checks(self) -> None:
+            self._rebuild_outage_list()
+
+        def _outage_item_changed(self, item, column=0) -> None:
+            pid = item.data(0, Qt.ItemDataRole.UserRole)
+            if pid:
+                if item.checkState(0) == Qt.CheckState.Checked:
+                    self._hidden_outage_ids.discard(str(pid))
+                else:
+                    self._hidden_outage_ids.add(str(pid))
+            else:
+                # حالت «نیمه‌انتخاب» خودکارِ والد (AutoTristate) نباید به
+                # فرزندان تحمیل شود؛ وگرنه خاموش‌کردن یک رخداد کل فیدر را
+                # پنهان می‌کند.
+                state = item.checkState(0)
+                if state == Qt.CheckState.PartiallyChecked:
+                    return
+                for i in range(item.childCount()):
+                    item.child(i).setCheckState(0, state)
+            self._save_hidden_outages()
+            total = len(self._outage_points)
+            self.outage_count.setText(
+                f"{total} خاموشی دارای مختصات | "
+                f"{total - len(self._hidden_outage_ids)} قابل نمایش")
+            self._apply()
+
+        def _save_hidden_outages(self) -> None:
+            if self._renderer is not None and \
+                    self._renderer.style is not None:
+                self._renderer.style.hidden_outage_ids = \
+                    sorted(self._hidden_outage_ids)
+            if self.on_outages_changed is not None:
+                self.on_outages_changed()
+
+        def _on_outages_master_toggle(self, on: bool) -> None:
+            if self._renderer is not None and self._renderer.style is not None:
+                self._renderer.style.show_outages = bool(on)
+            self._save_hidden_outages()
+            self._apply()
+
+        def _set_all_outages(self, visible: bool) -> None:
+            self.outage_list.blockSignals(True)
+            hidden = set()
+            for i in range(self.outage_list.topLevelItemCount()):
+                parent = self.outage_list.topLevelItem(i)
+                parent.setCheckState(0, Qt.CheckState.Checked if visible
+                                     else Qt.CheckState.Unchecked)
+                for j in range(parent.childCount()):
+                    child = parent.child(j)
+                    child.setCheckState(0, Qt.CheckState.Checked if visible
+                                        else Qt.CheckState.Unchecked)
+                    if not visible:
+                        pid = child.data(0, Qt.ItemDataRole.UserRole)
+                        if pid:
+                            hidden.add(str(pid))
+            self._hidden_outage_ids = hidden
+            self.outage_list.blockSignals(False)
+            if not visible:
+                self.chk_outages.setChecked(True)   # پنهان‌کردن رکوردها، نه لایه
+            self._save_hidden_outages()
+            self._rebuild_outage_list()
+            self._apply()
 
         def _switch_item_changed(self, item, column=0) -> None:
             sid = item.data(0, Qt.ItemDataRole.UserRole)
@@ -1049,8 +1224,12 @@ def make_map_canvas(parent=None, osm_fetch=None):
                 else:
                     self._hidden_switch_ids.add(sid)
             else:
-                # parent category: apply its state to all children
+                # parent category: apply its state to all children — ولی نه
+                # حالت نیمه‌انتخاب خودکار (AutoTristate) که Qt هنگام
+                # تغییر یک فرزند می‌سازد
                 state = item.checkState(0)
+                if state == Qt.CheckState.PartiallyChecked:
+                    return
                 for i in range(item.childCount()):
                     child = item.child(i)
                     child.setCheckState(0, state)

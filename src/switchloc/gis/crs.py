@@ -88,6 +88,29 @@ def transform_utm_to_project(easting: float, northing: float,
     return float(rx), float(ry)
 
 
+def transform_wgs84_to_project(lat: float, lon: float,
+                               target_crs: str | int) -> tuple[float, float]:
+    """(lat, lon) WGS84 → مختصات متری پروژه.
+
+    برای جای‌گذاری نقاط گازیتیر (درجه) روی شبکه با CRS متری لازم است.
+    خطای ورودی/CRS به‌صورت ValueError منتقل می‌شود تا هیچ مختصاتی حدس
+    زده نشود (بند ۱۹).
+    """
+    lat_f, lon_f = float(lat), float(lon)
+    if not (math.isfinite(lat_f) and math.isfinite(lon_f)):
+        raise ValueError("مختصات جغرافیایی نامعتبر است.")
+    if not (-90.0 <= lat_f <= 90.0 and -180.0 <= lon_f <= 180.0):
+        raise ValueError("مختصات جغرافیایی خارج از بازهٔ مجاز است.")
+    dst = CRS.from_user_input(target_crs)
+    if not dst.is_projected:
+        raise ValueError("CRS پروژه باید متری (projected) باشد.")
+    tr = Transformer.from_crs(CRS.from_epsg(4326), dst, always_xy=True)
+    x, y = tr.transform(lon_f, lat_f)
+    if not (math.isfinite(x) and math.isfinite(y)):
+        raise ValueError("تبدیل مختصات نتیجهٔ معتبری برنگرداند.")
+    return float(x), float(y)
+
+
 class CrsService:
     """Per-project CRS bookkeeping and one-time transformation."""
 

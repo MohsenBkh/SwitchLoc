@@ -192,6 +192,55 @@ def _cmd_placement(args) -> int:
     return 0 if res.verdict == "PASS" else 1
 
 
+def _cmd_sectionalizer(args) -> int:
+    """بهینه‌سازی سکشنالایزر و کاهش EENS (روش کد مرجع PowerFactory)."""
+    from switchloc.application.sectionalizer_service import (
+        SectionalizerAppSettings, SectionalizerService)
+    from switchloc.reliability.sectionalizer import SectionalizerSettings
+
+    engine = SectionalizerSettings(
+        total_failure_rate_per_year=args.failure_rate,
+        repair_time_min=args.repair,
+        restoration_time_min=args.restoration,
+        max_sectionalizers=args.max,
+        min_candidate_depth=args.min_depth,
+        max_downstream_load_ratio=args.max_ratio,
+        restoration_model=args.model,
+        use_existing_switches=not args.ignore_existing_switches,
+    )
+    rates = {}
+    for part in (args.lambda_override or "").split(","):
+        key, _, val = part.partition("=")
+        if key.strip() and val.strip():
+            rates[key.strip()] = float(val)
+    feeders = tuple(f.strip() for f in (args.feeders or "").split(",")
+                    if f.strip())
+    svc = SectionalizerService(SectionalizerAppSettings(
+        user=args.user, persist=not args.no_persist, engine=engine,
+        failure_rate_source=args.lambda_source, failure_rates=rates,
+        feeder_keys=feeders, report_dir=args.report_dir))
+    try:
+        res = svc.run(args.db)
+    except Exception as exc:                            # noqa: BLE001
+        print(f"ERROR: {exc}")
+        return 2
+    for w in res.warnings:
+        print(f"WARNING: {w}")
+    print(res.markdown)
+    for f in res.study.feeders:
+        if not f.best or not f.best.selected:
+            continue
+        print(f"— {f.feeder_key}: نصب {len(f.best.selected)} سکشنالایزر")
+        for c in f.best.selected:
+            print(f"    {c.label} | عمق {c.depth} | بار پایین‌دست "
+                  f"{c.downstream_load_kw:,.1f} kW "
+                  f"({c.downstream_ratio * 100:.1f}%) | "
+                  f"km {c.downstream_length_m / 1000.0:.2f} | zone {c.zone_id[:8]}")
+    if res.report_md:
+        print(f"\nreport → {res.report_md}")
+    return 0
+
+
 def _cmd_outages(args) -> int:
     """Phase 3 — outage ingestion/classification + λ/r matrix (step 2 / fig. 5)."""
     res = OutageService(OutageSettings(user=args.user)).run(
@@ -248,6 +297,39 @@ def main(argv=None) -> int:
     pt.add_argument("--fuses-bound-zones", action="store_true",
                     help="Fuse cut-outs also bound zones (TOPO-POL-03)")
     pt.set_defaults(func=_cmd_topology)
+
+    psec = sub.add_parser(
+        "sectionalizer",
+        help="بهینه‌سازی محل سکشنالایزر و کاهش EENS (روش کد مرجع PowerFactory)")
+    psec.add_argument("db", help="SQLite project (import output)")
+    psec.add_argument("--user", default="cli-user")
+    psec.add_argument("--max", type=int, default=3,
+                      help="حداکثر سکشنالایزر پیشنهادی هر فیدر (پیش‌فرض ۳)")
+    psec.add_argument("--failure-rate", type=float, default=30.0,
+                      help="λ پیش‌فرض هر فیدر (خرابی/سال، پیش‌فرض ۳۰)")
+    psec.add_argument("--lambda-source", default="outage",
+                      choices=("outage", "configured"),
+                      help="منبع λ: ماتریس λ/r واقعی خاموشی یا مقدار پیش‌فرض")
+    psec.add_argument("--lambda-override",
+                      help="λ صریح هر فیدر، مثال: 'F3=27,F5=57.3'")
+    psec.add_argument("--repair", type=float, default=50.0,
+                      help="زمان تعمیر قطعهٔ معیوب (دقیقه)")
+    psec.add_argument("--restoration", type=float, default=20.0,
+                      help="زمان بازیابی بار سالم (دقیقه)")
+    psec.add_argument("--min-depth", type=int, default=3,
+                      help="کمترین عمق کاندید از سر فیدر")
+    psec.add_argument("--max-ratio", type=float, default=0.80,
+                      help="سقف سهم بار پایین‌دست کاندید")
+    psec.add_argument("--model", default="uniform",
+                      choices=("uniform", "directional"),
+                      help="مدل بازیابی: uniform (کد مرجع) یا directional")
+    psec.add_argument("--feeders", help="فیدرهای مطالعه، مثال: 'F3,F5'")
+    psec.add_argument("--ignore-existing-switches", action="store_true",
+                      help="کلیدهای موجود در حالت پایه لحاظ نشوند")
+    psec.add_argument("--report-dir", help="نوشتن گزارش MD/JSON در این پوشه")
+    psec.add_argument("--no-persist", action="store_true",
+                      help="نتیجه در پروژه ذخیره نشود")
+    psec.set_defaults(func=_cmd_sectionalizer)
 
     po = sub.add_parser("outages",
                         help="Phase 3 — outage ingestion / classification + λ/r matrix")

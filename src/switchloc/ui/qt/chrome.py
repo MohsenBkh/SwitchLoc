@@ -317,9 +317,10 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
     m_study.addAction(a_style)
 
     m_view = mbar.addMenu(t("&View"))
-    nav_names = ["Data Import", "Topology", "Placement", "Dashboard", "Map"]
     for i in range(tabs.count()):
-        title = nav_names[i] if i < len(nav_names) else tabs.tabText(i)
+        # عنوان از خود تب خوانده می‌شود تا افزودن تب جدید (مثل
+        # «Sectionalizer & EENS») هیچ نگهداری فهرست دستی نخواهد
+        title = tabs.tabText(i)
         a = QAction(t(title), win)
         a.setShortcut(QKeySequence(f"Ctrl+{i + 1}"))
         a.triggered.connect(lambda _c=False, k=i: tabs.setCurrentIndex(k))
@@ -398,10 +399,15 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
     ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
     sl.addWidget(brand)
     sl.addWidget(ver)
-    nav_icons = ["database", "topology", "placement", "dashboard", "map"]
+    # نماد ناوبری بر اساس عنوان تب — تب ناشناخته نماد «layers» می‌گیرد
+    nav_icon_by_title = {
+        "Data Import": "database", "Topology": "topology",
+        "Placement": "placement", "Sectionalizer & EENS": "bolt",
+        "Dashboard": "dashboard", "Map": "map",
+    }
     tabs.tabBar().setVisible(False)
     for i in range(tabs.count()):
-        title = nav_names[i] if i < len(nav_names) else tabs.tabText(i)
+        title = tabs.tabText(i)
         b = QToolButton()
         b.setObjectName("NavButton")
         b.setText(t(title))
@@ -412,8 +418,7 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
         b.setSizePolicy(QSizePolicy.Policy.Expanding,
                         QSizePolicy.Policy.Fixed)
         b.setToolTip(f"{t(title)}  (Ctrl+{i + 1})")
-        ch.decorate(b, nav_icons[i] if i < len(nav_icons) else "layers",
-                    "nav")
+        ch.decorate(b, nav_icon_by_title.get(title, "layers"), "nav")
         b.clicked.connect(lambda _c=False, k=i: tabs.setCurrentIndex(k))
         sl.addWidget(b)
         ch._nav_buttons.append(b)

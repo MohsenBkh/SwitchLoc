@@ -96,6 +96,30 @@ class MapStyle:
     manual_color: str = "#1565c0"
     manual_size: float = 60.0
     manual_marker: str = "P"
+    # -- optimized sectionalizers (Sectionalizer/EENS engine output) ----
+    show_opt_sectionalizers: bool = True
+    opt_sec_color: str = "#6a1b9a"
+    opt_sec_size: float = 110.0
+    opt_sec_marker: str = "X"
+    # -- outages with coordinates (لایهٔ خاموشی) ------------------------
+    show_outages: bool = True
+    outage_color: str = "#e53935"
+    outage_size: float = 48.0
+    outage_marker: str = "o"
+    outage_alpha: float = 0.9
+    outage_confirmed_color: str = "#2e7d32"
+    outage_pending_color: str = "#ef6c00"
+    outage_rejected_color: str = "#c62828"
+    outage_label_size: float = 5.0
+    outage_label_color: str = "#37474f"
+    outage_label_alpha: float = 0.95
+    show_outage_labels: bool = True
+    show_outage_links: bool = True
+    outage_link_color: str = "#8e24aa"
+    outage_link_width: float = 1.0
+    outage_link_alpha: float = 0.55
+    #: شناسهٔ رخدادهایی که کاربر پنهان کرده است (روشن/خاموش تک‌تک)
+    hidden_outage_ids: list | None = None
     # -- zone display --------------------------------------------------
     zone_label_size: float = 5.0
     zone_label_color: str = "#263238"
@@ -149,6 +173,9 @@ class MapStyle:
         d = asdict(self)
         d["feeder_colors"] = {str(k): str(v)
                               for k, v in (self.feeder_colors or {}).items()}
+        if self.hidden_outage_ids is not None:
+            d["hidden_outage_ids"] = sorted({str(x)
+                                             for x in self.hidden_outage_ids})
         return d
 
     @classmethod
@@ -165,8 +192,9 @@ class MapStyle:
             cur = getattr(st, k)
             if isinstance(cur, dict):
                 setattr(st, k, {str(a): str(b) for a, b in (v or {}).items()})
-            elif k == "visible_feeders":
-                setattr(st, k, None if v is None else sorted({str(x) for x in v}))
+            elif k in ("visible_feeders", "hidden_outage_ids"):
+                setattr(st, k, None if v is None else
+                        sorted({str(x) for x in v}))
             elif isinstance(cur, bool):
                 setattr(st, k, bool(v))
             elif isinstance(cur, (int, float)):
@@ -180,7 +208,8 @@ class MapStyle:
         for name in ("switch_marker", "fct_marker", "dcs_marker",
                      "cbr_marker", "rec_marker", "sec_marker",
                      "unknown_device_marker", "no_tie_marker", "source_marker",
-                     "transformer_marker", "proposed_marker", "manual_marker"):
+                     "transformer_marker", "proposed_marker", "manual_marker",
+                     "outage_marker", "opt_sec_marker"):
             if getattr(st, name) not in MARKER_CHOICES:
                 setattr(st, name, MapStyle().__dict__[name])
         return st
