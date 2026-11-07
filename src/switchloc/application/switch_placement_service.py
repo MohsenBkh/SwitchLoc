@@ -33,7 +33,7 @@ Outage/Placement): ورودی‌ها را از پایگاه پروژه می‌خ
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass, field as dc_field, replace
 from pathlib import Path
 
 from .. import APP_NAME, __version__
@@ -78,7 +78,7 @@ EENS_METHOD_AUTO_RATES = (EENS_METHOD_DIRECTIONAL, EENS_METHOD_UNIFORM)
 
 @dataclass
 class SwitchPlacementAppSettings:
-    """تنظیمات سطح کاربر (تب «بهینه‌سازی سکشنالایزر و کاهش EENS»)."""
+    """تنظیمات سطح کاربر (تب «روش جایابی بهینهٔ کلید و کاهش EENS»)."""
 
     user: str = "unknown"
     persist: bool = True
@@ -218,7 +218,8 @@ class SwitchPlacementService:
         # ---- روش محاسبهٔ EENS -> مدل بازیابی -----------------------------
         method = st.method if st.method in EENS_METHOD_ORDER else EENS_METHOD_UNIFORM
         auto_rates = method in EENS_METHOD_AUTO_RATES
-        engine_settings = st.engine
+        # کپی — تنظیمات موتورِ فراخوان نباید تغییر کند (باگ v1.12)
+        engine_settings = replace(st.engine)
         if method == EENS_METHOD_DIRECTIONAL:
             engine_settings.restoration_model = "directional"
         elif method == EENS_METHOD_UNIFORM:
@@ -227,7 +228,8 @@ class SwitchPlacementService:
             warnings.append(
                 "در روش «" + EENS_METHOD_FA[method].split(" — ")[0] +
                 "» مقادیر λ و r خودکار از خاموشی‌های واقعی خوانده می‌شوند؛ "
-                "ورودی دستی λ نادیده گرفته شد.")
+                "λ دستیِ فیدرهایی که صریحاً وارد شده‌اند بر مقدار خودکار "
+                "اولویت دارد (قابل ردیابی در settings.failure_rates).")
 
         # ---- λ هر فیدر ------------------------------------------------
         rates: dict[str, float] = {}
@@ -275,6 +277,15 @@ class SwitchPlacementService:
         # ---- نرخ خطای گذرا (فقط ریکلوزر) -------------------------------
         transient_rates: dict[str, float] = dict(st.transient_rates or {})
         if engine_settings.uses_transient_faults and not transient_rates:
+            # λ مؤثرِ هر فیدر: ماتریس واقعی (روش‌های خودکار) یا λ دستی
+            # تنظیمات (روش دستی). پیش‌تر در روش دستی مقدار صفر می‌شد و
+            # EENS گذرای ریکلوزر بی‌صدا حذف می‌شد (باگ v1.12).
+            effective_rates = dict(rates)
+            if not effective_rates:
+                default_lambda = float(
+                    engine_settings.total_failure_rate_per_year)
+                effective_rates = {k: default_lambda
+                                   for k in self._feeder_keys(net, topo)}
             tmax = float(engine_settings.transient_max_duration_min)
             counts: dict[str, list] = {}
             for ev in (persisted.get("events") or []):
@@ -292,12 +303,17 @@ class SwitchPlacementService:
                 if dur <= tmax:
                     slot[0] += 1
             for key, (n_tr, n_all) in counts.items():
-                if n_all > 0 and key in rates:
-                    transient_rates[key] = rates[key] * (n_tr / n_all)
+                if n_all > 0 and key in effective_rates:
+                    transient_rates[key] = (effective_rates[key]
+                                            * (n_tr / n_all))
             if not counts:
                 warnings.append(
                     "رخداد خاموشی با مدت معتبر برای تفکیک خطای گذرا/دائمی "
                     "پیدا نشد؛ سهم گذرا صفر فرض شد.")
+            elif not transient_rates:
+                warnings.append(
+                    "سهم خطای گذرا برای هیچ فیدری قابل محاسبه نشد "
+                    "(λ مؤثر یا دادهٔ مدت موجود نبود)؛ EENS گذرا صفر شد.")
 
         repair_times = dict(r_by_feeder) if auto_rates else {}
         if auto_rates:
@@ -320,6 +336,24 @@ class SwitchPlacementService:
             feeders=st.feeder_keys or None,
             zone_of_node=topo.zones.zone_of_node,
             branch_labels=_branch_labels(net))
+        # فیدرهایی که کاندید دارند ولی هیچ کلیدی پیشنهاد نشد — دلیل را
+        # صریح بگویید تا کاربر آن را باگ تلقی نکند.
+        for feeder in study.feeders or []:
+            if not (feeder.candidates or []):
+                continue
+            if feeder.best is not None and feeder.best.selected:
+                continue
+            notes = " ".join(feeder.notes or [])
+            if "زمان بازیابی بار سالم" in notes:
+                why = ("زمان بازیابی بار سالم از زمان تعمیر کمتر نیست؛ "
+                       "جداسازی خطا سودی در EENS ندارد")
+            elif "بهبود محسوسی" in notes or "بهبود قابل" in notes:
+                why = "بهبود EENS زیر آستانهٔ معنادار بود"
+            else:
+                why = "همهٔ کاندیدها با فیلترهای عمق/سهم بار/کلید موجود حذف شدند"
+            warnings.append(
+                f"{feeder.feeder_key}: هیچ کلید پیشنهادی ندارد — {why}.")
+
         study.settings["failure_rates"] = {k: round(v, 6)
                                            for k, v in rates.items()}
         study.settings["method"] = method

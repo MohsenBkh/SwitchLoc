@@ -98,7 +98,7 @@ def make_explain_label(text: str, parent=None):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QPushButton,
                                    QTextBrowser, QVBoxLayout)
-    btn = QPushButton("ⓘ راهنما")
+    btn = QPushButton("راهنما")
     btn.setFixedHeight(28)
     btn.setMaximumWidth(104)
     btn.setToolTip("برای مشاهده توضیحات و راهنمای این بخش کلیک کنید")

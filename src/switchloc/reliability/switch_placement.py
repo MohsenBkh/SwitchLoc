@@ -517,7 +517,10 @@ def compute_eens_kwh(sections: Sequence[Section], *, failure_rate: float,
     _assign_lambdas(sections, failure_rate, total_length_m)
     total = float(total_load_kw or 0.0)
     rep = float(repair_time_min)
-    rest = float(restoration_time_min)
+    # بار سالم هرگز دیرتر از پایان تعمیر برنمی‌گردد: اگر بازیابی (مثلاً
+    # سکسیونر دستی) از تعمیر کندتر باشد، عملاً همان انتظار تعمیر است. بدون
+    # این clamp مدل برای زمان بازیابی > تعمیر، نصب کلید را *بدتر* نشان می‌داد.
+    rest = min(float(restoration_time_min), rep)
     total_eens = 0.0
     if restoration_model == "directional":
         # قطعه‌های پایین‌دست هر قطعه (بر اساس زنجیرهٔ والد)
@@ -1075,6 +1078,12 @@ class SwitchPlacementEngine:
         if st.use_existing_switches:
             study.existing_cut_nodes = sorted(
                 n for n in existing_cuts if n in tree.parent and n != tree.root)
+        if st.effective_restoration_time_min >= rep_min:
+            study.notes.append(
+                f"زمان بازیابی بار سالم ({st.effective_restoration_time_min:g} "
+                f"دقیقه) از زمان تعمیر ({rep_min:g} دقیقه) کمتر نیست؛ در این "
+                "حالت جداسازی خطا بار سالم را زودتر برنمی‌گرداند و نصب کلید "
+                "EENS را کاهش نمی‌دهد — زمان بازیابی/نوع کلید را بازبینی کنید.")
 
         base_cuts = set(study.existing_cut_nodes)
         study.baseline_sections = build_sections(tree, base_cuts)
@@ -1198,9 +1207,14 @@ class SwitchPlacementEngine:
                 break
             gain = current_eens - best_eens
             if st.stop_without_gain and gain <= float(st.min_gain_kwh_per_year):
+                if gain < -1e-6:
+                    why = ("مدل با کمینهٔ زمان بازیابی/تعمیر کار می‌کند؛ این "
+                           "گزینه EENS را بهبود نمی‌دهد")
+                else:
+                    why = "بهبود محسوسی ندارد"
                 study.notes.append(
-                    f"گام {step}: بهبود قابل توجهی نداشت (کاهش "
-                    f"{gain:.3e} kWh/سال) → جست‌وجو متوقف شد.")
+                    f"گام {step}: کاندید بعدی {why} (تغییر خالص "
+                    f"{gain:,.3f} kWh/سال) → جست‌وجو متوقف شد.")
                 break
             selected_nodes.append(best_c.node)
             selected.append(best_c)

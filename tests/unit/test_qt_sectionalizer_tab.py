@@ -137,7 +137,8 @@ def test_show_result_fills_tables_and_enables_map(app):
     assert summary.rowCount() == len(study.feeders)
     assert summary.item(0, 0).text() == "F1"
     assert detail.rowCount() == len(study.candidate_rows())
-    marks = [detail.item(i, 2).text().startswith("✔")
+    # نشانگر ردیف انتخاب‌شده «●» است (✔ در برخی فونت‌ها tofu می‌شد)
+    marks = [detail.item(i, 2).text().startswith("●")
              for i in range(detail.rowCount())]
     assert sum(marks) == len(selected_ids := [c.node for f in study.feeders
                                               if f.best for c in f.best.selected])

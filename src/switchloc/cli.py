@@ -198,6 +198,21 @@ def _cmd_sectionalizer(args) -> int:
         SwitchPlacementAppSettings, SwitchPlacementService)
     from switchloc.reliability.switch_placement import SwitchPlacementSettings
 
+    # روش: --method مقدم است؛ --model فقط نام قدیمی همین گزینه است
+    method = str(getattr(args, "method", "") or "")
+    legacy_model = str(getattr(args, "model", "") or "")
+    if legacy_model and method in ("", "uniform"):
+        method = legacy_model
+    method = method or "uniform"
+    if method not in ("directional", "uniform", "manual"):
+        print(f"ERROR: روش نامعتبر: {method}")
+        return 2
+
+    # منبع λ: روش دستی ⇔ مقدار ورودی کاربر، روش‌های واقعی ⇔ ماتریس خاموشی
+    source = getattr(args, "lambda_source", None)
+    if source is None:
+        source = "configured" if method == "manual" else "outage"
+
     engine = SwitchPlacementSettings(
         switch_type=str(getattr(args, "switch_type", "sectionalizer")),
         total_failure_rate_per_year=args.failure_rate,
@@ -208,7 +223,8 @@ def _cmd_sectionalizer(args) -> int:
         max_sectionalizers=args.max,
         min_candidate_depth=args.min_depth,
         max_downstream_load_ratio=args.max_ratio,
-        restoration_model=args.model,
+        restoration_model=("directional" if method == "directional"
+                           else "uniform"),
         use_existing_switches=not args.ignore_existing_switches,
     )
     rates = {}
@@ -218,10 +234,12 @@ def _cmd_sectionalizer(args) -> int:
             rates[key.strip()] = float(val)
     feeders = tuple(f.strip() for f in (args.feeders or "").split(",")
                     if f.strip())
+    backup = float(getattr(args, "backup", 0.0) or 0.0)
+    backup_map = {k: backup for k in feeders} if backup > 0 else {}
     svc = SwitchPlacementService(SwitchPlacementAppSettings(
         user=args.user, persist=not args.no_persist, engine=engine,
-        method=str(getattr(args, "method", "uniform")),
-        failure_rate_source=args.lambda_source, failure_rates=rates,
+        method=method, failure_rate_source=source, failure_rates=rates,
+        backup_kw=backup_map,
         feeder_keys=feeders, report_dir=args.report_dir))
     try:
         res = svc.run(args.db)
@@ -399,16 +417,19 @@ def main(argv=None) -> int:
     psec = sub.add_parser(
         "sectionalizer",
         aliases=["switches"],
+        prog="switchloc switches",
         help="روش جایابی بهینهٔ کلید (ریکلوزر/سکشنالایزر/سکسیونر) و کاهش EENS")
     psec.add_argument("db", help="SQLite project (import output)")
     psec.add_argument("--user", default="cli-user")
     psec.add_argument("--max", type=int, default=3,
-                      help="حداکثر سکشنالایزر پیشنهادی هر فیدر (پیش‌فرض ۳)")
+                      help="حداکثر کلید پیشنهادی هر فیدر (پیش‌فرض ۳)")
     psec.add_argument("--failure-rate", type=float, default=30.0,
                       help="λ پیش‌فرض هر فیدر (خرابی/سال، پیش‌فرض ۳۰)")
-    psec.add_argument("--lambda-source", default="outage",
+    psec.add_argument("--lambda-source", default=None,
                       choices=("outage", "configured"),
-                      help="منبع λ: ماتریس λ/r واقعی خاموشی یا مقدار پیش‌فرض")
+                      help="منبع λ: ماتریس λ/r واقعی خاموشی یا مقدار "
+                           "پیش‌فرض (پیش‌فرض: خودکار از روش — روش دستی → "
+                           "configured، روش‌های واقعی → outage)")
     psec.add_argument("--lambda-override",
                       help="λ صریح هر فیدر، مثال: 'F3=27,F5=57.3'")
     psec.add_argument("--repair", type=float, default=50.0,
@@ -425,11 +446,14 @@ def main(argv=None) -> int:
     psec.add_argument("--method", default="uniform",
                       choices=("directional", "uniform", "manual"),
                       help="روش EENS: دایرکشنال/یکنواخت (λ و r واقعی) یا دستی")
+    psec.add_argument("--backup", type=float, default=0.0,
+                      help="ظرفیت پشتیبان هر فیدر (kW)؛ ۰ = نامحدود")
     psec.add_argument("--manual-restoration", type=float, default=30.0,
                       help="زمان بازیابی دستی برای سکسیونر (دقیقه)")
-    psec.add_argument("--model", default="uniform",
+    psec.add_argument("--model", default=None,
                       choices=("uniform", "directional"),
-                      help="مدل بازیابی: uniform (کد مرجع) یا directional")
+                      help="(منسوخ) هم‌ارز --method؛ اگر --method داده نشود "
+                           "از همین مقدار استفاده می‌شود")
     psec.add_argument("--feeders", help="فیدرهای مطالعه، مثال: 'F3,F5'")
     psec.add_argument("--ignore-existing-switches", action="store_true",
                       help="کلیدهای موجود در حالت پایه لحاظ نشوند")

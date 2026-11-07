@@ -54,7 +54,8 @@ def _clean_heat_levels(value) -> list[dict]:
             continue
         out.append({"max": top, "color": color,
                     "label": str(item.get("label") or "").strip()
-                    or ("بی‌نهایت" if top is None else f"≤ {top:g}")})
+                    or ("همهٔ تکرارها" if top is None
+                        else f"≤ {top:g} خاموشی")})
     return out or [dict(x) for x in DEFAULT_OUTAGE_HEAT_LEVELS]
 
 

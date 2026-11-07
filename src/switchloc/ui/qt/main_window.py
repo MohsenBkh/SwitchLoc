@@ -515,6 +515,12 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             _write_log(_fmt_exc(exc))
 
     def _load_project_kv(path: str) -> None:
+        _pending = state.get("_kv_timer")       # نوشتن معلق پروژهٔ قبلی
+        if _pending is not None:
+            try:
+                _pending.stop()
+            except Exception:                      # noqa: BLE001
+                pass
         state["_loading_kv"] = True
         try:
             _load_project_kv_inner(path)
@@ -536,9 +542,18 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             return
         if isinstance(sec_settings, dict) and sec_settings:
             state["sectionalizer_settings"] = dict(sec_settings)
+            # دو سطح ذخیره‌سازی: تنظیمات موتور + تنظیمات تب. هر دو باید
+            # برگردند، وگرنه روش «دستی» و ظرفیت پشتیبان گم می‌شوند.
             eng = dict(sec_settings.get("engine") or {})
-            eng.setdefault("failure_rate_source",
-                           sec_settings.get("failure_rate_source"))
+            for key, value in sec_settings.items():
+                if key != "engine" and value is not None:
+                    eng.setdefault(key, value)
+            backup = sec_settings.get("backup_kw")
+            if isinstance(backup, dict) and backup:
+                values = [float(v) for v in backup.values()
+                          if v is not None]
+                if eng.get("backup_kw") is None and values:
+                    eng["backup_kw"] = max(values)
             try:
                 sec_tab.apply_settings(eng)
             except Exception as exc:               # noqa: BLE001
@@ -1494,7 +1509,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         "(Phase 4)</b>"))
     plac_help_row = QHBoxLayout()
     plac_help_row.addWidget(QLabel("<b>جایابی و ارزیابی طرح‌های کلیدگذاری</b>"))
-    plac_help_btn = QPushButton("ⓘ راهنمای این بخش")
+    plac_help_btn = QPushButton("راهنمای این بخش")
     plac_help_btn.setMaximumWidth(150)
     plac_help_btn.clicked.connect(lambda: QMessageBox.information(
         win, "راهنمای جایابی",
@@ -2662,11 +2677,11 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
         def _fail(exc) -> None:
             sec_tab.set_busy(False, "اجرا ناموفق بود.")
-            error_box(win, "Sectionalizer optimization failed")(exc)
+            error_box(win, "جایابی بهینهٔ کلید ناموفق بود")(exc)
 
         sec_tab.set_busy(True, "در حال محاسبه…")
-        run_task(win, "بهینه‌سازی سکشنالایزر و EENS…", work, _ok, _fail,
-                 title="Sectionalizer & EENS")
+        run_task(win, "جایابی بهینهٔ کلید و EENS…", work, _ok, _fail,
+                 title="Switch placement & EENS")
 
     def show_sectionalizer_on_map(nodes=None) -> None:
         """نمایش پیشنهادهای انتخاب‌شده روی نقشه (فیلتر بر اساس گره‌ها)."""
@@ -2681,13 +2696,23 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
     sec_tab.on_run = lambda settings=None: do_sectionalizer()
     sec_tab.on_show_map = show_sectionalizer_on_map
+
+    # ذخیرهٔ KV با تأخیر کوتاه (debounce): هر تغییر ویجت یک نوشتن در
+    # SQLite انجام نمی‌دهد؛ چند تغییر سریع در یک نوشتن جمع می‌شود.
+    from PySide6.QtCore import QTimer as _QTimer
+    _kv_timer = _QTimer(win)
+    _kv_timer.setSingleShot(True)
+    _kv_timer.setInterval(600)
+    _kv_timer.timeout.connect(lambda: _persist_project_kv())
+    state["_kv_timer"] = _kv_timer
+
     def _persist_sec_settings(d=None) -> None:
         if d is not None:
             state["sectionalizer_settings"] = dict(d or {})
         # هنگام بازکردن پروژه، apply_settings ویجت‌ها را تغییر می‌دهد؛ آن
         # رویداد نباید KV ذخیره‌شده را بازنویسی کند.
         if state.get("db") and not state.get("_loading_kv"):
-            _persist_project_kv()          # با هر تغییر در KV پروژه ذخیره شود
+            _kv_timer.start()              # نوشتن با تأخیر ۶۰۰ میلی‌ثانیه
     sec_tab.on_settings_changed = _persist_sec_settings
 
     # ---------------- Map tab ------------------------------------------------
@@ -2764,9 +2789,10 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             "<li><b>Placement</b>: تنظیمات مهندسی (مدل بار Load Scaling، "
             "ظرفیت نیاز ۹، هزینه‌ها)، اجرای جایابی، جایابی دستی کلید با "
             "کلیک روی نقشه یا مختصات UTM، و تأیید نهایی طرح.</li>"
-            "<li><b>Sectionalizer &amp; EENS</b>: بهینه‌سازی محل "
-            "سکشنالایزر با روش تحلیلی کد مرجع (تخصیص λ متناسب با طول، "
-            "زمان تعمیر/بازیابی) و نمایش پیشنهادها روی نقشه.</li>"
+            "<li><b>Switch placement &amp; EENS</b>: روش جایابی بهینهٔ "
+            "کلید (ریکلوزر/سکشنالایزر/سکسیونر) با سه روش EENS — "
+            "دایرکشنال، یکنواخت (λ و r واقعی، خودکار) و دستی — و نمایش "
+            "پیشنهادها روی نقشه.</li>"
             "<li><b>Dashboard</b>: نمای مدیریتی (λ/r، رتبه، ENS، جدول آشتی "
             "ترانس‌ها).</li>"
             "<li><b>Map</b>: نقشه تعاملی — اسکرول زوم، درگ جابجایی، دابل‌کلیک "
