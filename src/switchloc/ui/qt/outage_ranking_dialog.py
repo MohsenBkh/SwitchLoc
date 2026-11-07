@@ -48,7 +48,9 @@ def show_outage_ranking_dialog(parent, points, *, title: str = "",
     root.addWidget(split, 1)
 
     table = QTableWidget(0, len(headers))
-    table.setSortingEnabled(True)
+    # مرتب‌سازی هنگام پرکردن خاموش می‌ماند تا ترتیب رتبه حفظ شود؛ سپس
+    # روشن می‌شود تا کاربر بتواند با کلیک روی سرستون مرتب کند.
+    table.setSortingEnabled(False)
     table.setSelectionBehavior(
         QAbstractItemView.SelectionBehavior.SelectRows)
     table.setAlternatingRowColors(True)
@@ -58,6 +60,8 @@ def show_outage_ranking_dialog(parent, points, *, title: str = "",
              (r["zone_id"] or "")[:8], f"{r['x']:,.0f}", f"{r['y']:,.0f}"]
             for r in rows]
     fill_table(table, headers, data)
+    table.setSortingEnabled(True)
+    table.sortItems(0, Qt.SortOrder.AscendingOrder)
     split.addWidget(table)
 
     summary = QTextEdit()
