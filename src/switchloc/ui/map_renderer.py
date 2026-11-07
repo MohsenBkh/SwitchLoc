@@ -120,6 +120,9 @@ class NetworkMapRenderer:
         #: device categories actually drawn in the last render — the
         #: legend is built from it so it is complete AND accurate
         self._drawn: set[str] = set()
+        #: برچسب‌های «نام (تعداد)» لایهٔ خاموشی که پس از نهایی‌شدن محدودهٔ
+        #: محورها رسم می‌شوند (تا جداسازی عمودی برچسب‌ها دقیق باشد)
+        self._pending_outage_labels: list = []
 
     # ------------------------------------------------------------------
     def render(self, path: str, title: str = "",
@@ -365,6 +368,7 @@ class NetworkMapRenderer:
                            else (st.hidden_outage_ids or ()))}
             by_status: dict[str, list] = {}
             links = []
+            visible: list[dict] = []
             for pt in outage_points:
                 try:
                     pid = str(pt.get("id", ""))
@@ -379,6 +383,7 @@ class NetworkMapRenderer:
                     continue
                 status = str(pt.get("status", "") or "pending")
                 by_status.setdefault(status, []).append((x, y, pt))
+                visible.append(pt)
                 zx, zy = pt.get("zone_x"), pt.get("zone_y")
                 if st.show_outage_links and zx is not None and zy is not None:
                     try:
@@ -409,17 +414,16 @@ class NetworkMapRenderer:
                            facecolors=color, edgecolors="white",
                            linewidths=0.8, alpha=st.outage_alpha, zorder=11,
                            label=f"Outage — {status_fa.get(status, status or 'بدون وضعیت')}")
-                if st.show_outage_labels:
-                    for x, y, pt in items:
-                        text = str(pt.get("label", "") or "")
-                        if not text:
-                            continue
-                        ax.annotate(text, (x, y), xytext=(4, 4),
-                                    textcoords="offset points",
-                                    fontsize=st.outage_label_size,
-                                    color=st.outage_label_color,
-                                    alpha=st.outage_label_alpha, zorder=12)
                 self._drawn.add("outage")
+
+            # برچسب‌ها یک‌بار به‌ازای هر مکان («نام (تعداد)») و پس از
+            # نهایی‌شدن محدودهٔ محورها رسم می‌شوند تا روی هم نیفتند.
+            if st.show_outage_labels and visible:
+                from ..application.outage_review import outage_label_groups
+
+                self._pending_outage_labels = outage_label_groups(visible)
+            else:
+                self._pending_outage_labels = []
 
         # --- سکشنالایزرهای پیشنهادی موتور EENS -------------------------
         if sectionalizer_nodes and st.show_opt_sectionalizers:
@@ -454,6 +458,9 @@ class NetworkMapRenderer:
         ax.autoscale(enable=True)
         ax.set_aspect("equal")
         ax.set_axis_off()
+        if self._pending_outage_labels:
+            self._draw_outage_labels(ax, st)
+            self._pending_outage_labels = []
         ax.set_title(title or "SwitchLoc — Network Map", fontsize=12,
                      loc="left")
         if st.show_legend:
@@ -465,6 +472,89 @@ class NetworkMapRenderer:
             leg = ax.get_legend()
             if leg is not None:
                 leg.remove()
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _data_per_point(ax, fontsize: float = 5.0) -> float:
+        """اندازهٔ یک «نقطهٔ تایپوگرافی» بر حسب واحد دادهٔ محور.
+
+        نقشه با ``aspect='equal'`` رسم می‌شود؛ در این حالت مقیاس هر دو
+        محور یکی است و مقدار درست، بزرگ‌ترین نسبتِ «واحد داده به نقطه»
+        (یعنی محور محدودکننده) است — برآورد محافظه‌کارانه که برچسب‌ها را
+        کمی بزرگ‌تر از واقعیت می‌بیند و از هم‌پوشانی جلوگیری می‌کند.
+        """
+        try:
+            (x0, x1), (y0, y1) = ax.get_xlim(), ax.get_ylim()
+            pos = ax.get_position()
+            fig_w, fig_h = ax.figure.get_size_inches()
+        except Exception:                          # noqa: BLE001
+            return 1.0
+        scales = []
+        if x1 > x0 and pos.width > 0:
+            scales.append((x1 - x0) / max(pos.width * fig_w * 72.0, 1.0))
+        if y1 > y0 and pos.height > 0:
+            scales.append((y1 - y0) / max(pos.height * fig_h * 72.0, 1.0))
+        return max(scales) if scales else 1.0
+
+    @staticmethod
+    def _label_offset_pt(k: int, step_pt: float) -> float:
+        """فاصلهٔ عمودی k-اُم (نقطه) برای برچسب‌های هم‌مکان: 0, +s, −s, +2s…"""
+        if k <= 0:
+            return 0.0
+        sign = 1.0 if k % 2 == 1 else -1.0
+        return sign * step_pt * ((k + 1) // 2)
+
+    def _draw_outage_labels(self, ax, st) -> None:
+        """برچسب خاموشی‌ها را بدون هم‌پوشانی می‌چیند.
+
+        هر مکان یک برچسب «نام (تعداد)» دارد؛ اگر چند برچسب در یک محدودهٔ
+        کوچک بیفتند (چند نام در یک محل)، به‌صورت پلکانی بالا/پایین جابه‌جا
+        می‌شوند تا خوانا بمانند (درخواست کاربر).
+        """
+        groups = self._pending_outage_labels or []
+        if not groups:
+            return
+        try:
+            fontsize = float(st.outage_label_size or 5.0)
+        except (TypeError, ValueError):
+            fontsize = 5.0
+        per_pt = self._data_per_point(ax, fontsize)
+        step_pt = max(fontsize * 1.35, 6.0)
+        placed: list[tuple[float, float, float, float]] = []
+        for g in groups:
+            text = str(g.get("text") or "")
+            if not text:
+                continue
+            try:
+                gx, gy = float(g["x"]), float(g["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            # اندازهٔ تقریبی کادر برچسب در واحد داده (۰٫۵۸ em به‌ازای هر نویسه)
+            text_w = max(0.58 * fontsize * per_pt * len(text), per_pt * 2.0)
+            text_h = 1.45 * fontsize * per_pt
+            dx = 4.0 * per_pt                       # فاصلهٔ افقی از نشانگر
+            chosen = None
+            for k in range(0, 24):
+                dy_pt = self._label_offset_pt(k, step_pt)
+                dy = dy_pt * per_pt
+                box = (gx + dx, gy + dy - text_h / 2.0,
+                       gx + dx + text_w, gy + dy + text_h / 2.0)
+                if not any(box[0] < b[2] and box[2] > b[0] and
+                           box[1] < b[3] and box[3] > b[1] for b in placed):
+                    placed.append(box)
+                    chosen = dy_pt
+                    break
+            if chosen is None:                      # همهٔ پله‌ها پر: آخرین پله
+                k = len(placed)
+                chosen = self._label_offset_pt(k, step_pt)
+                dy = chosen * per_pt
+                placed.append((gx + dx, gy + dy - text_h / 2.0,
+                               gx + dx + text_w, gy + dy + text_h / 2.0))
+            ax.annotate(text, (gx, gy), xytext=(4.0, chosen),
+                        textcoords="offset points", fontsize=fontsize,
+                        color=st.outage_label_color,
+                        alpha=st.outage_label_alpha, zorder=12,
+                        ha="left", va="center")
 
     # ------------------------------------------------------------------
     def _c(self, coord):

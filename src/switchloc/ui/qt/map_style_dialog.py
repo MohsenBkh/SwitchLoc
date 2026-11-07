@@ -292,7 +292,7 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
     outage_scroll.setWidget(outage_form_widget)
     ov.addWidget(outage_scroll, 1)
     chk_outages = QCheckBox("نمایش لایهٔ خاموشی‌ها روی نقشه")
-    chk_outage_labels = QCheckBox("نمایش برچسب شمارهٔ رخداد روی نقشه")
+    chk_outage_labels = QCheckBox("نمایش برچسب «نام مکان (تعداد خطا)» روی نقشه")
     chk_outage_links = QCheckBox("خط اتصال خاموشی به مرکز زون متأثر")
     for cb in (chk_outages, chk_outage_labels, chk_outage_links):
         ov.addWidget(cb)

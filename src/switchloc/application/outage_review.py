@@ -496,6 +496,10 @@ def outage_map_points(records: Iterable, *, geometries: dict | None = None,
     ندارد وارد لایه نمی‌شود (شمارش آن در پنل نقشه گزارش می‌گردد). زون هر
     نقطه از بازبینی ذخیره‌شده یا انتساب خودکار ``pick_zone`` می‌آید و مرکز
     آن زون برای رسم خط اتصال برگردانده می‌شود.
+
+    ``place``/``label`` نام مکان است (بازبینی ذخیره‌شده > بانک مکان‌ها >
+    نام پست > شمارهٔ رخداد) تا برچسب نقشه بتواند رخدادهای یک مکان را در یک
+    برچسب «نام (تعداد)» جمع کند — درخواست کاربر.
     """
     geometries = geometries or {}
     saved = saved or {}
@@ -503,8 +507,27 @@ def outage_map_points(records: Iterable, *, geometries: dict | None = None,
     cache: dict = {}
     out: list[dict] = []
     for rec in records:
-        eid = str(getattr(rec, "id", "") or "")
+        eid = str(_attr_or_dict(rec, "id") or "")
         old = saved.get(eid) or {}
+        matches = list(getattr(suggestions.get(eid), "matches", ()) or ())
+        chosen = None
+        if old.get("place_id"):
+            chosen = next((m for m in matches
+                           if m.place.place_id == old.get("place_id")), None)
+        if chosen is None and matches:
+            chosen = matches[0]
+
+        # --- نام مکان برچسب -------------------------------------------------
+        place_name = _clean_place_name(old.get("place_name"))
+        if not place_name and chosen is not None:
+            place_name = _clean_place_name(getattr(chosen.place, "name", ""))
+        if not place_name:
+            place_name = _clean_place_name(_attr_or_dict(rec, "substation"))
+        if not place_name:
+            place_name = _clean_place_name(_attr_or_dict(rec, "event_no"))
+        place_name = place_name or eid[:8]
+
+        # --- مختصات ---------------------------------------------------------
         point = None
         cx, cy = old.get("coord_x"), old.get("coord_y")
         if cx is not None and cy is not None:
@@ -512,25 +535,18 @@ def outage_map_points(records: Iterable, *, geometries: dict | None = None,
                 point = (float(cx), float(cy))
             except (TypeError, ValueError):
                 point = None
-        if point is None:
-            matches = list(getattr(suggestions.get(eid), "matches", ()) or ())
-            chosen = None
-            if old.get("place_id"):
-                chosen = next((m for m in matches
-                               if m.place.place_id == old.get("place_id")), None)
-            if chosen is None and matches:
-                chosen = matches[0]
-            if chosen is not None and transform is not None:
-                pid = chosen.place.place_id
-                if pid not in cache:
-                    try:
-                        cache[pid] = transform(float(chosen.place.lat),
-                                               float(chosen.place.lon))
-                    except Exception:                   # noqa: BLE001
-                        cache[pid] = None
-                point = cache[pid]
+        if point is None and chosen is not None and transform is not None:
+            pid = chosen.place.place_id
+            if pid not in cache:
+                try:
+                    cache[pid] = transform(float(chosen.place.lat),
+                                           float(chosen.place.lon))
+                except Exception:                   # noqa: BLE001
+                    cache[pid] = None
+            point = cache[pid]
         if point is None:
             continue
+
         fk = _feeder_of(rec)
         zone_id = str(old.get("zone_id") or "")
         if not zone_id:
@@ -538,13 +554,12 @@ def outage_map_points(records: Iterable, *, geometries: dict | None = None,
                                 max_distance_m=max_distance_m).zone_id
         geom = geometries.get(zone_id) if zone_id else None
         centroid = geom.centroid if geom is not None else None
-        label = " ".join(str(x) for x in (
-            _attr_or_dict(rec, "event_no"), _attr_or_dict(rec, "substation"))
-            if x).strip()
         out.append({
             "id": eid,
             "x": float(point[0]), "y": float(point[1]),
-            "label": (label[:36] or eid[:8]),
+            "label": place_name[:36],
+            "place": place_name[:36],
+            "place_full": place_name,
             "status": str(old.get("status") or "pending"),
             "feeder": fk,
             "zone_id": zone_id,
@@ -552,6 +567,72 @@ def outage_map_points(records: Iterable, *, geometries: dict | None = None,
             "zone_y": (float(centroid[1]) if centroid else None),
             "zone_label": (geom.label if geom is not None else ""),
         })
+    return out
+
+
+def _clean_place_name(value) -> str:
+    """نام مکان قابل نمایش روی نقشه.
+
+    برچسب‌های بی‌معنی فایل خاموشی (مثل «Sheet1» که نام برگهٔ اکسل است)
+    یا خط‌تیره‌ها حذف می‌شوند تا برچسب نقشه «Sheet1 (4)» نشود.
+    """
+    text = " ".join(str(value or "").split())
+    if not text or text in {"—", "-", ".", "؟", "?"}:
+        return ""
+    low = text.lower().replace("_", "").replace("-", "")
+    if low.startswith("sheet") and (low[5:].isdigit() or low[5:] == ""):
+        return ""
+    return text
+
+
+def _cluster_points(points: list, distance_m: float) -> list[list]:
+    """خوشه‌بندی تک‌پیوندی نقاط (نقاط نزدیک‌تر از آستانه یک برچسب می‌گیرند)."""
+    clusters: list[list] = []
+    for q in points:
+        merged = [c for c in clusters
+                  if any(math.dist(q, r) <= distance_m for r in c)]
+        if not merged:
+            clusters.append([q])
+            continue
+        base = merged[0]
+        base.append(q)
+        for extra in merged[1:]:
+            base.extend(extra)
+            clusters.remove(extra)
+    return clusters
+
+
+def outage_label_groups(points: Iterable[dict], *,
+                        cluster_distance_m: float = 2000.0) -> list[dict]:
+    """نقاط لایهٔ خاموشی → برچسب‌های «نام (تعداد)».
+
+    چند رخداد در یک مکان یک برچسب می‌گیرند و تعداد خطاها داخل پرانتز
+    می‌آید (درخواست کاربر: «کرندق (۴)»، «نوده (۶)») — به‌جای چند برچسب
+    تکراری روی هم. اگر همان نام در نقاط دور از هم (بیش از
+    ``cluster_distance_m``) ثبت شده باشد به برچسب‌های جدا شکسته می‌شود تا
+    شمارش گمراه‌کننده نشود. مختصات هر برچسب = میانگین نقاط همان خوشه.
+    """
+    buckets: dict[tuple, list] = {}
+    for p in points or ():
+        try:
+            x, y = float(p["x"]), float(p["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        name = _clean_place_name(p.get("place") or p.get("label"))
+        if not name:
+            continue
+        buckets.setdefault((str(p.get("feeder") or ""), name), []).append((x, y))
+    out: list[dict] = []
+    for (feeder, name), pts in buckets.items():
+        for cluster in _cluster_points(pts, float(cluster_distance_m)):
+            n = len(cluster)
+            out.append({
+                "feeder": feeder, "name": name, "count": n,
+                "x": sum(q[0] for q in cluster) / n,
+                "y": sum(q[1] for q in cluster) / n,
+                "text": f"{name} ({n})",
+            })
+    out.sort(key=lambda g: (g["feeder"], g["name"], g["x"], g["y"]))
     return out
 
 

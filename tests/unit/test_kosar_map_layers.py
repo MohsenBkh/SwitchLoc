@@ -11,6 +11,7 @@ import pytest
 
 from switchloc.application.outage_review import (build_zone_geometries,
                                                  default_gazetteer_path,
+                                                 outage_label_groups,
                                                  outage_map_points,
                                                  suggest_event_places)
 from switchloc.application.topology_service import (TopologyService,
@@ -141,3 +142,26 @@ def test_map_renders_both_layers(tmp_path, kosar):
     r3.render(str(tmp_path / "kosar_off.png"), dpi=60,
               outage_points=points, sectionalizer_nodes=sec_nodes)
     assert "outage" not in r3._drawn
+
+
+def test_real_labels_are_aggregated_by_place(kosar):
+    """روی دادهٔ واقعی: برچسب‌ها «نام (تعداد)» و مجموع تعدادها = تعداد نقاط."""
+    if not kosar["crs"]:
+        pytest.skip("CRS پروژه ثبت نشده است")
+    gaz_path = default_gazetteer_path()
+    if gaz_path is None:
+        pytest.skip("بانک آفلاین مکان‌ها موجود نیست")
+    suggestions = {s.event_id: s for s in
+                   suggest_event_places(kosar["records"],
+                                        PlaceGazetteer(gaz_path))}
+    points = outage_map_points(kosar["records"], geometries=kosar["geoms"],
+                               suggestions=suggestions,
+                               transform=_transform(kosar["crs"]))
+    groups = outage_label_groups(points)
+    assert 0 < len(groups) < len(points)          # چند رخداد در یک مکان ادغام شد
+    assert sum(g["count"] for g in groups) == len(points)
+    for g in groups:
+        assert g["text"].endswith(f"({g['count']})")
+        assert g["name"] in g["text"]
+    # بیشترین تعداد یک مکان باید > ۱ باشد (سناریوی «کرندق (۴)»)
+    assert max(g["count"] for g in groups) >= 2
