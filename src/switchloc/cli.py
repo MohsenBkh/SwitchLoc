@@ -282,6 +282,38 @@ def _cmd_outages(args) -> int:
     return 0 if res.verdict == "PASS" else 1
 
 
+def _cmd_places(args) -> int:
+    """پرس‌وجو/آمار بانک آفلاین مکان‌ها (غنی‌سازی نسخهٔ ۱.۱۳)."""
+    import json
+
+    from .application.outage_review import default_gazetteer_path
+    from .geography.places import PlaceGazetteer
+
+    path = args.db or default_gazetteer_path()
+    if not path:
+        print("ERROR: بانک آفلاین مکان‌ها پیدا نشد "
+              "(متغیر SWITCHLOC_GAZETTEER را تنظیم کنید).")
+        return 2
+    bank = PlaceGazetteer(path)
+    if args.stats or not args.query:
+        print(json.dumps(bank.stats(), ensure_ascii=False, indent=2))
+        print(f"file: {path}")
+        if not args.query:
+            return 0
+    for text in args.query:
+        print(f"\n— «{text}» —")
+        matches = bank.search(text, limit=max(1, args.limit))
+        if not matches:
+            print("   (هیچ مکانی پیدا نشد)")
+            continue
+        for m in matches:
+            p_ = m.place
+            extra = f" · {p_.county}" if p_.county else ""
+            print(f"   {p_.name:<22} {p_.place_type:<7} {m.confidence:<5} "
+                  f"{m.score:.2f}  {p_.lat:.4f},{p_.lon:.4f}{extra}")
+    return 0
+
+
 def _cmd_outage_ranking(args) -> int:
     """جدول رتبه‌بندی مکان‌های خاموشی (درخواست کاربر — بند ۷).
 
@@ -470,6 +502,16 @@ def main(argv=None) -> int:
     po.add_argument("--out-db", help="Persist records and the λ/r matrix into this SQLite")
     po.add_argument("--report-dir", help="Write the MD/JSON report into this folder")
     po.set_defaults(func=_cmd_outages)
+
+    ppl = sub.add_parser(
+        "places", aliases=["place"],
+        help="جست‌وجو و آمار بانک آفلاین مکان‌های اردبیل (بدون شبکه)")
+    ppl.add_argument("query", nargs="*", help="متن نام مکان (چند مورد مجاز است)")
+    ppl.add_argument("--db", help="مسیر فایل بانک مکان (پیش‌فرض: بانک همراه برنامه)")
+    ppl.add_argument("--limit", type=int, default=5)
+    ppl.add_argument("--stats", action="store_true",
+                     help="نمایش آمار بانک (تعداد بر نوع/منبع/شهرستان)")
+    ppl.set_defaults(func=_cmd_places)
 
     por = sub.add_parser(
         "outage-ranking", aliases=["outage-rank"],

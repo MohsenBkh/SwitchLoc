@@ -44,4 +44,7 @@ def test_bundled_ardabil_gazetteer_matches_release_claim():
             "select distinct source from places")]
     assert n >= 1006
     assert beyond == 0
-    assert all("high-confidence" in s for s in sources)
+    # منابع مجاز: بانک OSM اولیه + GeoNames (v1.13.1). هر منبع ناشناخته
+    # باید صریح اضافه شود، نه اینکه بی‌صدا وارد بانک شود.
+    allowed = ("high-confidence", "GeoNames")
+    assert all(any(mark in s for mark in allowed) for s in sources), sources
