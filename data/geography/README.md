@@ -41,8 +41,3 @@ list), `scripts/enrich_ardabil_village_shp.py` (Village.shp) and
 `scripts/ardabil_place_gap_report.py` (coverage gap). The shapefile ingest is
 idempotent: a second run inserts 0 places and merges the same 2,063 points.
 Full Persian documentation, licences and matching rules: see `README_FA.md`.
-
-**Licensing note:** the 1,188 `Village.shp` rows come from a user-supplied
-archive whose provenance/licence is not yet documented — settle that before
-publishing the derived database; the ingest script itself is independent of the
-data.
