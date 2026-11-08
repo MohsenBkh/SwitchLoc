@@ -211,18 +211,29 @@ def default_feeder_mapper(model_feeders: frozenset | set | None = None):
     invention (بند ۱۹); a substation code can never become a feeder key
     because ``F<n>`` must be one of the modelled feeders.
     """
-    known = frozenset(model_feeders or {f"F{i}" for i in range(1, 8)})
+    known = [str(k) for k in (model_feeders or {f"F{i}" for i in range(1, 8)})]
+    from ..topology.tracing import same_feeder
+
+    def _resolve(key: str) -> tuple[str, bool]:
+        """کلید عددی (F2) را به شناسهٔ فیدر مدل نگاشت می‌کند.
+
+        اگر چند فیدر مدل با همان شماره وجود داشته باشد («F2 - MESHKIN» و
+        «F2 - HADIDMOBTAKERAN»)، ادغام نمی‌شود: رکورد ناشناس می‌ماند تا
+        کاربر با ورود per-feeder صریح، فیدر را تعیین کند.
+        """
+        matches = [k for k in known if same_feeder(k, key)]
+        if len(matches) == 1:
+            return (matches[0], True)
+        return (key, False)
 
     def mapper(sheet: str, feeder_raw: str) -> tuple[str, bool]:
         raw = (feeder_raw or "").translate(_PERSIAN_DIGITS)
         m = _NUMERIC_FEEDER_RE.match(raw)
         if m:
-            key = f"F{int(m.group(1))}"
-            return (key, key in known)
+            return _resolve(f"F{int(m.group(1))}")
         m = _PREFIX_FEEDER_RE.match(raw)
         if m:
-            key = f"F{int(m.group(1))}"
-            return (key, key in known)
+            return _resolve(f"F{int(m.group(1))}")
         return ("", False)
 
     return mapper

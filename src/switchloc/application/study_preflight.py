@@ -92,6 +92,7 @@ def build_preflight(*, method: str, switch_type: str,
                     repair_times: dict | None = None,
                     explicit_rates: dict | None = None,
                     backup_kw: dict | None = None,
+                    s_rated_kva: dict | None = None,
                     outage_available: bool = True) -> PreflightReport:
     """چک‌لیست ورودی‌های اجرای جایابی EENS (بدون Qt)."""
     eng = dict(engine or {})
@@ -137,9 +138,61 @@ def build_preflight(*, method: str, switch_type: str,
         "ok" if (load_total_kw or 0) > 0 else "error",
         "" if (load_total_kw or 0) > 0 else
         "بار صفر است؛ EENS صفر می‌شود و نتیجه بی‌معناست.")
-    if level == "scaled" and not (lm.get("feeders") or lm.get("scaling_plan")):
-        add("مدل بار", "P/Q ورودی فیدرها", "خالی", "error",
-            "سطح «مقیاس‌شده» انتخاب شده ولی ورودی بار فیدرها خالی است.")
+    if level == "scaled":
+        # بررسی روی همان چیزی که ذخیره می‌شود: load_model.feeder_pq
+        # (کلید: شناسهٔ فیدر). قبلاً وجود کلیدهای «feeders»/«scaling_plan»
+        # آزموده می‌شد که این‌جا هرگز پر نمی‌شوند و خطای «P/Q خالی» حتی با
+        # ورودی کامل هم نشان داده می‌شد.
+        from ..ui.inputs_model import missing_load_scaling_inputs
+        pq_all = dict(lm.get("feeder_pq") or {})
+        scoped = list(feeders) or sorted(pq_all)
+        missing = missing_load_scaling_inputs(scoped, pq_all)
+        has = [k for k in scoped if k not in missing]
+        if not pq_all:
+            add("مدل بار", "P/Q ورودی فیدرها", "خالی", "error",
+                "سطح «مقیاس‌شده» انتخاب شده ولی برای هیچ فیدری P_load و "
+                "Q_load وارد نشده است (تنظیمات مهندسی ← تب Load model).")
+        elif missing:
+            add("مدل بار", "P/Q ورودی فیدرها",
+                f"{len(has)} از {len(scoped)} فیدر دامنه", "error",
+                "برای این فیدرها P و Q (هر دو، بزرگ‌تر از صفر) وارد نشده "
+                "است: " + "، ".join(missing) +
+                " — با سطح «مقیاس‌شده» بار این فیدرها صفر می‌شود و EENS "
+                "بی‌معنا خواهد بود.")
+        else:
+            detail = "، ".join(
+                f"{k}: P={_fmt((pq_all.get(k) or {}).get('p_kw'), 1)} kW / "
+                f"Q={_fmt((pq_all.get(k) or {}).get('q_kvar'), 1)} kVAr"
+                for k in has[:6])
+            add("مدل بار", "P/Q ورودی فیدرها",
+                f"{len(has)} فیدر کامل", "ok",
+                detail + (" …" if len(has) > 6 else ""))
+
+    s_rated = {str(k): float(v) for k, v in (s_rated_kva or {}).items()
+               if v}
+    if level == "scaled" and s_rated and feeders:
+        import math
+        for k in feeders:
+            row = dict((lm.get("feeder_pq") or {}).get(k) or {})
+            try:
+                p_kw = float(row.get("p_kw") or 0.0)
+                q_kvar = float(row.get("q_kvar") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if p_kw <= 0 and q_kvar <= 0:
+                continue
+            s_load = math.hypot(p_kw, q_kvar)
+            cos_phi = (p_kw / s_load) if s_load else 0.0
+            cap = float(s_rated.get(k) or 0.0)
+            text = (f"S_load = {_fmt(s_load, 1)} kVA · "
+                    f"cos φ = {_fmt(cos_phi, 4)}" +
+                    (f" · K = {_fmt(s_load / cap, 5)}" if cap > 0 else
+                     " · K = — (ΣS_rated نامعلوم)"))
+            add("مدل بار", f"مقیاس فیدر «{k}»", text,
+                "ok" if cap > 0 else "warn",
+                "" if cap > 0 else
+                "Σ ظرفیت نامی ترانس‌های این فیدر از GIS خوانده نشد؛ "
+                "K محاسبه نمی‌شود.")
 
     # ---- ۳. λ و r هر فیدر --------------------------------------------
     missing_rates = [k for k in feeders if k not in rates]
@@ -226,7 +279,8 @@ def preflight_from_settings(*, settings: dict, load_model: dict | None,
                             load_total_kw: float | None,
                             feeders: list | None, all_feeders: list | None,
                             persisted_outages: dict | None = None,
-                            backup_kw: dict | None = None) -> PreflightReport:
+                            backup_kw: dict | None = None,
+                            s_rated_kva: dict | None = None) -> PreflightReport:
     """پل میان تنظیمات تب و :func:`build_preflight` (شکل داده یکسان)."""
     s = dict(settings or {})
     outages = dict(persisted_outages or {})
@@ -249,4 +303,5 @@ def preflight_from_settings(*, settings: dict, load_model: dict | None,
         feeders=list(feeders or []), all_feeders=list(all_feeders or []),
         outage_rates=rates, repair_times=reps, explicit_rates=explicit,
         backup_kw=dict(backup_kw or {}),
+        s_rated_kva=dict(s_rated_kva or {}),
         outage_available=bool(outages.get("lambda_r")))

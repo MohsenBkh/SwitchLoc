@@ -54,7 +54,7 @@ from dataclasses import dataclass, field as dc_field
 from typing import Iterable, Sequence
 
 from ..topology.graph import NetworkGraph
-from ..topology.tracing import feeder_key as normalize_feeder_key
+from ..topology.tracing import feeder_id as normalize_feeder_key
 
 #: λ پیش‌فرض هر فیدر (خرابی/سال) — همان عدد کد مرجع (۳۰)
 DEFAULT_FAILURE_RATE_PER_YEAR = 30.0
@@ -798,11 +798,14 @@ class SwitchPlacementStudy:
         return sum(len(f.best.selected) for f in self.feeders if f.best)
 
     def feeder(self, key: str) -> FeederStudy | None:
+        """فیدر با شناسهٔ کامل؛ کلید کوتاه («F3») هم اگر یکتا باشد می‌رسد."""
+        from ..topology.tracing import same_feeder
         norm = normalize_feeder_key(key) or str(key or "").strip().upper()
         for f in self.feeders:
             if f.feeder_key == norm:
                 return f
-        return None
+        matches = [f for f in self.feeders if same_feeder(f.feeder_key, key)]
+        return matches[0] if len(matches) == 1 else None
 
     def summary_rows(self) -> list[dict]:
         """ردیف‌های جدول خلاصه (هر فیدر) برای GUI/گزارش."""
@@ -1100,8 +1103,23 @@ class SwitchPlacementEngine:
             branch_labels: dict | None = None) -> SwitchPlacementStudy:
         """اجرای موتور روی همهٔ فیدرهای ردیابی‌شده (یا زیرمجموعهٔ ``feeders``)."""
         st = self.settings
-        wanted = ({normalize_feeder_key(f) or str(f).strip().upper()
-                   for f in feeders} if feeders else None)
+        wanted = [str(f) for f in feeders] if feeders else None
+
+        def _lookup(mapping, name):
+            """مقدار یک دیکشنری کلیدخورده با «F3»/«F3 - KOSAR» — بدون ابهام."""
+            if not mapping:
+                return None
+            if name in mapping:
+                return mapping[name]
+            from ..topology.tracing import same_feeder
+            hits = [k for k in mapping if same_feeder(k, name)]
+            return mapping[hits[0]] if len(hits) == 1 else None
+
+        def _in_scope(trace_name: str) -> bool:
+            if wanted is None:
+                return True
+            from ..topology.tracing import same_feeder
+            return any(same_feeder(trace_name, w) for w in wanted)
         cuts_map = existing_cut_nodes
         if cuts_map is None:
             cuts_map = self.existing_cut_nodes(graph, net, traces)
@@ -1114,29 +1132,27 @@ class SwitchPlacementEngine:
 
         for tr in sorted(traces, key=lambda t: t.feeder_key or ""):
             key = normalize_feeder_key(tr.feeder_key) or str(tr.feeder_key)
-            if wanted is not None and key not in wanted:
+            name = getattr(tr, "feeder", "") or key      # trace سبک/آزمونی
+            if not _in_scope(name):
                 continue
             rate = None
             source = "configured-default"
-            if failure_rates and key in failure_rates:
-                value = failure_rates.get(key)
-                if value is not None and float(value) >= 0:
-                    rate = float(value)
-                    source = "outage-lambda"
+            value = _lookup(failure_rates, name)
+            if value is not None and float(value) >= 0:
+                rate = float(value)
+                source = "outage-lambda"
             if rate is None:
                 rate = float(st.total_failure_rate_per_year)
-            backup = (float(backup_kw[key]) if backup_kw and key in backup_kw
-                      else None)
+            backup_v = _lookup(backup_kw, name)
+            backup = float(backup_v) if backup_v is not None else None
             rep = None
-            if repair_times and key in repair_times:
-                value = repair_times.get(key)
-                if value is not None and float(value) >= 0:
-                    rep = float(value)
+            value = _lookup(repair_times, name)
+            if value is not None and float(value) >= 0:
+                rep = float(value)
             tr_rate = 0.0
-            if transient_rates and key in transient_rates:
-                value = transient_rates.get(key)
-                if value is not None and float(value) >= 0:
-                    tr_rate = float(value)
+            value = _lookup(transient_rates, name)
+            if value is not None and float(value) >= 0:
+                tr_rate = float(value)
             study.feeders.append(self._run_feeder(
                 graph, tr, key, node_load_kw, rate, source, backup,
                 cuts_map.get(key, set()), zone_of_node or {}, branch_labels or {},

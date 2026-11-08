@@ -220,12 +220,20 @@ def _bbox_lower_bound(bbox, point) -> float:
     return math.hypot(dx, dy)
 
 
+def _feeder_matches(label: str, feeder: str | None) -> bool:
+    """همان فیدر؟ (نگارش کوتاه «F5» با «F5 - KOSAR» یکی است)"""
+    from ..topology.tracing import same_feeder
+    if not feeder:
+        return True
+    return same_feeder(label, feeder)
+
+
 def nearest_zone(geometries: dict[str, ZoneGeometry], point,
                  feeder: str | None = None, feeder_only: bool = True
                  ) -> tuple[ZoneGeometry | None, float | None]:
     """نزدیک‌ترین زون به یک نقطه (با هرس bbox برای کارایی)."""
     pool = [g for g in geometries.values()
-            if not (feeder_only and feeder) or g.feeder == feeder]
+            if not (feeder_only and feeder) or _feeder_matches(g.feeder, feeder)]
     if not pool:
         pool = list(geometries.values())          # جزیره/برچسب دیگر
     best, best_d = None, math.inf
@@ -260,8 +268,8 @@ def pick_zone(geometries: dict[str, ZoneGeometry], *,
     """
     if reason == "no-crs":
         return ZonePick(basis="no-crs")
-    pool_has_feeder = any(g.feeder == feeder for g in geometries.values()) \
-        if feeder else True
+    pool_has_feeder = any(_feeder_matches(g.feeder, feeder)
+                          for g in geometries.values()) if feeder else True
     if point is not None:
         z, d = nearest_zone(geometries, point, feeder=feeder,
                             feeder_only=feeder_only)
@@ -270,18 +278,19 @@ def pick_zone(geometries: dict[str, ZoneGeometry], *,
                 return ZonePick(zone_id=z.zone_id, basis="point",
                                 distance_m=d, nearest_zone_id=z.zone_id,
                                 nearest_distance_m=d)
-            same_feeder = [g for g in geometries.values() if g.feeder == feeder]
-            if feeder and len(same_feeder) == 1:
-                return ZonePick(zone_id=same_feeder[0].zone_id,
+            same_zone = [g for g in geometries.values()
+                         if _feeder_matches(g.feeder, feeder)]
+            if feeder and len(same_zone) == 1:
+                return ZonePick(zone_id=same_zone[0].zone_id,
                                 basis="single-zone-of-feeder",
                                 distance_m=d, nearest_zone_id=z.zone_id,
                                 nearest_distance_m=d)
             return ZonePick(basis="unmatched", nearest_zone_id=z.zone_id,
                             nearest_distance_m=d)
-    same_feeder = [g for g in geometries.values() if g.feeder == feeder] \
-        if feeder else []
-    if feeder and len(same_feeder) == 1:
-        return ZonePick(zone_id=same_feeder[0].zone_id,
+    same_zone = [g for g in geometries.values()
+                 if _feeder_matches(g.feeder, feeder)] if feeder else []
+    if feeder and len(same_zone) == 1:
+        return ZonePick(zone_id=same_zone[0].zone_id,
                         basis="single-zone-of-feeder")
     if feeder and not pool_has_feeder:
         return ZonePick(basis="unmatched")
@@ -395,9 +404,11 @@ def plan_review_rows(records: Iterable, *,
     ``gis.crs.transform_wgs84_to_project``. اگر CRS پروژه نامشخص باشد
     هیچ مختصاتی حدس زده نمی‌شود و مبنا «CRS پروژه نامشخص» ثبت می‌گردد.
     """
-    from ..topology.tracing import feeder_key as normalize_feeder_key
+    from ..topology.tracing import feeder_id as normalize_feeder_key
+    from ..topology.tracing import resolve_feeder
 
     geometries = geometries or {}
+    model_feeders = sorted({g.feeder for g in geometries.values() if g.feeder})
     suggestions = suggestions or {}
     saved = saved or {}
     if transform is None and project_crs:
@@ -413,6 +424,11 @@ def plan_review_rows(records: Iterable, *,
         raw_feeder = str(getattr(rec, "feeder_key", "")
                          or getattr(rec, "feeder_raw", "") or "")
         feeder = normalize_feeder_key(raw_feeder) or raw_feeder.strip().upper()
+        # نگارش کوتاه فایل خاموشی («F5») به شناسهٔ کامل فیدر مدل
+        # («F5 - KOSAR») نگاشت می‌شود تا زون و برچسب نقشه یکی باشند؛ در
+        # ابهام (دو فیدر F2) چیزی ادغام نمی‌شود.
+        if feeder and model_feeders:
+            feeder = resolve_feeder(feeder, model_feeders) or feeder
         old = saved.get(eid, {}) or {}
         sug = suggestions.get(eid)
         opts = place_options(sug, str(old.get("place_id", "") or ""))
@@ -547,7 +563,7 @@ def outage_map_points(records: Iterable, *, geometries: dict | None = None,
         if point is None:
             continue
 
-        fk = _feeder_of(rec)
+        fk = _feeder_of(rec, {g.feeder for g in geometries.values()})
         zone_id = str(old.get("zone_id") or "")
         if not zone_id:
             zone_id = pick_zone(geometries, feeder=fk, point=point,
@@ -643,12 +659,23 @@ def _attr_or_dict(rec, name: str):
     return getattr(rec, name, None)
 
 
-def _feeder_of(rec) -> str:
-    from ..topology.tracing import feeder_key as normalize
+def _feeder_of(rec, candidates=()) -> str:
+    """شناسهٔ فیدر رخداد؛ در صورت امکان با نگاشت به شناسهٔ فیدر مدل.
+
+    ``candidates`` (فیدرهای زون‌ها/شبکه) برای یکی‌دانستن نگارش کوتاه و
+    آراسته است: «F5» فایل خاموشی → «F5 - KOSAR». در ابهام (دو فیدر F2)
+    هیچ نگاشتی انجام نمی‌شود.
+    """
+    from ..topology.tracing import feeder_id as normalize
+    from ..topology.tracing import resolve_feeder
 
     raw = (_attr_or_dict(rec, "feeder_key")
            or _attr_or_dict(rec, "feeder_raw") or "")
-    return normalize(raw) or str(raw).strip().upper()
+    key = normalize(raw) or str(raw).strip().upper()
+    cands = [str(c) for c in (candidates or ()) if str(c)]
+    if key and cands:
+        return resolve_feeder(key, cands) or key
+    return key
 
 
 # ---------------------------------------------------------------------------

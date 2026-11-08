@@ -605,8 +605,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             return sorted({t.feeder_key for t in topo.traces if t.feeder_key})
         if net is None:
             return []
-        from ...topology.tracing import feeder_key as normalize_feeder_key
-        keys = {normalize_feeder_key(n.feeder_name)
+        from ...topology.tracing import feeder_id as normalize_feeder_id
+        keys = {normalize_feeder_id(n.feeder_name)
                 for n in net.nodes if n.feeder_name}
         return sorted(k for k in keys if k)
 
@@ -1556,20 +1556,25 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                     "برای تحلیل محدود، دست‌کم یک فیدر را انتخاب کنید.")
                 return
             active_set = set(active_keys)
+            from ...topology.tracing import same_feeder as _same_feeder
+
+            def _in_active(name) -> bool:
+                return any(_same_feeder(name, a) for a in active_set)
+
             load_model = dict(state.get("load_model") or {})
             if state.get("scope"):
                 load_model["feeder_pq"] = {
                     k: v for k, v in (load_model.get("feeder_pq") or {}).items()
-                    if k in active_set}
+                    if _in_active(k)}
             dlg = make_settings_dialog(win, active_keys, {
                 "load_model": load_model,
                 "capacity_rows": [r for r in (state.get("capacity_rows") or [])
-                                  if r.get("feeder_key") in active_set],
+                                  if _in_active(r.get("feeder_key"))],
                 "cost_model": state.get("cost_model") or {},
                 "criteria": state.get("criteria") or {},
                 "coverage": state.get("coverage") or {},
             }, feeder_s_rated={k: v for k, v in feeder_s_rated().items()
-                               if k in active_set})
+                               if _in_active(k)})
             if not dlg.exec():
                 return
             applied = dlg.apply()
@@ -1594,7 +1599,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         state["cost_model"] = applied["cost_model"]
         if scope_is_restricted():
             keep = [r for r in (state.get("capacity_rows") or [])
-                    if r.get("feeder_key") not in active_set]
+                    if not _in_active(r.get("feeder_key"))]
             state["capacity_rows"] = keep + applied["capacity_rows"]
         else:
             state["capacity_rows"] = applied["capacity_rows"]
@@ -2658,7 +2663,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 feeders=list(study_feeder_keys() or ()),
                 all_feeders=all_keys,
                 persisted_outages=persisted_outages,
-                backup_kw=backup_kw)
+                backup_kw=backup_kw,
+                s_rated_kva={k: v for k, v in feeder_s_rated().items()
+                             if k in set(study_feeder_keys() or ())})
             dlg = make_preflight_dialog(win, preflight)
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 sec_tab.set_busy(False, "اجرا توسط کاربر لغو شد.")

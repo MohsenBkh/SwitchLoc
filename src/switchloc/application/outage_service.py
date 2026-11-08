@@ -70,14 +70,15 @@ class OutageResult:
 def filter_records_by_scope(records: list, scope_feeder: str | None = None,
                             scope_feeders=()) -> tuple[list, int]:
     """Keep records in the requested feeder set; return excluded count."""
+    from ..topology.tracing import same_feeder
     if scope_feeders:
-        targets = {str(k).strip().upper() for k in scope_feeders if str(k).strip()}
+        targets = [str(k) for k in scope_feeders if str(k).strip()]
     elif scope_feeder:
-        targets = {str(scope_feeder).strip().upper()}
+        targets = [str(scope_feeder)]
     else:
         return list(records), 0
     kept = [r for r in records
-            if str(getattr(r, "feeder_key", "") or "").strip().upper() in targets]
+            if any(same_feeder(getattr(r, "feeder_key", ""), t) for t in targets)]
     return kept, len(records) - len(kept)
 
 

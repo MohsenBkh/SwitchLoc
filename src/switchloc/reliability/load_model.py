@@ -138,9 +138,14 @@ class LoadModelResult:
 
 
 def feeder_key_of(name: str) -> str:
-    """کلید کوتاه فیدر (نظیر ردیابی) برای گروه‌بندی ترانس‌ها."""
-    from ..topology.tracing import feeder_key as fk
-    return fk(name)
+    """شناسهٔ فیدر (نام کامل نرمال‌شده) — همان شناسهٔ ردیابی و فهرست فیدرها.
+
+    قبلاً توکن کوتاه («F2») برگردانده می‌شد و دو فیدر هم‌شمارهٔ
+    «F2 - MESHKIN» و «F2 - HADIDMOBTAKERAN» کلید یکسانی می‌گرفتند؛ بار و
+    طرح مقیاسشان روی هم می‌افتاد.
+    """
+    from ..topology.tracing import feeder_id
+    return feeder_id(name)
 
 
 def scaling_plan(net: CanonicalNetwork,
@@ -165,11 +170,25 @@ def scaling_plan(net: CanonicalNetwork,
             lst.append(float(t.capacity_kva))
         else:
             n_no_cap[k] = n_no_cap.get(k, 0) + 1
+    from ..topology.tracing import feeder_id as _fid
+    # کلیدهای ورودی کاربر ممکن است نگارش کوتاه («F3») باشند؛ به شناسهٔ
+    # فیدر نگاشت می‌شوند تا بارِ ثبت‌شده بی‌صدا گم نشود (بدون ادغام در ابهام).
+    pq_by_id: dict = {}
+    for raw_key, value in dict(feeder_pq or {}).items():
+        key_id = _fid(raw_key) or str(raw_key).strip().upper()
+        cands = [k for k in caps_by_feeder if k == key_id]
+        if not cands:
+            from ..topology.tracing import same_feeder
+            hits = [k for k in caps_by_feeder if same_feeder(k, key_id)]
+            if len(hits) == 1:
+                key_id = hits[0]
+        pq_by_id[key_id] = value
+
     plan: dict = {}
     warnings: list = []
-    keys = set(caps_by_feeder) | set(dict(feeder_pq or {}))
+    keys = set(caps_by_feeder) | set(pq_by_id)
     for k in sorted(keys):
-        pq = dict(feeder_pq or {}).get(k) or {}
+        pq = dict(pq_by_id.get(k) or {})
         p = float(pq.get("p_kw", 0.0) or 0.0)
         q = float(pq.get("q_kvar", 0.0) or 0.0)
         s_rated = sum(caps_by_feeder.get(k, []))
@@ -181,7 +200,7 @@ def scaling_plan(net: CanonicalNetwork,
                    "sum_s_rated_kva": round(s_rated, 1),
                    "n_transformers": len(caps_by_feeder.get(k, [])),
                    "n_no_capacity": n_no_cap.get(k, 0)}
-        if k not in (feeder_pq or {}):
+        if k not in pq_by_id:
             warnings.append((
                 "LOAD-SCALING-FEEDER-NO-INPUT",
                 f"فیدر {k} در روش Load Scaling ورودی P/Q ندارد — بار تمام "

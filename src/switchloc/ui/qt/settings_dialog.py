@@ -40,6 +40,17 @@ def default_capacity_rows(feeder_keys) -> list[dict]:
             for k in feeder_keys]
 
 
+def _lookup_by_feeder(mapping: dict, key: str):
+    """مقدار ذخیره‌شدهٔ فیدر با هر نگارشی («F3»/«F3 - KOSAR»)."""
+    from ...topology.tracing import same_feeder
+    if not mapping:
+        return None
+    if key in mapping:
+        return mapping[key]
+    hits = [k for k in mapping if same_feeder(k, key)]
+    return mapping[hits[0]] if len(hits) == 1 else None
+
+
 def parse_capacity_rows(table_rows) -> list[dict]:
     """Raw GUI rows → clean dicts (None for unknown, no silent zero)."""
     out = []
@@ -128,9 +139,18 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
     pq_table.verticalHeader().setVisible(False)
     pq_table.horizontalHeader().setStretchLastSection(True)
 
+    busy = {"on": False}
+
     def _pq_calc_row(i: int) -> None:
-        """پیش‌نمایش زندهٔ S_load / cosφ / K از ورودی‌های P و Q."""
+        """پیش‌نمایش زندهٔ S_load / cosφ / K از ورودی‌های P و Q.
+
+        هر سه ستون **همیشه** از P و Q محاسبه می‌شوند (K فقط وقتی ΣS_rated
+        فیدر معلوم باشد)؛ قبلاً مقدار اولیهٔ سلول‌ها به‌هم‌ریخته بود و مقادیر
+        ذخیره‌شده هنگام بازکردن پنجره دوباره محاسبه نمی‌شدند.
+        """
         import math
+        if busy["on"]:
+            return
         def _f(item):
             if item is None:
                 return 0.0
@@ -144,15 +164,19 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
         cos_phi = (p / s_load) if s_load > 0 else 0.0
         s_r = float(s_rated.get(feeder_keys[i], 0.0) or 0.0)
         k_scale = (s_load / s_r) if s_r > 0 else 0.0
-        for col, val in ((4, f"{s_load:,.1f}"),
-                         (5, f"{cos_phi:.4f}" if s_load else "—"),
-                         (6, f"{k_scale:.5f}" if s_r else "—")):
-            it = pq_table.item(i, col)
-            if it is not None:
-                it.setText(val)
+        busy["on"] = True
+        try:
+            for col, val in ((4, f"{s_load:,.1f}" if (p or q) else "—"),
+                             (5, f"{cos_phi:.4f}" if s_load else "—"),
+                             (6, f"{k_scale:.5f}" if (s_r and (p or q)) else "—")):
+                it = pq_table.item(i, col)
+                if it is not None:
+                    it.setText(val)
+        finally:
+            busy["on"] = False
 
     for i, k in enumerate(feeder_keys):
-        pq = dict(pq_cur.get(k) or {})
+        pq = dict(_lookup_by_feeder(pq_cur, k) or {})
         it0 = QTableWidgetItem(k)
         it0.setFlags(it0.flags() & ~Qt.ItemFlag.ItemIsEditable)
         pq_table.setItem(i, 0, it0)
@@ -167,8 +191,12 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
             it = QTableWidgetItem("—")
             it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
             pq_table.setItem(i, col, it)
-        pq_table.itemChanged.connect(
-            lambda _it, _i=i: _pq_calc_row(_i))
+    # پس از ساخت همهٔ ردیف‌ها، مقادیر ذخیره‌شده یک‌بار محاسبه می‌شوند و
+    # سپس فقط یک اتصال برای ویرایش‌های بعدی ثبت می‌گردد (بدون سیگنال تودرتو).
+    for i in range(len(feeder_keys)):
+        _pq_calc_row(i)
+    pq_table.itemChanged.connect(
+        lambda it: _pq_calc_row(pq_table.row(it)))
     pq_table.setFixedHeight(min(360, 34 * (len(feeder_keys) + 1) + 12))
     f1.addRow(make_explain_label(
         "روش Load Scaling (سطح «مقیاس‌شده»): بار هر فیدر را وارد کنید "
@@ -197,7 +225,7 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
                float((v or {}).get("p_kw") or 0.0)
                for fk, v in lpq_rows.items()}
     for i, k in enumerate(feeder_keys):
-        row = dict(cap_rows.get(k, {}))
+        row = dict(_lookup_by_feeder(cap_rows, k) or {})
         # پیک از ورودی واحد مدل بار خوانده می‌شود — یک منبع، بدون ورودی موازی
         row["peak_kw"] = lpq_now.get(k) or None
         if row["peak_kw"] is None:

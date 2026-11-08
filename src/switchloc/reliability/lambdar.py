@@ -82,10 +82,17 @@ def feeder_lambda_r(records, model_feeders=None,
     """
     from .classify import CLASS_REDUCIBLE_BY_SWITCHING
 
+    from ..topology.tracing import feeder_id, resolve_feeder
+    model = [str(k) for k in (model_feeders or ())]
     by_feeder: dict[str, list] = defaultdict(list)
     for r in records:
         if r.in_model and r.feeder_key:
-            by_feeder[r.feeder_key].append(r)
+            # کلید فایل خاموشی («F2») به شناسهٔ فیدر مدل نگاشت می‌شود تا
+            # ردیف تکراری/بی‌فیدر ساخته نشود؛ در ابهام، کلید دست‌نخورده
+            # می‌ماند (بدون ادغام دو فیدر).
+            key = resolve_feeder(r.feeder_key, model) if model \
+                else feeder_id(r.feeder_key)
+            by_feeder[key].append(r)
 
     use_coverage = coverage is not None and coverage.has_coverage
     exp_years = coverage.exposure_years if use_coverage else 0.0
@@ -95,7 +102,7 @@ def feeder_lambda_r(records, model_feeders=None,
              if use_coverage else "years-with-events (legacy fallback)")
 
     out: list[FeederLambdaR] = []
-    for key in sorted(set(by_feeder) | set(model_feeders or (()))):
+    for key in sorted(set(by_feeder) | set(model)):
         evts = by_feeder.get(key, [])
         random = [r for r in evts if r.is_random]
         planned = [r for r in evts if r.outage_class == CLASS_PLANNED]

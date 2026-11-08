@@ -56,7 +56,8 @@ def _study(kosar, **kwargs):
 def test_all_five_feeders_are_studied(kosar):
     study = _study(kosar)
     keys = [f.feeder_key for f in study.feeders]
-    assert keys == ["F3", "F4", "F5", "F6", "F7"]
+    assert keys == ["F3 - KOSAR", "F4 - KOSAR", "F5 - KOSAR",
+                    "F6 - KOSAR", "F7 - KOSAR"]
     for f in study.feeders:
         assert f.status == "ok"
         assert f.line_length_m > 0
@@ -149,7 +150,7 @@ def test_service_writes_report_without_touching_the_project(kosar, tmp_path):
     assert Path(res.report_md).is_file()
     payload = json.loads((tmp_path / "sectionalizer_eens_report.json").read_text(
         encoding="utf-8"))
-    assert payload["study"]["feeders"][0]["feeder_key"] == "F3"
+    assert payload["study"]["feeders"][0]["feeder_key"] == "F3 - KOSAR"
     assert "جایابی بهینهٔ کلید" in Path(res.report_md).read_text(
         encoding="utf-8")
     # فقط‌خواندنی: هیچ کلید جدیدی در project_kv نوشته نشده است
@@ -177,7 +178,7 @@ def test_persisted_study_roundtrip_on_a_project_copy(tmp_path):
     first = svc.run(str(db))
     payload = load_persisted_study(str(db))
     assert payload is not None
-    assert payload["study"]["feeders"][0]["feeder_key"] == "F3"
+    assert payload["study"]["feeders"][0]["feeder_key"] == "F3 - KOSAR"
     assert payload["markdown"] and "جایابی بهینهٔ کلید" in payload["markdown"]
     assert payload["settings"]["user"] == "pytest"
     assert payload["algo_version"].startswith("SwitchLoc")

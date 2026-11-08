@@ -44,7 +44,7 @@ from ..reliability.switch_placement import (SWITCH_TYPE_FA,
                                             SwitchPlacementEngine,
                                             SwitchPlacementSettings,
                                             SwitchPlacementStudy)
-from ..topology.tracing import feeder_key as normalize_feeder_key
+from ..topology.tracing import feeder_id as normalize_feeder_key
 from ..validation.issues import IssueLog
 
 #: کلاس‌های «خطای تصادفی» (هم‌ارز OutageRecord.is_random)
@@ -261,16 +261,29 @@ class SwitchPlacementService:
         if not outage_rates:
             for row in (persisted.get("lambda_r") or []):
                 key = normalize_feeder_key(row.get("feeder_key"))
+                # ردیف λ که هیچ مواجهه/رخدادی ندارد یعنی «داده نداریم»، نه
+                # «λ=۰»؛ وگرنه فیدر بدون فایل خاموشی بی‌صدا EENS صفر می‌گرفت.
+                has_evidence = bool(row.get("events_random")) or float(
+                    row.get("exposure_years") or 0.0) > 0.0
                 value = row.get("lambda_per_year")
-                if key and value is not None:
+                if key and value is not None and has_evidence:
                     outage_rates[key] = float(value)
                 r_val = row.get("r_minutes")
-                if key and r_val is not None and float(r_val) > 0:
+                if key and r_val is not None and float(r_val) > 0 \
+                        and has_evidence:
                     r_by_feeder[key] = float(r_val)
+        def _scoped_keys() -> list:
+            all_keys = self._feeder_keys(net, topo)
+            wanted = [str(k) for k in (st.feeder_keys or ())]
+            if not wanted:
+                return all_keys
+            from ..topology.tracing import same_feeder
+            return [k for k in all_keys
+                    if any(same_feeder(k, w) for w in wanted)]
+
         if source == "outage":
             rates = dict(outage_rates)
-            missing = [k for k in self._feeder_keys(net, topo)
-                       if k not in outage_rates]
+            missing = [k for k in _scoped_keys() if k not in outage_rates]
             if missing:
                 warnings.append(
                     "برای فیدر(های) " + ", ".join(missing) +
@@ -334,8 +347,7 @@ class SwitchPlacementService:
 
         repair_times = dict(r_by_feeder) if auto_rates else {}
         if auto_rates:
-            missing_r = [k for k in self._feeder_keys(net, topo)
-                         if k not in repair_times]
+            missing_r = [k for k in _scoped_keys() if k not in repair_times]
             if missing_r:
                 warnings.append(
                     "برای فیدر(های) " + ", ".join(missing_r) +
