@@ -128,6 +128,30 @@ _MARKER_FA = {"o": "دایره (o)", "s": "مربع (s)", "D": "لوزی (D)",
               "8": "هشت‌ضلعی (8)", ".": "نقطه (.)"}
 
 
+def fit_dialog_to_screen(dlg, *, margin: int = 48,
+                         min_w: int = 560, min_h: int = 420):  # pragma: no cover
+    """پنجره را داخل صفحهٔ نمایش جا می‌دهد و **وسط صفحه** می‌گذارد.
+
+    درخواست کاربر: «قسمت پایین پنجره (دکمه OK) خارج از دید است، پنجره را
+    نسبت به صفحه سنتر کن». بنابراین اندازه به ناحیهٔ قابل‌استفادهٔ صفحه
+    محدود می‌شود (تا نوار عنوان و دکمه‌ها همیشه دیده شوند) و سپس مرکز
+    همان ناحیه قرار می‌گیرد — نه مرکز پنجرهٔ والد.
+    """
+    from PySide6.QtCore import QPoint
+    try:
+        screen = dlg.screen()
+        avail = screen.availableGeometry() if screen is not None else None
+    except Exception:                                  # noqa: BLE001
+        avail = None
+    if avail is None or avail.isEmpty():
+        return
+    w = max(min_w, min(dlg.width(), avail.width() - margin))
+    h = max(min_h, min(dlg.height(), avail.height() - margin))
+    dlg.resize(min(w, avail.width()), min(h, avail.height()))
+    dlg.move(QPoint(avail.center().x() - dlg.width() // 2,
+                    avail.center().y() - dlg.height() // 2))
+
+
 def make_map_style_dialog(parent, feeders: list, current: MapStyle,
                           book: dict | None = None,
                           active_name: str = ""):  # pragma: no cover
@@ -259,7 +283,13 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
         _add_marker(key, label, _form_for(key, grp))
     for key, label in _COLOR_ATTRS:
         _add_color(key, label, _form_for(key, grp))
-    grp_rows = QVBoxLayout(); grp_rows.addLayout(grp)
+    chk_fuse = QCheckBox("نمایش فیوز کات‌اوت‌ها (FCT) روی نقشه "
+                         "— پیش‌فرض خاموش")
+    chk_fuse.setToolTip(
+        "درخواست کاربر: فیوزها به‌صورت پیش‌فرض نمایش داده نمی‌شوند؛ با "
+        "تیک‌زدن این گزینه (یا تیک گروه FCT در فهرست کلیدهای تب نقشه) "
+        "روشن می‌شوند.")
+    grp_rows = QVBoxLayout(); grp_rows.addWidget(chk_fuse); grp_rows.addLayout(grp)
     hold1 = QWidget(); hold1.setLayout(grp_rows)
     controls_scroll = QScrollArea()
     controls_scroll.setWidgetResizable(True)
@@ -279,26 +309,51 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
     zv.addWidget(chk_zones)
     tabs.addTab(zone_page, "زون‌ها و لجند")
 
-    # (d) لایهٔ خاموشی‌های دارای مختصات — تب مستقل (درخواست کاربر) ------
+    # (d) لایهٔ خاموشی‌های دارای مختصات — تب مستقل، دو باکس کنار هم
+    #     (درخواست کاربر v1.15: چپ = نمادها و متن، راست = چیدمان برچسب و
+    #      توزیع رنگی)
     outage_page = QWidget()
     ov = QVBoxLayout(outage_page)
     ov.addWidget(QLabel(
-        "<b>نمایش خاموشی‌های دارای مختصات</b> — رنگ بر اساس وضعیت بازبینی، "
-        "اندازه/نماد، برچسب و خط اتصال به زون متأثر؛ روشن/خاموش کردن تک‌تک "
-        "رخدادها از پنل «لایهٔ خاموشی‌ها» در تب نقشه انجام می‌شود."))
+        "<b>نمایش خاموشی‌های دارای مختصات</b> — سمت چپ نمادها، رنگ‌ها و متن "
+        "برچسب؛ سمت راست چیدمان برچسب‌ها و توزیع رنگی مسیر فیدرها. "
+        "روشن/خاموش کردن تک‌تک رخدادها از پنل «لایهٔ خاموشی‌ها» در تب نقشه "
+        "انجام می‌شود."))
+    outage_split = QSplitter(Qt.Orientation.Horizontal)
+
+    # --- باکس چپ: نمادها و متن خاموشی ---
+    sym_box = QGroupBox("نمادهای خاموشی، رنگ وضعیت و متن برچسب")
+    sym_lay = QVBoxLayout(sym_box)
     outage_form_widget = QWidget()
     outage_form_widget.setLayout(outage_grp)
     outage_scroll = QScrollArea()
     outage_scroll.setWidgetResizable(True)
     outage_scroll.setWidget(outage_form_widget)
-    ov.addWidget(outage_scroll, 1)
+    sym_lay.addWidget(outage_scroll, 1)
     chk_outages = QCheckBox("نمایش لایهٔ خاموشی‌ها روی نقشه")
     chk_outage_labels = QCheckBox("نمایش برچسب «نام مکان (تعداد خطا)» روی نقشه")
     chk_outage_links = QCheckBox("خط اتصال خاموشی به مرکز زون متأثر")
     for cb in (chk_outages, chk_outage_labels, chk_outage_links):
-        ov.addWidget(cb)
+        sym_lay.addWidget(cb)
+    outage_split.addWidget(sym_box)
+
+    # --- باکس راست: چیدمان برچسب‌ها + توزیع رنگی ---
+    layout_box = QGroupBox("چیدمان برچسب‌ها و توزیع رنگی مسیر")
+    layout_lay = QVBoxLayout(layout_box)
+    outage_split.addWidget(layout_box)
+    outage_split.setStretchFactor(0, 3)
+    outage_split.setStretchFactor(1, 4)
+    ov.addWidget(outage_split, 1)
 
     # --- چیدمان برچسب‌ها: نزدیک نقطه + خط راهنما (اصلاح پراکندگی) --------
+    layout_inner = QWidget()
+    layout_inner_lay = QVBoxLayout(layout_inner)
+    layout_inner_lay.setContentsMargins(0, 0, 0, 0)
+    layout_scroll = QScrollArea()
+    layout_scroll.setWidgetResizable(True)
+    layout_scroll.setWidget(layout_inner)
+    layout_lay.addWidget(layout_scroll, 1)
+
     lbl_box = QGroupBox("چیدمان برچسب‌ها (نزدیک نقطه، با خط راهنما)")
     lbl_form = QFormLayout(lbl_box)
     sp_lbl_levels = QSpinBox()
@@ -317,7 +372,7 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
     chk_lbl_leader = QCheckBox("خط راهنما از برچسب به نقطهٔ خاموشی")
     chk_lbl_leader.setChecked(True)
     lbl_form.addRow("", chk_lbl_leader)
-    ov.addWidget(lbl_box)
+    layout_inner_lay.addWidget(lbl_box)
 
     # --- توزیع رنگی مسیر بر اساس تکرار خاموشی (DIgSILENT-style) ---------
     heat_box = QGroupBox("توزیع رنگی مسیر فیدرها بر اساس تکرار خاموشی")
@@ -325,12 +380,14 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
     chk_heat = QCheckBox("توزیع رنگی فعال باشد")
     heat_form.addRow("", chk_heat)
     sp_heat_radius = QDoubleSpinBox()
-    sp_heat_radius.setRange(10.0, 5000.0)
+    # بدون سقف (درخواست کاربر): فقط کف دارد؛ هر شعاع بزرگ‌تری پذیرفته می‌شود
+    sp_heat_radius.setRange(1.0, 1.0e9)
     sp_heat_radius.setDecimals(0)
-    sp_heat_radius.setSingleStep(50.0)
-    sp_heat_radius.setValue(300.0)
+    sp_heat_radius.setSingleStep(100.0)
+    sp_heat_radius.setValue(float(getattr(work, "outage_heat_radius_m", 5000.0)))
     sp_heat_radius.setToolTip(
-        "هر خاموشی به یال‌هایی که در این شعاع آن هستند نسبت داده می‌شود.")
+        "هر خاموشی به یال‌هایی که در این شعاع آن هستند نسبت داده می‌شود "
+        "(پیش‌فرض ۵۰۰۰ متر، بدون سقف).")
     heat_form.addRow("شعاع اثر هر خاموشی (m):", sp_heat_radius)
     sp_heat_width = QDoubleSpinBox()
     sp_heat_width.setRange(0.5, 12.0)
@@ -355,7 +412,8 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
     heat_btns.addWidget(btn_del_level)
     heat_btns.addStretch(1)
     heat_form.addRow("", heat_btns)
-    ov.addWidget(heat_box)
+    layout_inner_lay.addWidget(heat_box)
+    layout_inner_lay.addStretch(1)
 
     tabs.addTab(outage_page, "خاموشی‌ها")
 
@@ -412,6 +470,7 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
         for key, _ in _COLOR_ATTRS:
             cols[key].setText(getattr(st, key))
             _paint(swatches[key], getattr(st, key))
+        chk_fuse.setChecked(bool(getattr(st, "show_fuse_cutouts", False)))
         chk_legend.setChecked(bool(st.show_legend))
         chk_zones.setChecked(bool(st.show_zone_labels))
         chk_outages.setChecked(bool(st.show_outages))
@@ -421,7 +480,7 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
         sp_lbl_offset.setValue(float(getattr(st, "outage_label_offset_pt", 4.0)))
         chk_lbl_leader.setChecked(bool(getattr(st, "outage_label_leader", True)))
         chk_heat.setChecked(bool(getattr(st, "outage_heat_enabled", False)))
-        sp_heat_radius.setValue(float(getattr(st, "outage_heat_radius_m", 300.0)))
+        sp_heat_radius.setValue(float(getattr(st, "outage_heat_radius_m", 5000.0)))
         sp_heat_width.setValue(float(getattr(st, "outage_heat_width", 2.4)))
         _fill_heat_table()
 
@@ -462,6 +521,8 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
         marks[key].currentIndexChanged.connect(on_idx)
     for key, _ in _MARKER_ATTRS:
         _wire_marker(key)
+    chk_fuse.toggled.connect(
+        lambda on: setattr(work, "show_fuse_cutouts", bool(on)))
     chk_legend.toggled.connect(lambda on: setattr(work, "show_legend", bool(on)))
     chk_zones.toggled.connect(lambda on: setattr(work, "show_zone_labels", bool(on)))
     chk_outages.toggled.connect(lambda on: setattr(work, "show_outages", bool(on)))
@@ -649,6 +710,11 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
     if names_book and active["name"] in names_book:
         work = MapStyle.from_dict(names_book[active["name"]].as_dict())
     _load(work)
+
+    # جا دادن پنجره در صفحه و وسط‌چین کردن آن (دکمه OK همیشه دیده شود)
+    from PySide6.QtCore import QTimer
+    fit_dialog_to_screen(dlg)
+    QTimer.singleShot(0, lambda: fit_dialog_to_screen(dlg))
 
     dlg.result_style = lambda: MapStyle.from_dict(work.as_dict())  # type: ignore
     dlg.result_book = lambda: {k: v.as_dict()

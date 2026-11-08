@@ -142,7 +142,10 @@ def test_show_result_fills_tables_and_enables_map(app):
              for i in range(detail.rowCount())]
     assert sum(marks) == len(selected_ids := [c.node for f in study.feeders
                                               if f.best for c in f.best.selected])
-    assert "روش جایابی بهینهٔ کلید" in tab.panel.toPlainText()
+    # سرصفحهٔ گزارش دقیقاً نوع مطالعه را می‌گوید (v1.15)
+    text = tab.panel.toPlainText()
+    assert "مطالعهٔ جایابی بهینهٔ کلید و کاهش EENS" in text
+    assert "نوع مطالعه" in text and "نوع EENS" in text
     selected = tab.selected_nodes()
     assert selected and all(isinstance(n, str) for n in selected)
     assert tab.btn_map.isEnabled()

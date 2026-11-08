@@ -58,11 +58,33 @@ class StudyModel:
     crosscheck: dict = field(default_factory=dict)  # persisted-vs-fresh result
     #: (code, severity, message_fa) triples appended by the report layer
     extra_issues: list = field(default_factory=list)
+    #: مطالعهٔ جایابی کلید / EENS ذخیره‌شده در پروژه
+    #: (``project_kv['sectionalizer_study']``) — وقتی پر باشد، گزارش نهایی
+    #: فقط همان مطالعه را مستند می‌کند (درخواست کاربر v1.15).
+    eens_study: dict = field(default_factory=dict)
+    #: نوع مطالعهٔ فعال: auto | eens | placement
+    study_type: str = "auto"
     #: جایابی دستی مهندس (درخواست کاربر، مورد ۶) — لیست dict خروجی
     #: ManualEvaluation.as_dict(): feeder_key / switch_nodes / before /
     #: after / delta / ce_cn / verdict_fa — وقتی غیرخالی باشد بخش
     #: «جایابی دستی» به گزارش اضافه می‌شود.
     manual_evals: list = field(default_factory=list)
+
+    # ------------------------------------------------------------------
+    # study type
+    # ------------------------------------------------------------------
+    @property
+    def has_eens_study(self) -> bool:
+        """آیا مطالعهٔ EENS ذخیره‌شده‌ای برای گزارش وجود دارد؟"""
+        from .eens_report import is_eens_study
+        return is_eens_study(self.eens_study)
+
+    @property
+    def active_study(self) -> str:
+        """نوع مطالعهٔ گزارش: ``eens`` یا ``placement`` (دقیقاً یکی)."""
+        if self.study_type in ("eens", "placement"):
+            return self.study_type
+        return "eens" if self.has_eens_study else "placement"
 
     # ------------------------------------------------------------------
     # identity / metadata

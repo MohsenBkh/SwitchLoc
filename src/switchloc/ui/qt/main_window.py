@@ -2431,8 +2431,13 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
         def work():
             from ...reporting.service import ExportSettings, ReportService
+            # نوع مطالعه‌ای که کاربر واقعاً اجرا کرده است: اگر آخرین اجرا
+            # «جایابی کلید/EENS» بوده، گزارش نهایی فقط همان مطالعه را
+            # مستند می‌کند (درخواست کاربر v1.15).
+            study_type = "eens" if state.get("sectionalizer") else "auto"
             settings = ExportSettings(out_dir=out_dir, formats=formats,
-                                      project_name=name, manual_evals=manual)
+                                      project_name=name, manual_evals=manual,
+                                      study_type=study_type)
             if plc is not None and net is not None and topo is not None:
                 return ReportService(settings).run(
                     db_path=db, net=net, topo=topo, placement=plc.result,
@@ -2606,6 +2611,65 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             return
         cfg = dict(sec_tab.settings() or {})
         state["sectionalizer_settings"] = cfg
+
+        # ---- ری‌چک کامل ورودی‌ها قبل از اجرا (درخواست کاربر v1.15) ----
+        # مشکل قبلی: موتور بی‌صدا با دادهٔ بار پیش‌فرض کار می‌کرد. اکنون
+        # همهٔ ورودی‌های مؤثر (نوع مطالعه، مدل بار، λ/r واقعی هر فیدر،
+        # زمان‌ها و پارامترهای جست‌وجو) در یک پنجره بازبینی می‌شوند و
+        # تا تأیید کاربر اجرایی انجام نمی‌شود.
+        preflight = None
+        try:
+            from ...application.study_preflight import preflight_from_settings
+            from ..qt.preflight_dialog import make_preflight_dialog
+            from ...persistence.store import ProjectStore
+            persisted_outages: dict = {}
+            try:
+                _st = ProjectStore(str(db))
+                try:
+                    persisted_outages = dict(_st.load_outages() or {})
+                finally:
+                    _st.close()
+            except Exception:                       # noqa: BLE001
+                persisted_outages = {}
+            topo_now = state.get("topo")
+            all_keys = sorted({getattr(t, "feeder_key", None)
+                               for t in (getattr(topo_now, "traces", None) or [])} - {None})
+            load_total = None
+            if topo_now is not None and state.get("net") is not None:
+                try:
+                    from ...reliability.load_model import (LoadModelSettings,
+                                                           build_node_loads)
+                    lm_in = dict(state.get("load_model") or {})
+                    lm_in.setdefault("level", "estimated")
+                    _loads = build_node_loads(
+                        topo_now.graph, state.get("net"),
+                        LoadModelSettings.from_dict(lm_in))
+                    load_total = sum(float(v or 0.0)
+                                     for v in _loads.node_kw.values())
+                except Exception:                   # noqa: BLE001
+                    load_total = None
+            backup_kw = {}
+            if float(cfg.get("backup_kw") or 0.0) > 0:
+                backup_kw = {k: float(cfg["backup_kw"])
+                             for k in (study_feeder_keys() or ())}
+            preflight = preflight_from_settings(
+                settings=cfg, load_model=state.get("load_model"),
+                load_total_kw=load_total,
+                feeders=list(study_feeder_keys() or ()),
+                all_feeders=all_keys,
+                persisted_outages=persisted_outages,
+                backup_kw=backup_kw)
+            dlg = make_preflight_dialog(win, preflight)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                sec_tab.set_busy(False, "اجرا توسط کاربر لغو شد.")
+                return
+        except Exception as exc:                    # noqa: BLE001
+            # اگر خود پنجرهٔ ری‌چک خطا داد، اجرا متوقف نمی‌شود اما بی‌صدا
+            # هم رد نمی‌شود.
+            QMessageBox.warning(
+                win, "ری‌چک ورودی‌ها",
+                f"پنجرهٔ بازبینی ورودی‌ها باز نشد: {exc}\n"
+                "اجرا با همان تنظیمات فعلی ادامه می‌یابد.")
         engine = SwitchPlacementSettings(
             switch_type=str(cfg.get("switch_type", "sectionalizer")),
             total_failure_rate_per_year=float(

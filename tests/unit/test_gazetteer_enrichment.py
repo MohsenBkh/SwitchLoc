@@ -148,12 +148,15 @@ def test_bundled_bank_has_cities_aliases_and_metadata():
     assert bank_path.is_file(), "بانک آفلاین اردبیل از مخزن حذف شده است"
     bank = PlaceGazetteer(bank_path)
     stats = bank.stats()
-    assert stats["places"] >= 1032
-    assert stats["by_type"].get("city", 0) >= 15, "شهرها باید در بانک باشند"
+    assert stats["places"] >= 2220, "بانک باید شامل مکان‌های Village.shp باشد"
+    assert stats["by_type"].get("city", 0) >= 32, "شهرها باید در بانک باشند"
+    assert stats["by_type"].get("village", 0) >= 2181
     assert stats["aliases"] >= 250
-    allowed = ("high-confidence", "GeoNames")
+    allowed = ("high-confidence", "GeoNames", "Village.shp")
     assert all(any(mark in s for mark in allowed)
                for s in stats["by_source"]), stats["by_source"]
+    assert stats["by_source"]["Village.shp — بانک آبادی‌های کشور (۲۰۰۹، "
+                               "ورودی کاربر)"] >= 1188
     assert stats["metadata"].get("built_at")
     # نمونه‌های عملیاتی: شهر مرکز استان و یک روستای پروژهٔ کوثر
     assert bank.search("اردبیل")[0].place.place_type == "city"
@@ -183,10 +186,11 @@ def test_shipped_official_and_gap_files_are_consistent():
 
     with open(gap, encoding="utf-8", newline="") as f:
         miss = list(csv.DictReader(f))
-    assert len(miss) == 840
+    assert len(miss) == 430, "پس از غنی‌سازی v1.15 باید ۴۳۰ ردیف بماند"
     assert all(not r["lat"] and not r["lon"] for r in miss), \
         "مختصات نباید برای جاهای تکمیل‌نشده پر شود"
-    assert sum(1 for r in miss if r["type"] == "city") == 17
+    # ۵ شهر واقعی + ۵ «منطقهٔ شهرداری اردبیل» (که شهر نیستند)
+    assert sum(1 for r in miss if r["type"] == "city") == 10
 
     # هر ردیف غایب، «همان نام» را در بانک ندارد (تطبیق جزئی مجاز است؛ ردیف
     # غایب فقط یعنی نام یکتا/فشردهٔ آن در بانک نیست).

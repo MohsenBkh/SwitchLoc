@@ -106,6 +106,11 @@ class MapStyle:
     sec_color: str = "#00897b"
     sec_size: float = 27.0
     sec_marker: str = "^"
+    #: نمایش فیوز کات‌اوت‌ها روی نقشه — پیش‌فرض **خاموش** (درخواست کاربر):
+    #: فیوزها فقط وقتی دیده می‌شوند که کاربر صریحاً روشن کند (از فهرست
+    #: کلیدهای نقشه یا از پنجرهٔ تنظیمات نمایشی). رندر گزارش هم همین
+    #: پیش‌فرض را دارد، مگر اینکه فهرست صریح کلیدهای پنهان داده شود.
+    show_fuse_cutouts: bool = False
     unknown_device_color: str = "#424242"
     unknown_device_size: float = 18.0
     unknown_device_marker: str = "P"
@@ -146,7 +151,9 @@ class MapStyle:
     show_outage_links: bool = True
     # -- توزیع رنگی مسیر فیدرها بر اساس تکرار خاموشی (DIgSILENT-style) ----
     outage_heat_enabled: bool = False
-    outage_heat_radius_m: float = 300.0
+    #: شعاع اثر هر خاموشی بر یال‌های فیدر (متر) — پیش‌فرض ۵۰۰۰ و **بدون
+    #: سقف** (درخواست کاربر: عدد بزرگ‌تر از ۵۰۰۰ هم پذیرفته می‌شود).
+    outage_heat_radius_m: float = 5000.0
     outage_heat_width: float = 2.4
     outage_heat_alpha: float = 0.95
     outage_heat_levels: list = field(

@@ -248,8 +248,11 @@ class NetworkMapRenderer:
                 capstyle="round", zorder=1))
 
         if show_devices:
+            # None = «تصمیم پیش‌فرض رندرر» (فیوزها پنهان)؛ مجموعهٔ صریح
+            # (حتی خالی) یعنی انتخاب کاربر/نقشهٔ تعاملی مقدم است.
             self._draw_devices(ax, feeder_filter,
-                               hidden_switch_ids=set(hidden_switch_ids or ()))
+                               hidden_switch_ids=(None if hidden_switch_ids is None
+                                                  else set(hidden_switch_ids)))
 
         # Highlight the complete selected zone on top of feeder lines. A
         # zone is a set of network edges, not a polygon; use the exact GIS
@@ -676,6 +679,11 @@ class NetworkMapRenderer:
     def _draw_devices(self, ax, feeder_filter,
                       hidden_switch_ids: set[str] | None = None) -> None:
         st = self.style
+        # فیوز کات‌اوت‌ها به‌صورت پیش‌فرض رسم نمی‌شوند (درخواست کاربر).
+        # اگر فراخوان فهرست صریح کلیدهای پنهان را بدهد (نقشهٔ تعاملی)،
+        # تصمیم او مقدم است و همین‌جا چیزی حذف نمی‌شود.
+        hide_fuses = (not getattr(st, "show_fuse_cutouts", False)
+                      and hidden_switch_ids is None)
         hidden_switch_ids = set(hidden_switch_ids or ())
         pts_src, pts_tf = [], []
         by_code: dict[tuple[str, bool], list[tuple[float, float]]] = {}
@@ -695,6 +703,8 @@ class NetworkMapRenderer:
                 if sw is None:
                     continue
                 code = switch_display_code(sw)
+                if hide_fuses and code == "FCT":
+                    continue
                 is_open = ((sw.normally_state or "").strip().upper() == "NO"
                            or sw.current_state == SwitchState.OUT_OF_SERVICE
                            or sid in self.tie_switch_ids)
@@ -731,6 +741,14 @@ class NetworkMapRenderer:
         for node, sids in self.graph.switch_ids_at.items():
             if not any(sid not in hidden_switch_ids for sid in sids):
                 continue
+            if hide_fuses:
+                # اگر تنها تجهیز این گره فیوز است و فیوزها پنهان‌اند،
+                # نشانگر عمومی ترمینال ترانس هم نباید رسم شود.
+                visible = [self.switches.get(sid) for sid in sids
+                           if sid not in hidden_switch_ids]
+                if visible and all(sw is not None and switch_display_code(sw) == "FCT"
+                                   for sw in visible):
+                    continue
             if not self.graph.transformer_ids_at.get(node):
                 continue
             gn = self.graph.nodes.get(node)

@@ -48,6 +48,10 @@ class ExportSettings:
     project_name: str = ""
     #: نتایج جایابی دستی (dict های ManualEvaluation.as_dict — مورد ۶)
     manual_evals: list = field(default_factory=list)
+    #: نوع مطالعهٔ گزارش: ``auto`` (پیش‌فرض) | ``eens`` | ``placement``
+    #: در حالت auto، اگر مطالعهٔ جایابی کلید/EENS در پروژه ذخیره شده باشد،
+    #: گزارش نهایی فقط همان مطالعه را مستند می‌کند (درخواست کاربر v1.15).
+    study_type: str = "auto"
 
 
 @dataclass
@@ -98,7 +102,9 @@ class ReportService:
                        placement_run_id=placement_run_id or "",
                        crosscheck=crosscheck,
                        project_name=self.settings.project_name or "",
-                       manual_evals=list(self.settings.manual_evals or []))
+                       manual_evals=list(self.settings.manual_evals or []),
+                       eens_study=self._load_eens_study(db_path, issues),
+                       study_type=str(self.settings.study_type or "auto"))
 
         if db_path:
             crosscheck = self._crosscheck(db_path, placement)
@@ -142,6 +148,30 @@ class ReportService:
                             verdict="PASS" if not errors else "FAIL")
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _load_eens_study(db_path: str | None, issues: list) -> dict:
+        """مطالعهٔ جایابی کلید/EENS ذخیره‌شده در پروژه (یا dict خالی)."""
+        if not db_path:
+            return {}
+        try:
+            from ..persistence.store import ProjectStore
+            from ..application.switch_placement_service import KV_KEY
+            store = ProjectStore(str(db_path))
+            try:
+                payload = store.get_kv(KV_KEY)
+            finally:
+                store.close()
+        except Exception as exc:                       # noqa: BLE001
+            issues.append(("PHASE5-EENS-KV", "Information",
+                           f"خواندن مطالعهٔ EENS ذخیره‌شده ناموفق بود: {exc}"))
+            return {}
+        if not payload:
+            return {}
+        issues.append(("PHASE5-EENS-STUDY", "Information",
+                       "مطالعهٔ جایابی کلید/EENS ذخیره‌شده پیدا شد؛ گزارش "
+                       "نهایی بر اساس همین مطالعه ساخته می‌شود."))
+        return dict(payload)
+
     def _rerun(self, db_path: str, issues: list):
         """Fresh in-memory pipeline (persist=False) + persisted run id."""
         from ..application.placement_service import (

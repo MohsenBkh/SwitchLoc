@@ -134,13 +134,25 @@ class SwitchPlacementService:
 
     def __init__(self, settings: SwitchPlacementAppSettings | None = None):
         self.settings = settings or SwitchPlacementAppSettings()
+        #: λ حل‌شدهٔ هر فیدر در آخرین اجرا (برای گزارش/بازبینی)
+        self._resolved_rates: dict = {}
+        self._resolved_repair_times: dict = {}
 
     # ------------------------------------------------------------------
     def run(self, db_path: str, *, net=None, topo=None,
             outage_lambda: dict | None = None) -> SwitchPlacementAppResult:
         st = self.settings
-        store = ProjectStore(db_path) if net is None else None
         warnings: list[str] = []
+        # باگ v1.14: وقتی شبکه از حافظه (رابط کاربری) می‌آمد، store ساخته
+        # نمی‌شد و در نتیجه ماتریس λ/r واقعیِ خاموشی هرگز خوانده نمی‌شد؛
+        # موتور بی‌صدا با λ=۳۰ و r=۵۰ پیش‌فرض کار می‌کرد. اکنون store
+        # مستقل از منبع شبکه باز می‌شود (فقط اگر فایل پروژه موجود باشد).
+        store = None
+        if db_path and Path(str(db_path)).is_file():
+            try:
+                store = ProjectStore(str(db_path))
+            except Exception as exc:                    # noqa: BLE001
+                warnings.append(f"پایگاه دادهٔ پروژه باز نشد: {exc}")
         try:
             if net is None:
                 runs = store.runs()
@@ -186,6 +198,10 @@ class SwitchPlacementService:
             "method_fa": EENS_METHOD_FA.get(st.method, st.method),
             "failure_rate_source": st.failure_rate_source,
             "failure_rates_input": dict(st.failure_rates or {}),
+            "failure_rates_resolved": {k: round(v, 6) for k, v in
+                                       (self._resolved_rates or {}).items()},
+            "repair_times_resolved": {k: round(v, 3) for k, v in
+                                      (self._resolved_repair_times or {}).items()},
             "backup_kw": dict(st.backup_kw or {}),
             "feeder_keys": list(st.feeder_keys or ()),
             "load_model": dict(st.load_model or {}),
@@ -252,7 +268,7 @@ class SwitchPlacementService:
                 if key and r_val is not None and float(r_val) > 0:
                     r_by_feeder[key] = float(r_val)
         if source == "outage":
-            rates = outage_rates
+            rates = dict(outage_rates)
             missing = [k for k in self._feeder_keys(net, topo)
                        if k not in outage_rates]
             if missing:
@@ -273,6 +289,7 @@ class SwitchPlacementService:
             if norm and value is not None:
                 rates[norm] = float(value)
         self._resolved_rates = dict(rates)
+        self._resolved_repair_times = dict(r_by_feeder)
 
         # ---- نرخ خطای گذرا (فقط ریکلوزر) -------------------------------
         transient_rates: dict[str, float] = dict(st.transient_rates or {})
@@ -364,6 +381,19 @@ class SwitchPlacementService:
             k: round(v, 3) for k, v in repair_times.items()}
         study.settings["transient_rates"] = {
             k: round(v, 6) for k, v in transient_rates.items()}
+        all_keys = self._feeder_keys(net, topo)
+        studied = [f.feeder_key for f in (study.feeders or [])]
+        if not studied:
+            scope = "none"
+        elif len(studied) <= 1:
+            scope = "single"
+        elif set(studied) >= set(all_keys):
+            scope = "all"
+        else:
+            scope = "multi"
+        study.settings["study_scope"] = scope
+        study.settings["studied_feeders"] = list(studied)
+        study.settings["all_feeders"] = list(all_keys)
         study.settings["load_model_level"] = level_used
         study.settings["load_model_total_kw"] = round(
             sum(node_load_kw.values()), 3)

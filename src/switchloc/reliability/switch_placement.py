@@ -70,6 +70,20 @@ DEFAULT_MAX_DOWNSTREAM_LOAD_RATIO = 0.80
 DEFAULT_MIN_CANDIDATE_DEPTH = 3
 
 #: مدل‌های مجاز بازیابی
+#: نوع مطالعه بر اساس فیدرهای انتخاب‌شده (گزارش بر همین اساس ساخته می‌شود)
+STUDY_SCOPE_FA = {
+    "single": "تک‌فیدره",
+    "multi": "چندفیدره",
+    "all": "کلی (همهٔ فیدرهای مدل‌شده)",
+    "none": "بدون فیدر",
+}
+#: نام کوتاه روش‌های EENS (برای سرصفحهٔ گزارش)
+EENS_METHOD_NAME_FA = {
+    "directional": "دایرکشنال (جهت‌دار)",
+    "uniform": "یکنواخت (هم‌ارز کد مرجع)",
+    "manual": "دستی (ورودی کاربر)",
+}
+
 RESTORATION_MODELS = ("uniform", "directional")
 RESTORATION_MODEL_FA = {
     "uniform": "یکنواخت (هم‌ارز کد مرجع PowerFactory)",
@@ -854,29 +868,154 @@ class SwitchPlacementStudy:
             "summary_rows": self.summary_rows(),
         }
 
+    # -- گزارش ---------------------------------------------------------
+    def study_profile(self) -> dict:
+        """نوع مطالعهٔ انجام‌شده — گزارش دقیقاً بر همین اساس ساخته می‌شود.
+
+        ``study_scope``: single (تک‌فیدره) / multi (چندفیدره) / all (کلی)؛
+        ``method``: directional | uniform | manual (نوع EENS)؛
+        ``level``: سطح مدل بار (level-1 = actual / scaled / estimated).
+        """
+        st = self.settings or {}
+        studied = list(st.get("studied_feeders") or
+                       [f.feeder_key for f in self.feeders])
+        all_keys = list(st.get("all_feeders") or [])
+        if not studied:
+            scope = "none"
+        elif len(studied) <= 1:
+            scope = "single"
+        elif all_keys and set(studied) >= set(all_keys):
+            scope = "all"
+        else:
+            scope = "multi"
+        method = st.get("method") or st.get("restoration_model") or "uniform"
+        return {
+            "scope": scope,
+            "scope_fa": STUDY_SCOPE_FA.get(scope, scope),
+            "method": method,
+            "method_fa": (st.get("method_fa")
+                          or EENS_METHOD_NAME_FA.get(method, method)),
+            "switch_type": st.get("switch_type", "sectionalizer"),
+            "switch_type_fa": st.get("switch_type_fa",
+                                     SWITCH_TYPE_FA.get(st.get("switch_type",
+                                                               ""), "")),
+            "level": st.get("load_model_level", ""),
+            "studied_feeders": studied,
+            "all_feeders": all_keys,
+            "default_lambda": st.get("total_failure_rate_per_year"),
+            "default_repair": st.get("repair_time_min"),
+            "restoration_time": st.get("restoration_time_min"),
+        }
+
+    def rate_rows(self) -> list[dict]:
+        """λ و r مؤثر هر فیدر + منبع هر عدد (بدون عدد پنهان)."""
+        out = []
+        rates = (self.settings or {}).get("failure_rates") or {}
+        reps = (self.settings or {}).get("repair_time_by_feeder") or {}
+        for f in self.feeders:
+            out.append({
+                "feeder_key": f.feeder_key,
+                "lambda_per_year": round(f.failure_rate_per_year, 4),
+                "lambda_source": f.failure_rate_source,
+                "repair_time_min": round(f.repair_time_min, 3),
+                "repair_source": ("outage-r" if f.feeder_key in reps
+                                  else "configured-default"),
+                "transient_rate": round(f.transient_rate_per_year, 4),
+                "from_outage": round(rates.get(f.feeder_key, 0.0), 4),
+            })
+        return out
+
+    def formulations(self) -> list[str]:
+        """همهٔ فرمول‌بندی موتور برای روش/نوع کلید همین مطالعه (متنی)."""
+        st = self.settings or {}
+        method = (st.get("method") or st.get("restoration_model") or "uniform")
+        out = [
+            "λ_i = λ_fid × L_i / ΣL  — توزیع نرخ خرابی متناسب طول خط "
+            "(قاعدهٔ کد مرجع).",
+            "U_i = λ_i / 60 × r  — ساعت خاموشی سالانهٔ هر قطعه.",
+        ]
+        if method == "directional":
+            out += [
+                "EENS = Σ_i (λ_i/60) × [ r·P_i + s·min(P_down,i, C_bak) "
+                "+ r·(P_down,i − min(P_down,i, C_bak)) ]",
+                "  ↳ P_i بار خود قطعهٔ معیوب، P_down,i مجموع بار قطعه‌های "
+                "پایین‌دست، s = min(زمان بازیابی, زمان تعمیر) — بار بالادست "
+                "اصلاً بی‌برق نمی‌شود (مدل جهت‌دار).",
+            ]
+        else:
+            out += [
+                "EENS = Σ_i (λ_i/60) × [ r·P_i + s·min(P_ok,i, C_bak) "
+                "+ r·(P_ok,i − min(P_ok,i, C_bak)) ]",
+                "  ↳ P_ok,i = ΣP − P_i بار سالم فیدر، s = min(زمان بازیابی, "
+                "زمان تعمیر) — همهٔ بار سالم با مانور برمی‌گردد (مدل یکنواخت "
+                "هم‌ارز کد مرجع).",
+            ]
+        if st.get("uses_transient_faults") or st.get("switch_type") == "recloser":
+            out += [
+                "EENS_گذرا = Σ_i (λ_tr,i/60) × [ (ΣP − P_prot,i)·t_tr "
+                "+ P_prot,i·(t_rec + (1−p)·t_tr) ]",
+                "  ↳ λ_tr,i سهم گذرای قطعه، P_prot,i بار پایین‌دست ریکلوزرِ "
+                "حاکم، t_tr وقفهٔ گذرا، t_rec زمان وصل مجدد و p احتمال "
+                "موفقیت وصل مجدد.",
+            ]
+        out += [
+            "EENS کل = EENS دائمی + EENS گذرا.",
+            "کاهش٪ = 100 × (EENS پایه − EENS نهایی) / EENS پایه.",
+            "کلیدها حریصانه و گام‌به‌گام نصب می‌شوند: در هر گام کاندیدی که "
+            "بیشترین کاهش EENS را بدهد انتخاب می‌شود (توقف با بهبود "
+            "ناچیز).",
+        ]
+        return out
+
     def to_markdown(self) -> str:
+        """گزارش Markdown — دقیقاً منطبق با نوع مطالعهٔ انجام‌شده."""
+        prof = self.study_profile()
         s = self.settings
         lines = [
-            "# روش جایابی بهینهٔ کلید و کاهش EENS",
+            f"# مطالعهٔ جایابی بهینهٔ کلید و کاهش EENS — "
+            f"{prof['scope_fa']}",
             "",
-            f"λ پیش‌فرض هر فیدر: {s.get('total_failure_rate_per_year')} خرابی/سال · "
-            f"زمان تعمیر: {s.get('repair_time_min')} دقیقه · "
-            f"زمان بازیابی: {s.get('restoration_time_min')} دقیقه · "
-            f"نوع کلید: {s.get('switch_type_fa', s.get('switch_type'))} · "
-            f"سقف کلید هر فیدر: {s.get('max_sectionalizers')}",
+            f"**نوع مطالعه:** {prof['scope_fa']} · "
+            f"**نوع EENS:** {prof['method_fa']} · "
+            f"**نوع کلید:** {prof['switch_type_fa']} · "
+            f"**سطح مدل بار:** {prof['level'] or '—'}",
             "",
-            f"مدل بازیابی: {s.get('restoration_model_fa', s.get('restoration_model'))}",
+            f"**فیدرهای مطالعه:** {', '.join(prof['studied_feeders']) or '—'}"
+            + (f" (از {len(prof['all_feeders'])} فیدر مدل‌شده)"
+               if prof["scope"] != "all" and prof["all_feeders"] else ""),
             "",
-            "| فیدر | طول (km) | بار (kW) | λ (۱/سال) | منبع λ | قطعه موجود | "
-            "کاندید | EENS پایه (MWh/سال) | تعداد کلید پیشنهادی | EENS نهایی "
-            "(MWh/سال) | کاهش (٪) | خطوط پیشنهادی |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|",
+            f"λ پیش‌فرض تنظیمات: {s.get('total_failure_rate_per_year')} "
+            f"خرابی/سال · زمان تعمیر پیش‌فرض: {s.get('repair_time_min')} "
+            f"دقیقه · زمان بازیابی بار سالم: {s.get('restoration_time_min')} "
+            f"دقیقه · سقف کلید هر فیدر: {s.get('max_sectionalizers')}",
+            "",
+            "> λ و r هر فیدر از **ماتریس λ/r خاموشی‌های واقعی پروژه** خوانده "
+            "می‌شود؛ تنها برای فیدرهایی که دادهٔ واقعی ندارند مقدار پیش‌فرض "
+            "با برچسب `configured-default` به‌کار می‌رود (جدول زیر).",
+            "",
+            "## λ و r مؤثر هر فیدر (با منبع هر عدد)",
+            "",
+            "| فیدر | λ (خرابی/سال) | منبع λ | r (دقیقه) | منبع r | λ گذرا |",
+            "|---|---|---|---|---|---|",
+        ]
+        for r in self.rate_rows():
+            lines.append(
+                f"| {r['feeder_key']} | {r['lambda_per_year']:.2f} | "
+                f"{r['lambda_source']} | {r['repair_time_min']:.1f} | "
+                f"{r['repair_source']} | {r['transient_rate']:.2f} |")
+        lines += [
+            "",
+            "## نتیجهٔ فیدرها",
+            "",
+            "| فیدر | طول (km) | بار (kW) | قطعه موجود | کاندید | "
+            "EENS پایه (MWh/سال) | کلید پیشنهادی | EENS نهایی (MWh/سال) | "
+            "کاهش (٪) | خطوط پیشنهادی |",
+            "|---|---|---|---|---|---|---|---|---|---|",
         ]
         for r in self.summary_rows():
             lines.append(
                 f"| {r['feeder_key']} | {r['line_length_km']:.2f} | "
-                f"{r['total_load_kw']:,.1f} | {r['failure_rate_per_year']:.2f} | "
-                f"{r['failure_rate_source']} | {r['existing_sections']} | "
+                f"{r['total_load_kw']:,.1f} | {r['existing_sections']} | "
                 f"{r['candidate_count']} | {r['baseline_eens_mwh']:.4f} | "
                 f"{r['selected_count']} | {r['best_eens_mwh']:.4f} | "
                 f"{r['improvement_percent']:.2f} | "
@@ -889,17 +1028,33 @@ class SwitchPlacementStudy:
             f"{self.total_selected} کلید).",
             "",
         ]
-        if self.assumptions:
-            lines.append("## فرض‌های صریح")
+        steps = [f for f in self.feeders if f.steps]
+        if steps:
+            lines += ["## گام‌های بهینه‌سازی (حریصانه)", "",
+                      "| فیدر | گام | EENS پس از گام (kWh/سال) | "
+                      "کاهش تجمعی (٪) | کلید افزوده |",
+                      "|---|---|---|---|---|"]
+            for f in steps:
+                for stp in f.steps:
+                    last = stp.selected[-1].label if stp.selected else "—"
+                    lines.append(
+                        f"| {f.feeder_key} | {stp.count} | "
+                        f"{stp.eens_kwh:,.1f} | "
+                        f"{stp.improvement_percent:.2f} | {last} |")
             lines.append("")
-            for a in self.assumptions:
-                lines.append(f"- {a}")
+        lines += ["## فرمول‌بندی محاسبات (همان روش اجراشده)", ""]
+        for f in self.formulations():
+            # خطوط توضیحی (با فاصلهٔ ابتدایی) به‌صورت ادامهٔ فرمول قبلی
+            # می‌آیند، نه بولت مستقل
+            lines.append(f if f.startswith("  ") else f"- {f}")
+        lines.append("")
+        if self.assumptions:
+            lines += ["## فرض‌های صریح", ""]
+            lines += [f"- {a}" for a in self.assumptions]
             lines.append("")
         if self.notes:
-            lines.append("## یادداشت‌ها")
-            lines.append("")
-            for n in self.notes:
-                lines.append(f"- {n}")
+            lines += ["## یادداشت‌ها و هشدارها", ""]
+            lines += [f"- {n}" for n in self.notes]
         return "\n".join(lines)
 
 

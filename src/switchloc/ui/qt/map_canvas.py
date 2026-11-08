@@ -708,6 +708,10 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._selected_zone = None
             self._manual_tie_pairs = []
             self._hidden_switch_ids: set[str] = set()
+            # انتخاب صریح کاربر (برای اینکه پیش‌فرض «فیوزها پنهان» انتخاب
+            # دستی او را در بازسازی فهرست از بین نبرد)
+            self._switch_user_shown: set[str] = set()
+            self._switch_user_hidden: set[str] = set()
             # لایهٔ خاموشی‌های دارای مختصات (درخواست کاربر)
             self._outage_points: list = []
             self._hidden_outage_ids: set[str] = set()
@@ -994,6 +998,20 @@ def make_map_canvas(parent=None, osm_fetch=None):
                     switch_rows.append((sid, f"{fk} | {subtype} | {title_part}"))
             valid_ids = {sid for sid, _ in switch_rows}
             self._hidden_switch_ids.intersection_update(valid_ids)
+            self._switch_user_shown &= valid_ids
+            self._switch_user_hidden &= valid_ids
+            # پیش‌فرض: فیوز کات‌اوت‌ها نمایش داده نمی‌شوند (درخواست کاربر)؛
+            # انتخاب صریح کاربر (روشن‌کردن از همین فهرست) بر پیش‌فرض مقدم است.
+            style_now = getattr(renderer, "style", None)
+            fuses_default_off = not bool(getattr(style_now, "show_fuse_cutouts",
+                                                 False))
+            fuse_ids = {sid for (sid, label) in switch_rows
+                        if label.split(" | ")[1:2] == ["FCT"]} \
+                if fuses_default_off else set()
+            self._hidden_switch_ids = (
+                (self._hidden_switch_ids - self._switch_user_shown)
+                | (fuse_ids - self._switch_user_shown)
+                | self._switch_user_hidden)
             self.switch_list.blockSignals(True)
             self.switch_list.clear()
             groups = {}
@@ -1251,8 +1269,12 @@ def make_map_canvas(parent=None, osm_fetch=None):
             if sid:
                 if item.checkState(0) == Qt.CheckState.Checked:
                     self._hidden_switch_ids.discard(sid)
+                    self._switch_user_shown.add(sid)
+                    self._switch_user_hidden.discard(sid)
                 else:
                     self._hidden_switch_ids.add(sid)
+                    self._switch_user_hidden.add(sid)
+                    self._switch_user_shown.discard(sid)
             else:
                 # parent category: apply its state to all children — ولی نه
                 # حالت نیمه‌انتخاب خودکار (AutoTristate) که Qt هنگام
@@ -1280,6 +1302,12 @@ def make_map_canvas(parent=None, osm_fetch=None):
                     child.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
                     if not visible: hidden.add(child.data(0, Qt.ItemDataRole.UserRole))
             self._hidden_switch_ids = hidden
+            self._switch_user_shown = set() if not visible else {
+                child.data(0, Qt.ItemDataRole.UserRole)
+                for i in range(self.switch_list.topLevelItemCount())
+                for child in (self.switch_list.topLevelItem(i).child(j)
+                              for j in range(self.switch_list.topLevelItem(i).childCount()))}
+            self._switch_user_hidden = set() if visible else set(hidden)
             self.switch_list.blockSignals(False)
             self.switch_count.setText(f"{total} کلید | {total-len(hidden)} قابل نمایش")
             self._apply()

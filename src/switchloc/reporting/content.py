@@ -88,6 +88,12 @@ def _money(v) -> str:
 
 
 def build_report(m: StudyModel, map_note: str = "") -> ReportDoc:
+    # ---- نوع مطالعه تعیین‌کنندهٔ محتوای گزارش است (درخواست کاربر v1.15):
+    # اگر مطالعهٔ جایابی کلید/EENS انجام شده باشد، گزارش نهایی فقط همان
+    # مطالعه را مستند می‌کند و بخش‌های فاز ۴ (n-1، رتبه‌بندی، جدول ۱۷،
+    # اقتصاد) به گزارش اضافه نمی‌شوند.
+    if m.active_study == "eens":
+        return _build_eens_report(m, map_note)
     k = m.kpis()
     snap = m.placement.settings
     verdict_fa = "قبول (PASS)" if m.verdict() == "PASS" else "رد (FAIL)"
@@ -620,3 +626,54 @@ def _build_calculations_section(m: StudyModel) -> Section:
             "Equation) و به همین شکل در قالب PDF نیز به‌صورت متن "
             "استاندارد آمده‌اند.",
         ])
+
+
+# ---------------------------------------------------------------------------
+# گزارش نهایی مطالعهٔ EENS — فقط همان مطالعه (بدون آیتم اضافی)
+# ---------------------------------------------------------------------------
+def _build_eens_report(m: StudyModel, map_note: str = "") -> ReportDoc:
+    """گزارش Word/PDF بر اساس مطالعهٔ جایابی کلید ذخیره‌شده در پروژه."""
+    from .eens_report import build_eens_sections
+
+    prof, sections = build_eens_sections(m.eens_study, map_note=map_note)
+    from ..reliability.load_model import LEVEL_FA
+    meta = [
+        ("نام پروژه", m.name),
+        ("تاریخ گزارش", datetime.now().strftime("%Y-%m-%d")),
+        ("نوع مطالعه", prof["scope_fa"]),
+        ("نوع محاسبهٔ EENS", prof["method_fa"]),
+        ("نوع کلید", prof["switch_type_fa"]),
+        ("مدل بار", LEVEL_FA.get(str(prof["level"]), prof["level_fa"])),
+        ("فیدرهای مطالعه", "، ".join(prof["studied_feeders"]) or "—"),
+        ("نرم‌افزار / نسخه", f"{APP_NAME} {__version__}"),
+        ("پایگاه داده پروژه", m.db_path or "—"),
+        ("سیستم مختصات تحلیل", m.crs_label),
+    ]
+    kpis = [
+        ("تعداد فیدر مطالعه‌شده", str(len(prof["studied_feeders"]))),
+        ("EENS پایه (MWh/سال)", f"{prof['baseline_mwh']:,.3f}"),
+        ("EENS پس از جایابی (MWh/سال)", f"{prof['best_mwh']:,.3f}"),
+        ("کاهش EENS (٪)", f"{prof['improvement']:.2f}"),
+        ("کلیدهای پیشنهادی", str(prof["switches"])),
+    ]
+    summary = Section(
+        id="eens_summary", title="۱. خلاصهٔ مدیریتی",
+        intro=[
+            f"این گزارش یک مطالعهٔ **{prof['scope_fa']}** از «جایابی "
+            f"بهینهٔ کلید و کاهش EENS» با روش **{prof['method_fa']}** و "
+            f"نوع کلید **{prof['switch_type_fa']}** است.",
+            f"EENS سالانه از {prof['baseline_mwh']:,.3f} به "
+            f"{prof['best_mwh']:,.3f} مگاوات‌ساعت کاهش می‌یابد "
+            f"(**{prof['improvement']:.2f}٪**) و برای این کاهش "
+            f"{prof['switches']} کلید پیشنهاد می‌شود. اعداد این گزارش "
+            "همان خروجی ذخیره‌شدهٔ موتور است و بازمحاسبه نشده‌اند.",
+        ],
+        tables=[Table("شاخص‌های کلیدی", ["شاخص", "مقدار"],
+                      [[a, b] for a, b in kpis])])
+    return ReportDoc(
+        title="گزارش مطالعهٔ جایابی بهینهٔ کلید و کاهش EENS",
+        subtitle=f"روش سطح اول TAV122-02/00 — نوع مطالعه: {prof['scope_fa']} · "
+                 f"EENS: {prof['method_fa']} · کلید: {prof['switch_type_fa']}",
+        meta=meta, kpis=kpis, sections=[summary] + sections,
+        footer=f"{APP_NAME} {__version__} — گزارش خودکار از خروجی موتور "
+               "جایابی کلید (بازتولیدپذیر با شناسهٔ اجرا).")
