@@ -386,6 +386,23 @@ def make_dashboard_tab(parent=None):
                     f"years {', '.join(map(str, o.get('years') or []))}.")
                 if cls:
                     lines.append(f"Classes — {cls}")
+                si = o.get("service_indices") or {}
+                if si.get("has_result"):
+                    per = "، ".join(
+                        f"{f['feeder_key']}: SAIFI {f['saifi']:.2f} / "
+                        f"SAIDI {f['saidi']:,.0f} دقیقه"
+                        for f in (si.get("feeders") or [])
+                        if f.get("events_counted"))
+                    lines.append(
+                        "<b>SAIDI/SAIFI (شاخص پیوستگی):</b> "
+                        f"نظام SAIFI <b>{si.get('saifi', 0):.2f}</b> قطع/سال · "
+                        f"SAIDI <b>{si.get('saidi', 0):,.0f}</b> دقیقه/سال · "
+                        f"CAIDI {si.get('caidi', 0):,.0f} دقیقه · "
+                        f"ASAI {100 * si.get('asai', 1):.4f}%"
+                        + (f"<br/>&nbsp;&nbsp;{per}" if per else "")
+                        + f" <span style='color:#666'>({si.get('aggregation')}"
+                        f"، مبنا {si.get('load_basis')}، انرژی "
+                        f"{str(si.get('energy_unit', '')).upper()})</span>")
             else:
                 lines.append("Outage data: not imported yet — import the "
                              "outage list or the per-feeder files (Data "

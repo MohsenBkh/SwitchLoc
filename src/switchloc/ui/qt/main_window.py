@@ -296,10 +296,53 @@ def fmt_outage_result(res) -> str:
                      f"({f.events_random} random events / "
                      f"{f.exposure_days or f.years_covered} "
                      f"{'days exposure' if f.exposure_days else 'years'})")
+    ind = getattr(res, "indices", None)
+    if ind is not None and getattr(ind, "feeders", None):
+        lines.append("")
+        lines.append("SAIDI/SAIFI :" if ind.has_result else
+                     "SAIDI/SAIFI : (نیاز به بار فیدر — محاسبه نشد)")
+        for f in ind.feeders:
+            if not f.events_counted:
+                lines.append(f"  - {f.feeder_key}: — "
+                             "(رخداد قابل محاسبه نداشت)")
+                continue
+            lines.append(
+                f"  - {f.feeder_key}: SAIFI={f.saifi:.2f} int/yr  "
+                f"SAIDI={f.saidi:,.1f} min/yr  CAIDI={f.caidi:.1f} min  "
+                f"ASAI={f.asai * 100:.4f}%  "
+                f"({f.events_counted}/{f.events_total} events, "
+                f"{f.exposure_years:.3f} yr)")
+        if ind.has_result:
+            lines.append(f"  = system: SAIFI={ind.saifi:.2f} int/yr  "
+                         f"SAIDI={ind.saidi:,.1f} min/yr  "
+                         f"CAIDI={ind.caidi:.1f} min  "
+                         f"ASAI={ind.asai * 100:.4f}%  "
+                         f"[{ind.aggregation}, {ind.load_basis}, "
+                         f"energy {ind.energy_unit.upper()}]")
     lines.append("")
     lines.append("Next: run Placement — it reads this λ/r matrix "
                  "(latest outage run) automatically.")
     return "\n".join(lines)
+
+
+def _feeder_load_kw(state) -> dict:
+    """بار هر فیدر (kW) برای شاخص‌های SAIDI/SAIFI.
+
+    منبع: P واردشده در «مدل بار» (همان P_load کاربر). اگر برای فیدری P
+    وارد نشده باشد، هیچ عددی ساخته نمی‌شود: شاخص آن فیدر فقط از قطع‌کننده
+    (بریکر/ریکلوزر) و به‌صورت «کف» محاسبه می‌شود و علتش در گزارش می‌آید.
+    """
+    from ...topology.tracing import feeder_id
+    out: dict = {}
+    model = dict(state.get("load_model") or {})
+    for key, val in (model.get("feeder_pq") or {}).items():
+        try:
+            p_kw = float((val or {}).get("p_kw") or 0.0)
+        except (TypeError, ValueError):
+            p_kw = 0.0
+        if p_kw > 0:
+            out[feeder_id(key)] = p_kw
+    return out
 
 
 def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
@@ -1228,11 +1271,13 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             return
         cov = dict(state.get("coverage") or {})
         db = state["db"]
+        feeder_loads = _feeder_load_kw(state)
 
         def work():
             return OutageService(OutageSettings(
                 user="ui-user", persist=True,
                 model_feeders=tuple(study_feeder_keys()),
+                feeder_load_kw=feeder_loads,
                 scope_feeder=(state.get("scope") if isinstance(state.get("scope"), str) else None),
                 scope_feeders=(tuple(state.get("scope") or [])
                                if isinstance(state.get("scope"), (list, tuple, set)) else ()),
@@ -1289,11 +1334,13 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             return
         cov = dict(state.get("coverage") or {})
         db = state["db"]
+        feeder_loads = _feeder_load_kw(state)
 
         def work():
             return OutageService(OutageSettings(
                 user="ui-user", persist=True,
                 model_feeders=tuple(study_feeder_keys()),
+                feeder_load_kw=feeder_loads,
                 per_feeder_files=dict(files),
                 scope_feeder=(state.get("scope") if isinstance(state.get("scope"), str) else None),
                 scope_feeders=(tuple(state.get("scope") or [])

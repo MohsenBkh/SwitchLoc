@@ -307,7 +307,12 @@ def summarize_outage(outage, feeder_keys=None) -> dict:
     if selected is not None:
         rows = [r for r in rows if r.get("feeder_key") in selected]
     if outage is None:
-        return {"available": False, "lambda_r": []}
+        return {"available": False, "lambda_r": [], "service_indices": None}
+    if isinstance(outage, dict):
+        persisted_indices = (outage.get("summary") or {}).get("service_indices")
+    else:
+        idx = getattr(outage, "indices", None)
+        persisted_indices = idx.as_dict() if idx is not None else None
     if isinstance(outage, dict):                 # persisted-store payload
         summary = outage.get("summary") or {}
         records = outage.get("records") or []
@@ -338,6 +343,7 @@ def summarize_outage(outage, feeder_keys=None) -> dict:
             "class_summary": classes if scoped_records_known else {},
             "years": years if scoped_records_known else [],
             "lambda_r": rows,
+            "service_indices": persisted_indices,
         }
     # OutageResult object
     records = list(getattr(outage, "records", []) or [])
@@ -358,6 +364,7 @@ def summarize_outage(outage, feeder_keys=None) -> dict:
                           (getattr(outage, "levels", {}).get("class_summary", {}) or classes)),
         "years": sorted({r.year for r in records if getattr(r, "year", None)}),
         "lambda_r": rows,
+        "service_indices": persisted_indices,
     }
 
 

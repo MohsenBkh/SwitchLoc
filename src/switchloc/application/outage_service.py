@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from .. import APP_NAME, TAV_REFERENCE, __version__
 from ..persistence.store import ProjectStore
 from ..reliability import lambdar
+from ..reliability.indices import compute_service_indices
 from ..reliability.classify import RULES_DOC, classify_all
 from ..reliability.coverage import compute_coverage
 from ..reliability.outages import read_outage_workbook
@@ -48,6 +49,13 @@ class OutageSettings:
     scope_feeder: str | None = None
     #: explicit multi-feeder study set; takes precedence over scope_feeder
     scope_feeders: tuple = ()
+    #: --- شاخص‌های پیوستگی (SAIDI/SAIFI) -------------------------------
+    #: بار هر فیدر (kW) برای استنتاج سهم مشترکین متأثر از «انرژی توزیع‌نشده»
+    feeder_load_kw: dict = field(default_factory=dict)
+    #: واحد «انرژی توزیع‌نشده»: auto | mwh | kwh (A-08 — اعلام‌نشده)
+    energy_unit: str = "auto"
+    #: تعداد مشترکین هر فیدر (اختیاری؛ فقط برای مشترک-دقیقه و تعداد قطع)
+    customers: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -61,6 +69,8 @@ class OutageResult:
     report: QcReport
     settings: dict
     outage_run_id: str | None = None
+    #: شاخص‌های پیوستگی SAIDI/SAIFI (reliability.indices.ServiceIndices)
+    indices: object | None = None
 
     @property
     def verdict(self) -> str:
@@ -242,6 +252,12 @@ class OutageService:
         lam = lambdar.feeder_lambda_r(records, st.model_feeders,
                                       coverage=coverage)
         levels = lambdar.as_dict(records, lam, coverage=coverage)
+        # شاخص‌های پیوستگی از همان رکوردها (SAIDI/SAIFI/CAIDI/ASAI)
+        indices = compute_service_indices(
+            records, model_feeders=st.model_feeders,
+            feeder_load_kw=st.feeder_load_kw, lam=lam, coverage=coverage,
+            energy_unit=st.energy_unit, customers=st.customers)
+        levels["service_indices"] = indices.as_dict()
 
         # 5) QC ------------------------------------------------------------
         class_summary = levels["class_summary"]
@@ -255,13 +271,14 @@ class OutageService:
             "years": sorted({r.year for r in records if r.year}),
             "coverage": levels.get("coverage"),
             "per_feeder_sources": reader_stats.get("sources", []),
+            "service_indices": indices.as_dict(),
         }
         rep = run_qc(summary, issues, project_name, None)
 
         result = OutageResult(
             records=records, reader_stats=reader_stats, rules=rules,
             lambda_r=lam, levels=levels, issues=issues, report=rep,
-            settings=self._settings_snapshot(st))
+            settings=self._settings_snapshot(st), indices=indices)
 
         # 6) persistence ----------------------------------------------------
         if st.persist and out_db:
@@ -294,6 +311,9 @@ class OutageService:
             },
             "per_feeder_files": dict(st.per_feeder_files or {}),
             "scope_feeder": st.scope_feeder,
+            "feeder_load_kw": dict(st.feeder_load_kw or {}),
+            "energy_unit": st.energy_unit,
+            "customers": dict(st.customers or {}),
         }
 
     # ------------------------------------------------------------------
@@ -330,6 +350,29 @@ class OutageService:
             f"| {d['feeder']} | {d['device']} | {d['events']} |"
             for d in l4_rows)
         rules_md = "\n".join(f"| `{k}` | {v} |" for k, v in RULES_DOC.items())
+        inf = getattr(res, "indices", None)
+        _indices_md = inf.to_markdown() if inf is not None else "—"
+        cust_md = ""
+        if inf is not None:
+            worst = "\n".join(
+                (f"| {f.feeder_key} | {f.worst_saifi:.1f} | {f.worst_saidi:,.0f} | "
+                 f"{f.events_whole_feeder} | {f.events_counted}/{f.events_total} |")
+                if f.has_data else
+                (f"| {f.feeder_key} | — | — | — | بدون داده |")
+                for f in inf.feeders)
+            notes_md = "\n".join(f"- {n}" for n in inf.notes)
+            cust_rows = "\n".join(
+                f"| {f.feeder_key} | {f.customer_interruptions:,.0f} | "
+                f"{f.customer_minutes:,.0f} |"
+                for f in inf.feeders if f.customer_minutes is not None)
+            cust_md = (
+                "**بدترین حالت (هر رخداد = قطع کل فیدر)**\n\n"
+                "| فیدر | SAIFI | SAIDI (دقیقه/سال) | رخداد تمام‌فیدر | "
+                "رخداد شمرده‌شده |\n|---|---|---|---|---|\n" + worst +
+                ("\n\n**مشترک-دقیقه (با تعداد مشترکین داده‌شده)**\n\n"
+                 "| فیدر | قطع مشترکین در سال | مشترک-دقیقه در سال |\n"
+                 "|---|---|---|\n" + cust_rows if cust_rows else "") +
+                "\n\n" + notes_md)
 
         md = f"""# گزارش تحلیل خاموشی‌ها — فاز ۳ (گام ۲ روش سطح اول، شکل ۵)
 
@@ -355,6 +398,17 @@ class OutageService:
 > U با لنگر رسمی V-03 سازگار است (جدول ۲۶: λ=۶٫۳۳، r=۳۶٫۶۳ → U=۳٫۸۶۶).
 > رخدادهای «برنامه‌ریزی‌شده» و رکوردهای داده ناکافی در λ دخیل نیستند؛
 > واحد انرژی در منبع اعلام نشده است (A-08).
+
+## ۲-ب. شاخص‌های پیوستگی — SAIDI / SAIFI / CAIDI / ASAI
+
+{_indices_md}
+
+{cust_md}
+
+> مبنا: سهم مشترکینِ متأثر از «انرژی توزیع‌نشده ÷ (بار فیدر × مدت قطع)»
+> استنتاج می‌شود (دادهٔ خاموشی ستون تعداد مشترکین ندارد — A-08). مخرج
+> همان زمان مواجههٔ λ است تا دو شاخص هم‌مبنا باشند. «بدترین حالت» یعنی
+> هر رخداد کل فیدر را قطع کند (بدون هیچ فرضی)؛ برای مقایسه می‌آید.
 
 ## ۳. قواعد طبقه‌بند (قابل بازبینی توسط مهندس)
 
@@ -401,6 +455,9 @@ class OutageService:
             "settings": res.settings,
             "summary": res.report.summary,
             "lambda_r": [f.as_dict() for f in res.lambda_r],
+            "service_indices": (res.indices.as_dict()
+                                if getattr(res, "indices", None) is not None
+                                else None),
             "levels": res.levels,
             "rule_counts": res.rules["rule_counts"],
             "issue_codes": dict(res.report.code_counts.most_common()),
