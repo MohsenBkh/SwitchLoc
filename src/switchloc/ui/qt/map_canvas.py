@@ -949,17 +949,38 @@ def make_map_canvas(parent=None, osm_fetch=None):
             selected_before = getattr(self, "_selected_feeders", None)
             self._feeder_model.blockSignals(True)
             self._feeder_model.clear()
+            from ...topology.tracing import match_feeders
+
+            def _resolve_selection(raw) -> set:
+                """انتخاب ذخیره‌شده/قبلی را به شناسه‌های فعلی نگاشت می‌کند.
+
+                نسخه‌های قبل فیدرها را با کلید کوتاه («F1») ذخیره می‌کردند؛
+                مقایسهٔ دقیق با شناسهٔ کامل («F1 - MESHKIN») مجموعهٔ خالی
+                می‌ساخت و نقشه هیچ فیدری (و هیچ تجهیزی) نشان نمی‌داد.
+                """
+                out = set()
+                for k in (raw or ()):
+                    out.update(match_feeders(str(k), keys))
+                return out
+
             if selected_before is None:
                 style_visible = getattr(getattr(renderer, "style", None),
                                         "visible_feeders", None)
                 if style_visible is not None:
-                    self._selected_feeders = set(style_visible).intersection(keys)
-                elif isinstance(feeder_filter, str) and feeder_filter in keys:
-                    self._selected_feeders = {feeder_filter}
+                    self._selected_feeders = _resolve_selection(style_visible)
+                    if style_visible and not self._selected_feeders:
+                        # انتخاب ذخیره‌شده به هیچ فیدر فعلی نمی‌خورد →
+                        # همه را نشان بده (نقشهٔ سفید راه‌حل نیست)
+                        self._selected_feeders = set(keys)
+                elif isinstance(feeder_filter, str) and feeder_filter:
+                    resolved = _resolve_selection([feeder_filter])
+                    self._selected_feeders = resolved or set(keys)
                 else:
                     self._selected_feeders = set(keys)
             else:
-                self._selected_feeders = set(selected_before).intersection(keys)
+                self._selected_feeders = _resolve_selection(selected_before)
+                if selected_before and not self._selected_feeders:
+                    self._selected_feeders = set(keys)
             if not keys:
                 # Keep the feeder selector usable before a network is loaded
                 # (and for a valid empty-graph renderer).  This is a display-

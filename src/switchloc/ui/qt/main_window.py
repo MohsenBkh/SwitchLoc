@@ -2487,9 +2487,18 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             # «جایابی کلید/EENS» بوده، گزارش نهایی فقط همان مطالعه را
             # مستند می‌کند (درخواست کاربر v1.15).
             study_type = "eens" if state.get("sectionalizer") else "auto"
+            outage_res = state.get("outage")
+            lam_rows = _lam_rows_of(outage_res)
+            idx_payload = {}
+            if outage_res is not None:
+                idx = getattr(outage_res, "indices", None)
+                if idx is not None and hasattr(idx, "as_dict"):
+                    idx_payload = idx.as_dict()
             settings = ExportSettings(out_dir=out_dir, formats=formats,
                                       project_name=name, manual_evals=manual,
-                                      study_type=study_type)
+                                      study_type=study_type,
+                                      outage_lambda=lam_rows,
+                                      feeder_indices=idx_payload)
             if plc is not None and net is not None and topo is not None:
                 return ReportService(settings).run(
                     db_path=db, net=net, topo=topo, placement=plc.result,

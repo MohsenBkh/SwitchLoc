@@ -191,11 +191,25 @@ class MapStyle:
 
     def palette_of(self, traces=None, feeders=None) -> dict[str, str]:
         """Effective feeder palette: automatic palette overlaid with the
-        user-chosen colours (a feeder added later still gets a colour)."""
+        user-chosen colours (a feeder added later still gets a colour).
+
+        رنگ‌های ذخیره‌شده در نسخه‌های قبل با کلید کوتاه («F1») نوشته
+        شده‌اند؛ آن‌ها روی شناسهٔ کامل فعلی («F1 - MESHKIN») نگاشت
+        می‌شوند تا رنگ انتخابی کاربر گم نشود، و انتخاب مبهم («F2» با دو
+        فیدر) روی هر دو فیدر اعمال می‌شود.
+        """
         pal = auto_palette(traces, feeders)
+        from ..topology.tracing import match_feeders
+        known = list(pal)
         for k, c in (self.feeder_colors or {}).items():
-            if c:
-                pal[k] = c
+            if not c:
+                continue
+            hits = match_feeders(k, known)
+            if hits:
+                for h in hits:
+                    pal[h] = c
+            else:
+                pal[k] = c          # فیدری که فعلاً در شبکه نیست — می‌ماند
         return pal
 
     def color_of(self, feeder_key: str) -> str:
@@ -206,6 +220,11 @@ class MapStyle:
         keys = sorted(self.feeder_colors or {})
         if feeder_key in keys:
             return self.feeder_colors[feeder_key]
+        # نگارش قدیمی (کلید کوتاه) → همان رنگ کاربر
+        from ..topology.tracing import match_feeders
+        for k in match_feeders(feeder_key, keys):
+            if self.feeder_colors.get(k):
+                return self.feeder_colors[k]
         # deterministic fallback identical to the auto palette
         known = [k for k in keys]
         try:

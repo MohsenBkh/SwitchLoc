@@ -368,10 +368,31 @@ def summarize_outage(outage, feeder_keys=None) -> dict:
     }
 
 
+def _indices_map(outage) -> dict:
+    """شاخص‌های پیوستگی هر فیدر (SAIDI/SAIFI/…) از OutageResult یا payload."""
+    payload = None
+    if isinstance(outage, dict):
+        payload = (outage.get("summary") or {}).get("service_indices") \
+            or outage.get("service_indices")
+    else:
+        idx = getattr(outage, "indices", None)
+        if idx is not None:
+            payload = idx.as_dict() if hasattr(idx, "as_dict") else None
+    if not payload:
+        return {}
+    out = {}
+    for row in payload.get("feeders") or []:
+        key = str(row.get("feeder_key") or "")
+        if key:
+            out[key] = row
+    return out
+
+
 def feeder_rows(traces, lam_rows: list[dict], snap: dict,
                 cap_map: dict | None = None,
                 plan_map: dict | None = None,
-                gis_tr: dict | None = None) -> list[dict]:
+                gis_tr: dict | None = None,
+                indices_map: dict | None = None) -> list[dict]:
     """One merged row per feeder — the heart of the dashboard.
 
     ``gis_tr``: ترانس‌ها بر اساس برچسب GIS (ترکیب رسمی فیدر) — ستون
@@ -394,6 +415,7 @@ def feeder_rows(traces, lam_rows: list[dict], snap: dict,
         cap = _pick(cap_map, k)
         plan = _pick(plan_map, k)
         g = _pick(gis_tr or {}, k)
+        ind = _pick(indices_map or {}, k) or {}
         rows.append({
             "feeder_key": k,
             "nodes": len(t.nodes),
@@ -417,6 +439,16 @@ def feeder_rows(traces, lam_rows: list[dict], snap: dict,
             "u_hours": float(lam.get("u_hours", 0.0) or 0),
             "exposure_days": lam.get("exposure_days"),
             "exposure_years": lam.get("exposure_years"),
+            # شاخص‌های پیوستگی (v1.17) — None یعنی «داده نداریم»، نه صفر
+            "saidi": (ind.get("saidi") if ind.get("events_counted") else None),
+            "saifi": (ind.get("saifi") if ind.get("events_counted") else None),
+            "caidi": (ind.get("caidi") if ind.get("events_counted") else None),
+            "asai": (ind.get("asai") if ind.get("events_counted") else None),
+            "ens_per_year_kwh": (ind.get("ens_kwh_per_year")
+                                 if ind.get("events_counted") else None),
+            "worst_saidi": (ind.get("worst_saidi")
+                            if ind.get("events_counted") else None),
+            "service_events": ind.get("events_total"),
             "ep_percent": ep.get("ep_percent", rk.get("ep_percent")),
             "tl_percent": ep.get("tl_percent", rk.get("tl_percent")),
             "total_load_kw": ep.get("total_load_kw"),
@@ -508,8 +540,13 @@ def build_dashboard(net: CanonicalNetwork | None = None,
     gis_tr = gis_transformer_map(net)
     if selected is not None:
         gis_tr = {k: v for k, v in gis_tr.items() if _in_scope(k, active_keys)}
+    indices_map = _indices_map(outage)
+    if selected is not None:
+        indices_map = {k: v for k, v in indices_map.items()
+                       if _in_scope(k, active_keys)}
     rows = feeder_rows(traces, lam_rows, snap, cap_map=cap_map,
-                       plan_map=plan_map, gis_tr=gis_tr)
+                       plan_map=plan_map, gis_tr=gis_tr,
+                       indices_map=indices_map)
     zone_load_by_feeder = {}
     for zr in zones_payload:
         fk = zr.get("feeder_key")

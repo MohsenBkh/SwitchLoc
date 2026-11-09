@@ -66,6 +66,36 @@ def draw_charts(fig, dash: dict) -> None:
                         wspace=0.25)
 
 
+def _build_chart_section():
+    """بخش نمودارها → (ویجت، {key: نمودار})؛ ایمپورت Qt تنبل است."""
+    from PySide6.QtWidgets import QGridLayout, QLabel, QVBoxLayout, QWidget
+    from .charts import BarChartWidget, CHART_METRICS
+
+    def build() -> tuple:
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+        head = QLabel("<b>نمودار شاخص‌های ارزیابی فیدرها</b> — SAIDI، SAIFI، "
+                      "CAIDI، ASAI، ENS/EENS، λ، r، U، بار، ظرفیت، طول و "
+                      "امتیاز رتبه‌بندی (هر میله یک فیدر)")
+        head.setWordWrap(True)
+        v.addWidget(head)
+        grid_holder = QWidget()
+        grid = QGridLayout(grid_holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(8)
+        charts = {}
+        for i, (key, title, unit, _scale) in enumerate(CHART_METRICS):
+            ch = BarChartWidget(title=title, unit=unit)
+            charts[key] = ch
+            grid.addWidget(ch, i // 2, i % 2)
+        v.addWidget(grid_holder)
+        return box, charts
+
+    return build
+
+
 def _fmt(v, spec: str = ":g") -> str:
     if v is None:
         return "—"
@@ -190,6 +220,8 @@ def make_dashboard_tab(parent=None):
             lay.setSpacing(6)
             lay.addLayout(grid)
             lay.addWidget(self.canvas)
+            self.chart_box, self.charts = _build_chart_section()()
+            lay.addWidget(self.chart_box)
             lay.addWidget(QLabel("<b>Feeder matrix — trace, λ/r, EP/TL, "
                                  "ENS, rank, selected scheme</b>"))
             lay.addWidget(self.feeder_table, 2)
@@ -235,6 +267,7 @@ def make_dashboard_tab(parent=None):
             draw_charts(self.fig, dash)
             self.canvas.draw_idle()
 
+            self._fill_charts(dash)
             self._fill_feeder_table(dash.get("feeders") or [])
             self._fill_recon_table(dash.get("reconciliation") or [])
             self._fill_zone_table(dash.get("zones") or [])
@@ -242,6 +275,16 @@ def make_dashboard_tab(parent=None):
             self._fill_notes(dash)
 
         # -- internals -----------------------------------------------------
+        def _fill_charts(self, dash: dict) -> None:
+            """همهٔ شاخص‌های ارزیابی فیدرها به‌صورت نمودار ستونی."""
+            charts = getattr(self, "charts", None)
+            if not charts:
+                return
+            from .charts import chart_items
+            rows = dash.get("feeders") or []
+            for key, chart in charts.items():
+                chart.set_data(chart_items(rows, key))
+
         def _fill_feeder_table(self, rows: list) -> None:
             from ..qt.widgets import fill_table
             headers = ["Feeder", "Nodes", "Edges", "km", "TR (مسیر تغذیه)",

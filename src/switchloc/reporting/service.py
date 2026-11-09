@@ -22,6 +22,7 @@ of the export never fails because of one channel.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from ..ui.map_renderer import NetworkMapRenderer
 from .content import build_report
@@ -48,6 +49,10 @@ class ExportSettings:
     project_name: str = ""
     #: نتایج جایابی دستی (dict های ManualEvaluation.as_dict — مورد ۶)
     manual_evals: list = field(default_factory=list)
+    #: ماتریس λ/r و شاخص‌های پیوستگی برای جدول «شاخص‌های فیدرها»؛ خالی =
+    #: از پروژهٔ ذخیره‌شده خوانده می‌شود (اگر موجود باشد).
+    outage_lambda: list = field(default_factory=list)
+    feeder_indices: dict = field(default_factory=dict)
     #: نوع مطالعهٔ گزارش: ``auto`` (پیش‌فرض) | ``eens`` | ``placement``
     #: در حالت auto، اگر مطالعهٔ جایابی کلید/EENS در پروژه ذخیره شده باشد،
     #: گزارش نهایی فقط همان مطالعه را مستند می‌کند (درخواست کاربر v1.15).
@@ -97,6 +102,13 @@ class ReportService:
         else:
             db_path = db_path or ""
 
+        outage_lambda = list(self.settings.outage_lambda or [])
+        feeder_indices = dict(self.settings.feeder_indices or {})
+        if db_path and not (outage_lambda and feeder_indices):
+            lam_store, idx_store = self._load_outage_data(db_path, issues)
+            outage_lambda = outage_lambda or lam_store
+            feeder_indices = feeder_indices or idx_store
+
         m = StudyModel(net=net, topo=topo, placement=placement,
                        db_path=str(db_path or ""),
                        placement_run_id=placement_run_id or "",
@@ -104,7 +116,9 @@ class ReportService:
                        project_name=self.settings.project_name or "",
                        manual_evals=list(self.settings.manual_evals or []),
                        eens_study=self._load_eens_study(db_path, issues),
-                       study_type=str(self.settings.study_type or "auto"))
+                       study_type=str(self.settings.study_type or "auto"),
+                       outage_lambda=outage_lambda,
+                       feeder_indices=feeder_indices)
 
         if db_path:
             crosscheck = self._crosscheck(db_path, placement)
@@ -123,6 +137,18 @@ class ReportService:
                 issues.append(("PHASE5-MAP-FAIL", "Warning",
                                f"ترسیم نقشه برای گزارش ناموفق بود: {exc}"))
 
+        charts_png = None
+        try:
+            from .figures import indices_figure
+            rows_idx = m.feeder_table()
+            if rows_idx:
+                charts_png = indices_figure(
+                    rows_idx,
+                    str(Path(st.out_dir) / "feeder_indices.png"))
+        except Exception as exc:                       # noqa: BLE001
+            issues.append(("PHASE5-CHART-FAIL", "Warning",
+                           f"ترسیم نمودار شاخص‌ها ناموفق بود: {exc}"))
+
         if "xlsx" in st.formats:
             paths["xlsx"] = export_workbook(
                 m, str(_out(st.out_dir, "SwitchLoc_study.xlsx")))
@@ -130,13 +156,13 @@ class ReportService:
             paths["docx"] = export_docx(
                 build_report(m, map_note=_MAP_NOTE if map_png else ""),
                 str(_out(st.out_dir, "SwitchLoc_report.docx")),
-                map_png=map_png)
+                map_png=map_png, charts_png=charts_png)
         if "pdf" in st.formats:
             try:
                 paths["pdf"] = export_pdf(
                     build_report(m, map_note=_MAP_NOTE if map_png else ""),
                     str(_out(st.out_dir, "SwitchLoc_report.pdf")),
-                    map_png=map_png)
+                    map_png=map_png, charts_png=charts_png)
             except PdfUnavailableError as exc:
                 issues.append(("PHASE5-PDF-SKIP", "Information", str(exc)))
         if "gis" in st.formats:
@@ -146,6 +172,33 @@ class ReportService:
         return ExportResult(paths=paths, crosscheck=crosscheck,
                             issues=issues,
                             verdict="PASS" if not errors else "FAIL")
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _load_outage_data(db_path: str | None,
+                          issues: list) -> tuple[list, dict]:
+        """ماتریس λ/r و شاخص‌های پیوستگی از آخرین اجرای خاموشی پروژه."""
+        if not db_path:
+            return [], {}
+        try:
+            from ..persistence.store import ProjectStore
+            store = ProjectStore(str(db_path))
+            try:
+                payload = store.load_outages()
+            finally:
+                store.close()
+        except Exception as exc:                       # noqa: BLE001
+            issues.append(("PHASE5-OUTAGE-DATA", "Information",
+                           f"دادهٔ خاموشی پروژه خوانده نشد: {exc}"))
+            return [], {}
+        lam = list(payload.get("lambda_r") or [])
+        summary = payload.get("summary") or {}
+        indices = summary.get("service_indices") or {}
+        if lam:
+            issues.append(("PHASE5-OUTAGE-DATA", "Information",
+                           f"{len(lam)} ردیف λ/r از پروژه برای جدول شاخص‌ها "
+                           "استفاده شد."))
+        return lam, dict(indices)
 
     # ------------------------------------------------------------------
     @staticmethod

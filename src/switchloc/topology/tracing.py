@@ -105,6 +105,26 @@ def resolve_feeder(name: str, candidates) -> str:
     return target
 
 
+def match_feeders(name: str, candidates) -> list[str]:
+    """همهٔ کاندیدهایی که با یک برچسب یکی‌اند (برای انتخاب‌های ذخیره‌شده).
+
+    مثل :func:`resolve_feeder` ولی **فهرست** برمی‌گرداند: اگر برچسب کوتاه
+    («F2») به دو فیدر بخورد، هر دو را می‌دهد (نمایش هر دو بهتر از نمایش
+    هیچ است)؛ اگر هیچ تطبیقی نبود، فهرست خالی.
+
+    برای فیلترهای نمایشی (لایهٔ فیدرهای نقشه، رنگ فیدر، دامنهٔ گزارش) که
+    مقادیر ذخیره‌شدهٔ نسخه‌های قبل با کلید کوتاه نوشته شده‌اند.
+    """
+    target = feeder_id(name)
+    if not target:
+        return []
+    cands = [str(c) for c in (candidates or ()) if str(c)]
+    exact = [c for c in cands if feeder_id(c) == target]
+    if exact:
+        return exact
+    return [c for c in cands if same_feeder(c, name)]
+
+
 def feeder_key(name: str) -> str:
     """Canonical short feeder identity: leading token, RTL-normalized.
 

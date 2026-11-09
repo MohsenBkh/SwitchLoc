@@ -30,11 +30,17 @@ from .map_style import (FEEDER_COLORS, MapStyle, UNKNOWN_COLOR)  # noqa: F401
 
 
 def _feeder_selected(feeder: str | None, selection) -> bool:
+    """آیا این فیدر در انتخاب فعلی است؟ (نگارش کوتاه/آراسته یکی است)
+
+    انتخاب ممکن است از نسخه‌های قبل با کلید کوتاه («F1») ذخیره شده باشد؛
+    مقایسهٔ دقیق آن را رد می‌کرد و نقشه هیچ فیدری نشان نمی‌داد.
+    """
+    from ..topology.tracing import same_feeder
     if selection is None:
         return True
     if isinstance(selection, (set, frozenset, list, tuple)):
-        return feeder in selection
-    return feeder == selection
+        return any(same_feeder(feeder or "", str(k)) for k in selection)
+    return same_feeder(feeder or "", str(selection))
 
 
 def feeder_palette(traces: list[FeederTrace],
@@ -671,8 +677,9 @@ class NetworkMapRenderer:
 
     # ------------------------------------------------------------------
     def _edge_in_feeder(self, eid: str, feeder_key: str) -> bool:
+        from ..topology.tracing import same_feeder
         for t in self.traces:
-            if t.feeder_key == feeder_key and eid in t.edges:
+            if same_feeder(t.feeder_key, feeder_key) and eid in t.edges:
                 return True
         return False
 
@@ -784,10 +791,9 @@ class NetworkMapRenderer:
                        label="MV/LV transformer")
 
     def _node_in_feeder(self, node: str, feeder_key: str) -> bool:
-        for t in self.traces:
-            if t.feeder_key == feeder_key and node in t.nodes:
-                return True
-        return False
+        from ..topology.tracing import same_feeder
+        return any(same_feeder(t.feeder_key, feeder_key) and node in t.nodes
+                   for t in self.traces)
 
     def _legend_handles(self, palette: dict[str, str],
                         feeder_filter,
