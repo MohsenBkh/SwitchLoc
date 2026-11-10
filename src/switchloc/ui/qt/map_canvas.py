@@ -655,7 +655,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
                                    QListWidgetItem, QPushButton, QSizePolicy,
                                    QVBoxLayout, QWidget, QToolButton, QMenu,
                                    QTreeWidget, QTreeWidgetItem, QFileDialog,
-                                   QSplitter, QMessageBox)
+                                   QSplitter, QMessageBox, QScrollArea)
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
     from matplotlib.figure import Figure
 
@@ -728,6 +728,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.canvas.on_view_changed = self._set_zoom_label
             self.canvas.on_zone_pick = self._on_zone_picked
 
+            self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
             root = QHBoxLayout(self)
             root.setContentsMargins(4, 4, 4, 4)
             root.setSpacing(6)
@@ -805,14 +806,19 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.left_split.setSizes([320, 280])
             left_col.addWidget(self.left_split, 1)
             self.outage_panel = outage_box
-            root.addWidget(left_col_holder, 0)
+            self.layer_panel = left_col_holder
 
             map_pane = QWidget()
             lay = QVBoxLayout(map_pane)
             lay.setContentsMargins(0, 0, 0, 0)
             lay.setSpacing(0)
-            strip = QHBoxLayout()
-            strip.setContentsMargins(4, 4, 4, 4)
+            tools = QWidget()
+            tools.setObjectName("MapTools")
+            tools.setStyleSheet("QWidget#MapTools { background: #16324F; } "
+                                "QWidget#MapTools QLabel, QWidget#MapTools QCheckBox { color: #C8D6E5; }")
+            strip = QVBoxLayout(tools)
+            strip.setContentsMargins(8, 8, 8, 8)
+            strip.setSpacing(6)
             strip.addWidget(self.btn_switch_panel)
             strip.addWidget(QLabel("Feeder:"))
             self.feeder = QComboBox()
@@ -834,7 +840,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.feeder.view().pressed.connect(self._toggle_feeder_index)
             self.feeder.setMinimumWidth(150)
             self.feeder.setMaximumWidth(150)
-            strip.addWidget(self.feeder, stretch=0)
+            strip.addWidget(self.feeder)
             strip.addWidget(QLabel("Zone:"))
             self.zone_filter = QComboBox()
             self.zone_filter.setMinimumWidth(180)
@@ -844,9 +850,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
             strip.addWidget(self.zone_filter)
 
             from .icons import icon as _map_icon
-            self.btn_zoom_feeder = QPushButton()
+            self.btn_zoom_feeder = QPushButton("Zoom to feeder")
             self.btn_zoom_feeder.setIcon(_map_icon("crosshair", size=18))
-            self.btn_zoom_feeder.setFixedSize(34, 32)
+            self.btn_zoom_feeder.setMinimumHeight(32)
             self.btn_zoom_feeder.setToolTip("Zoom to feeder")
             self.btn_zoom_feeder.setEnabled(False)
             self.btn_zoom_feeder.clicked.connect(self._zoom_to_feeder)
@@ -866,11 +872,10 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.osm.setFixedWidth(125)
             self.osm.toggled.connect(self._on_osm_toggle)
             strip.addWidget(self.osm)
-            strip.addStretch(1)
 
-            self.btn_region = QPushButton()
+            self.btn_region = QPushButton("Region zoom")
             self.btn_region.setIcon(_map_icon("search", size=18))
-            self.btn_region.setFixedSize(34, 32)
+            self.btn_region.setMinimumHeight(32)
             self.btn_region.setToolTip("Region zoom (magnifier)")
             self.btn_region.setCheckable(True)
             self.btn_region.setToolTip(
@@ -878,9 +883,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.btn_region.toggled.connect(self._on_region_toggle)
             strip.addWidget(self.btn_region)
 
-            self.btn_zoom_in = QPushButton()
-            self.btn_zoom_out = QPushButton()
-            self.btn_fit = QPushButton()
+            self.btn_zoom_in = QPushButton("Zoom in")
+            self.btn_zoom_out = QPushButton("Zoom out")
+            self.btn_fit = QPushButton("Fit view")
             self.btn_zoom_in.clicked.connect(
                 lambda: self.canvas._zoom_center(1.0 / WHEEL_STEP))
             self.btn_zoom_out.clicked.connect(
@@ -890,7 +895,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
                                 (self.btn_zoom_out, "zoom-out", "Zoom out"),
                                 (self.btn_fit, "maximize", "Fit view")):
                 b.setIcon(_map_icon(ico, size=18)); b.setToolTip(tip)
-                b.setFixedSize(34, 32); strip.addWidget(b)
+                b.setMinimumHeight(32); strip.addWidget(b)
             self.zoom_label = QLabel("Zoom: 0 % (1×)")
             self.zoom_label.setMinimumWidth(120)
             self.zoom_label.setAlignment(
@@ -906,15 +911,21 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.zone_info_label.setWordWrap(True)
             self.zone_info_label.setStyleSheet(
                 "padding:3px 6px; color:#37474f; background:#eceff1;")
-            lay.addLayout(strip)
-            lay.addWidget(self.hint_label)
-            lay.addWidget(self.zone_info_label)
+            strip.addWidget(self.hint_label)
+            strip.addWidget(self.zone_info_label)
+            strip.addStretch(1)
+            tool_scroll = QScrollArea()
+            tool_scroll.setWidgetResizable(True)
+            tool_scroll.setWidget(tools)
+            tool_scroll.setFixedWidth(205)
+            root.addWidget(tool_scroll, 0)
+            root.addWidget(left_col_holder, 0)
             lay.addWidget(self.canvas, 1)
             root.addWidget(map_pane, 1)
 
         def _toggle_switch_panel(self):
-            visible = self.switch_panel.isVisible()
-            self.switch_panel.setVisible(not visible)
+            visible = not self.layer_panel.isHidden()
+            self.layer_panel.setVisible(not visible)
             self.btn_switch_panel.setText("Show panel" if visible else "Hide panel")
 
         def show_network(self, renderer: NetworkMapRenderer,

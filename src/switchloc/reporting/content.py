@@ -482,6 +482,12 @@ def _feeder_indices_section(m: StudyModel) -> Section | None:
             f"مبنای سهم مشترکین: {ind.get('load_basis') or '—'}، واحد انرژی: "
             f"{str(ind.get('energy_unit') or '—').upper()}).")
     tables = [Table("شاخص‌های ارزیابی فیدرها", headers, table_rows)]
+    energy_rows = [f for f in ind.get("feeders", []) if f.get("energy_records")]
+    if energy_rows:
+        unit = str(ind.get("energy_unit") or "—").upper()
+        intro.append("مجموع انرژی ثبت‌شده با ENS سالانه متفاوت است: ENS برابر مجموع انرژی تبدیل‌شده به kWh تقسیم بر سال مواجهه است. واحد خودکار صرفاً تخمین است و باید با منبع کنترل شود.")
+        tables.append(Table("تطبیق انرژی خام با ENS سالانه", ["فیدر", "مجموع خام", "واحد فرض‌شده", "مواجهه (سال)", "ENS (kWh/سال)"],
+                            [[f.get("feeder_key"), _fmt(f.get("energy_raw_total"), 4), unit, _fmt(f.get("exposure_years"), 4), _fmt(f.get("ens_kwh_per_year"), 2)] for f in energy_rows]))
     after = []
     notes = [str(n) for n in (ind.get("notes") or [])]
     if notes:

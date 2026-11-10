@@ -301,7 +301,10 @@ def fmt_outage_result(res) -> str:
         lines.append("")
         lines.append("SAIDI/SAIFI :" if ind.has_result else
                      "SAIDI/SAIFI : (نیاز به بار فیدر — محاسبه نشد)")
+        lines.append(f"واحد انرژی: {ind.energy_unit.upper()} ({ind.energy_unit_source})؛ ENS سالانه = مجموع انرژی / سال مواجهه")
         for f in ind.feeders:
+            if getattr(f, "energy_records", 0):
+                lines.append(f"  {f.feeder_key}: مجموع خام انرژی={f.energy_raw_total:,.4f}؛ تعداد={f.energy_records}؛ مواجهه={f.exposure_years:.4f} سال؛ ENS={f.ens_kwh_per_year:,.2f} kWh/سال")
             if not f.events_counted:
                 lines.append(f"  - {f.feeder_key}: — "
                              "(رخداد قابل محاسبه نداشت)")
@@ -387,7 +390,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
     assets = _asset_dir()
-    logo = assets / "logo.png"
+    logo = assets / "icon.png"
     if logo.exists():
         app.setWindowIcon(QIcon(str(logo)))
 
@@ -755,6 +758,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         refresh_dashboard()
 
     def _scope_mode_changed(_on=False) -> None:
+        if not _on:
+            return
         scope_cmb.setEnabled(rb_single.isChecked())
         scope_list.setEnabled(rb_selected.isChecked())
         _scope_selection()
@@ -1046,6 +1051,16 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         "هر فیدر بالا؛ موتور، شش طبقه را دسته‌بندی و λ/r را روی مواجهه "
         "واقعی داده محاسبه می‌کند (ماه‌های بدون داده حدس زده نمی‌شوند) "
         "و ماتریس در پروژه ذخیره می‌شود."))
+    energy_row = QHBoxLayout()
+    energy_row.addWidget(QLabel("واحد انرژی فایل خاموشی:"))
+    energy_unit = QComboBox()
+    energy_unit.addItem("نامشخص / تخمین خودکار", "auto")
+    energy_unit.addItem("kWh", "kwh")
+    energy_unit.addItem("MWh", "mwh")
+    energy_unit.setToolTip("واحد اعلام‌شده در منبع را انتخاب کنید؛ حالت خودکار فقط تخمین است.")
+    energy_row.addWidget(energy_unit)
+    energy_row.addStretch(1)
+    right_col.addLayout(energy_row)
     btn_row_o = QHBoxLayout()
     btn_outage = QPushButton(t("Import outage list (single workbook)…"))
     btn_outage_feeders = QPushButton(t("Process per-feeder outage files"))
@@ -1272,12 +1287,14 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         cov = dict(state.get("coverage") or {})
         db = state["db"]
         feeder_loads = _feeder_load_kw(state)
+        selected_energy_unit = energy_unit.currentData()
 
         def work():
             return OutageService(OutageSettings(
                 user="ui-user", persist=True,
                 model_feeders=tuple(study_feeder_keys()),
                 feeder_load_kw=feeder_loads,
+                energy_unit=selected_energy_unit,
                 scope_feeder=(state.get("scope") if isinstance(state.get("scope"), str) else None),
                 scope_feeders=(tuple(state.get("scope") or [])
                                if isinstance(state.get("scope"), (list, tuple, set)) else ()),
@@ -1297,7 +1314,6 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             btn_review_outages.setEnabled(bool(res.records) and state.get("topo") is not None)
             outage_panel.setPlainText(fmt_outage_result(res))
             refresh_dashboard()
-            rebuild_outage_points()
             refresh_map()
             QMessageBox.information(
                 win, "Outage analysis ready",
@@ -1335,12 +1351,14 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         cov = dict(state.get("coverage") or {})
         db = state["db"]
         feeder_loads = _feeder_load_kw(state)
+        selected_energy_unit = energy_unit.currentData()
 
         def work():
             return OutageService(OutageSettings(
                 user="ui-user", persist=True,
                 model_feeders=tuple(study_feeder_keys()),
                 feeder_load_kw=feeder_loads,
+                energy_unit=selected_energy_unit,
                 per_feeder_files=dict(files),
                 scope_feeder=(state.get("scope") if isinstance(state.get("scope"), str) else None),
                 scope_feeders=(tuple(state.get("scope") or [])
@@ -1361,7 +1379,6 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             btn_review_outages.setEnabled(bool(res.records) and state.get("topo") is not None)
             outage_panel.setPlainText(fmt_outage_result(res))
             refresh_dashboard()
-            rebuild_outage_points()
             refresh_map()
             QMessageBox.information(
                 win, "Outage analysis ready (per-feeder files)",
@@ -2844,6 +2861,11 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
     # ---------------- Map tab ------------------------------------------------
     def refresh_map() -> None:
+        # Avoid rebuilding and rendering a large network while another page is active.
+        if tabs.currentWidget() is not map_tab:
+            state["_map_dirty"] = True
+            return
+        state["_map_dirty"] = False
         topo = state.get("topo")
         if topo is None:
             return
@@ -2902,6 +2924,11 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     tabs.addTab(sec_tab, "Switch placement & EENS")
     tabs.addTab(dash_tab, "Dashboard")
     tabs.addTab(map_tab, "Map")
+
+    def _refresh_visible_map(_index):
+        if tabs.currentWidget() is map_tab and state.get("_map_dirty"):
+            refresh_map()
+    tabs.currentChanged.connect(_refresh_visible_map)
 
     # ---------------- application chrome (menus / toolbar / sidebar) ------
     def show_help() -> None:

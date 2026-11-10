@@ -235,14 +235,19 @@ class NetworkMapRenderer:
         if ax is None:
             ax = fig.add_subplot(111)
         segs, colors, widths = [], [], []
+        # Resolve the feeder selection once, not for every edge × feeder × trace.
+        selected_edges = None
+        if feeder_filter is not None:
+            selected_edges = set()
+            for trace in self.traces:
+                if _feeder_selected(trace.feeder_key, feeder_filter):
+                    selected_edges.update(trace.edges)
         for eid, e in self.graph.edges.items():
             a = self._c(self.graph.nodes[e.a].coord)
             b = self._c(self.graph.nodes[e.b].coord)
             if a is None or b is None:
                 continue
-            if feeder_filter is not None and not any(
-                    self._edge_in_feeder(eid, fk) for fk in
-                    (feeder_filter if isinstance(feeder_filter, (set, frozenset, list, tuple)) else [feeder_filter])):
+            if selected_edges is not None and eid not in selected_edges:
                 continue
             segs.append((a, b))
             colors.append(edge_colors.get(eid, st.unknown_color))

@@ -57,6 +57,8 @@ class FeederServiceIndices:
     caidi: float = 0.0
     asai: float = 1.0
     ens_kwh_per_year: float = 0.0
+    energy_raw_total: float = 0.0  # sum in the original, possibly undeclared unit
+    energy_records: int = 0
     saifi_random: float = 0.0
     saidi_random: float = 0.0
     worst_saifi: float = 0.0
@@ -271,7 +273,9 @@ def compute_service_indices(records, *, model_feeders=(),
             basis[why] = basis.get(why, 0) + 1
             t_min = getattr(rec, "duration_min", None) or 0.0
             e = getattr(rec, "energy_kwh", None)
-            if e and e > 0 and years:
+            if e is not None and e >= 0:
+                row.energy_raw_total += float(e)
+                row.energy_records += 1
                 ens += (e * 1000.0 if unit == "mwh" else float(e))
             if frac is None:
                 row.events_skipped += 1

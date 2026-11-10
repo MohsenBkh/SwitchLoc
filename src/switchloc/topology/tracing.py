@@ -39,6 +39,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict, deque
 from dataclasses import dataclass, field as dc_field
+from functools import lru_cache
 
 from ..domain.entities import CanonicalNetwork, SwitchDev
 from ..domain.enums import SwitchFamily, SwitchState
@@ -49,6 +50,7 @@ from .graph import NetworkGraph
 _PERSIAN_FIX = str.maketrans({"ي": "ی", "ك": "ک"})
 
 
+@lru_cache(maxsize=8192)
 def feeder_id(name: str) -> str:
     """هویت کامل فیدر — نام نرمال‌شدهٔ کامل (بدون کوتاه‌سازی).
 
@@ -63,6 +65,7 @@ def feeder_id(name: str) -> str:
     return re.sub(r"\s*-\s*", " - ", s)
 
 
+@lru_cache(maxsize=16384)
 def same_feeder(a: str, b: str) -> bool:
     """آیا دو برچسب به یک فیدر اشاره می‌کنند؟
 
@@ -125,6 +128,7 @@ def match_feeders(name: str, candidates) -> list[str]:
     return [c for c in cands if same_feeder(c, name)]
 
 
+@lru_cache(maxsize=8192)
 def feeder_key(name: str) -> str:
     """Canonical short feeder identity: leading token, RTL-normalized.
 

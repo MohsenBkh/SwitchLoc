@@ -123,6 +123,16 @@ def write_feeder_indices_sheet(wb, m: StudyModel) -> object:
     row = _put_table(ws, row, headers, body)
     _auto_width(ws, [22] + [14] * (len(headers) - 1))
 
+    energy_rows = [f for f in ind.get("feeders", []) if f.get("energy_records")]
+    if energy_rows:
+        audit = _sheet(wb, "تطبیق انرژی")
+        ar = _put_title(audit, 1, "تطبیق انرژی ثبت‌شده با ENS سالانه")
+        _put_table(audit, ar, ["فیدر", "مجموع خام", "تعداد مقادیر", "واحد فرض‌شده", "مبنای واحد", "مواجهه (سال)", "ENS (kWh/سال)"],
+                   [[f.get("feeder_key"), f.get("energy_raw_total"), f.get("energy_records"),
+                     str(ind.get("energy_unit") or "—").upper(), ind.get("energy_unit_source") or "—",
+                     f.get("exposure_years"), f.get("ens_kwh_per_year")] for f in energy_rows])
+        _auto_width(audit, [25, 18, 18, 18, 18, 18, 22])
+
     # نمودارهای Excel-native (قابل ویرایش در خود Excel)
     try:
         from openpyxl.chart import BarChart, Reference

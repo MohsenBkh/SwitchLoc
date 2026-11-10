@@ -445,7 +445,7 @@ def feeder_rows(traces, lam_rows: list[dict], snap: dict,
             "caidi": (ind.get("caidi") if ind.get("events_counted") else None),
             "asai": (ind.get("asai") if ind.get("events_counted") else None),
             "ens_per_year_kwh": (ind.get("ens_kwh_per_year")
-                                 if ind.get("events_counted") else None),
+                                 if ind.get("energy_records", ind.get("events_counted")) and ind.get("exposure_years") else None),
             "worst_saidi": (ind.get("worst_saidi")
                             if ind.get("events_counted") else None),
             "service_events": ind.get("events_total"),

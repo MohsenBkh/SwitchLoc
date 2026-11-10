@@ -99,3 +99,25 @@ def ambiguous_device_candidates(point: tuple[float, float],
         if math.dist(point, (cx, cy)) <= tol_m:
             out.append(key)
     return out
+
+
+class CentroidIndex:
+    """Exact radius queries over fixed centroids, preserving insertion order."""
+
+    def __init__(self, centroids: dict[str, tuple], tol_m: float):
+        if tol_m <= 0:
+            raise ValueError("tolerance must be positive")
+        self.tol_m = tol_m
+        self.cells = {}
+        for order, (key, coord) in enumerate(centroids.items()):
+            self.cells.setdefault(_cell(*coord, tol_m), []).append((order, key, coord))
+
+    def candidates(self, point: tuple[float, float]) -> list[str]:
+        cx, cy = _cell(*point, self.tol_m)
+        hits = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for order, key, coord in self.cells.get((cx + dx, cy + dy), ()):
+                    if math.dist(point, coord) <= self.tol_m:
+                        hits.append((order, key))
+        return [key for _, key in sorted(hits)]

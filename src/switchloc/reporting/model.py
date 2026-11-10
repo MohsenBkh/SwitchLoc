@@ -313,7 +313,7 @@ class StudyModel:
                 "caidi": (ind.get("caidi") if counted else None),
                 "asai": (ind.get("asai") if counted else None),
                 "ens_per_year_kwh": (ind.get("ens_kwh_per_year")
-                                     if counted else None),
+                                     if ind.get("energy_records", counted) and ind.get("exposure_years") else None),
                 "events": ind.get("events_total"),
                 "ens_before_kwh": _lookup(ens_before, key),
                 "exposure_years": ind.get("exposure_years"),
