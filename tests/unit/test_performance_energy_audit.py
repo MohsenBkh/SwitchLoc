@@ -1,4 +1,9 @@
+import os
 import random
+
+import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from types import SimpleNamespace
 
 from switchloc.gis.snap import CentroidIndex, ambiguous_device_candidates
@@ -29,14 +34,21 @@ def test_energy_audit_independent_of_service_fraction():
     assert res.energy_unit_source == 'declared'
 
 
-def test_map_panel_hides_both_layers(qtbot):
+def test_map_panel_hides_both_layers():
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
     from switchloc.ui.qt.map_canvas import make_map_canvas
-    from PySide6.QtCore import Qt
+
+    app = QApplication.instance() or QApplication([])
     tab = make_map_canvas()
-    qtbot.addWidget(tab)
-    tab.show()
-    assert tab.switch_panel.isVisible() and tab.outage_panel.isVisible()
-    qtbot.mouseClick(tab.btn_switch_panel, Qt.MouseButton.LeftButton)
-    assert not tab.switch_panel.isVisible() and not tab.outage_panel.isVisible()
-    qtbot.mouseClick(tab.btn_switch_panel, Qt.MouseButton.LeftButton)
-    assert tab.switch_panel.isVisible() and tab.outage_panel.isVisible()
+    try:
+        tab.show()
+        app.processEvents()
+        assert tab.switch_panel.isVisible() and tab.outage_panel.isVisible()
+        tab.btn_switch_panel.click()
+        assert not tab.switch_panel.isVisible() and not tab.outage_panel.isVisible()
+        tab.btn_switch_panel.click()
+        assert tab.switch_panel.isVisible() and tab.outage_panel.isVisible()
+    finally:
+        tab.close()
+        app.processEvents()
