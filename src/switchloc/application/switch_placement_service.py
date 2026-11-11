@@ -463,6 +463,15 @@ def load_persisted_study(db_path: str) -> dict | None:
         store.close()
 
 
+def clear_persisted_study(db_path: str) -> None:
+    """Remove only the saved EENS study; leave inputs and other runs intact."""
+    store = ProjectStore(db_path)
+    try:
+        store.delete_kv(KV_KEY)
+    finally:
+        store.close()
+
+
 # ---------------------------------------------------------------------------
 # نام‌های قدیمی (سازگاری)
 # ---------------------------------------------------------------------------

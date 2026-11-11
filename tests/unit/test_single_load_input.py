@@ -192,7 +192,7 @@ def test_parse_capacity_rows_carries_peak_source():
     parsed = parse_capacity_rows(rows)
     assert parsed[0]["peak_kw"] is None
     assert parsed[0]["peak_source"] == "unknown"
-    assert parsed[0]["nominal_source"] == "unknown"
+    assert parsed[0]["nominal_source"] == "user"
     # ردیف کامل‌شده توسط apply() (پیک = ورودی مدل بار)
     parsed2 = parse_capacity_rows([
         {"feeder_key": "F1", "nominal_kw": "5000", "peak_kw": "1200.0",

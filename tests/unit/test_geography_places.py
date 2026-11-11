@@ -47,5 +47,5 @@ def test_bundled_ardabil_gazetteer_matches_release_claim():
     assert beyond == 0
     # منابع مجاز: بانک OSM اولیه + GeoNames (v1.13.1). هر منبع ناشناخته
     # باید صریح اضافه شود، نه اینکه بی‌صدا وارد بانک شود.
-    allowed = ("high-confidence", "GeoNames", "Village.shp")
+    allowed = ("high-confidence", "GeoNames", "Village.shp", "postzaminhava:")
     assert all(any(mark in s for mark in allowed) for s in sources), sources

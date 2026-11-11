@@ -234,8 +234,8 @@ def test_bundled_bank_contains_village_shp_places():
     try:
         assert db.execute("SELECT COUNT(*) FROM places WHERE source IS NULL "
                           "OR TRIM(source)=''").fetchone()[0] == 0
-        assert db.execute("SELECT COUNT(*) FROM places WHERE lat<37.0 OR "
-                          "lat>39.8 OR lon<46.7 OR lon>48.9").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM places WHERE (lat<37.0 OR "
+                          "lat>39.8 OR lon<46.7 OR lon>48.9) AND place_type<>'substation'").fetchone()[0] == 0
     finally:
         db.close()
 

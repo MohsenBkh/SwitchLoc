@@ -173,3 +173,21 @@ def test_show_persisted_tolerates_empty_payload(app):
     tab.show_persisted(None)
     assert tab.summary_table.rowCount() == 0
     assert not tab.btn_map.isEnabled()
+
+
+def test_clear_result_removes_displayed_study_but_keeps_settings(app):
+    from switchloc.ui.qt.switch_placement_tab import make_sectionalizer_tab
+    tab = make_sectionalizer_tab()
+    before = tab.settings()
+    tab.summary_table.setRowCount(1)
+    tab.results_table.setRowCount(1)
+    tab.detail_table.setRowCount(1)
+    tab._selected_nodes = ['node-1']
+    tab.panel.setPlainText('old result')
+    tab.btn_map.setEnabled(True)
+    tab.clear_result()
+    assert all(t.rowCount() == 0 for t in (tab.summary_table, tab.results_table, tab.detail_table))
+    assert not tab.btn_map.isEnabled() and not tab.selected_nodes()
+    assert tab.panel.toPlainText() == ''
+    assert tab.settings() == before
+    tab.close()

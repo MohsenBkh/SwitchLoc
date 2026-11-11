@@ -489,10 +489,12 @@ class NetworkMapRenderer:
         # --- سکشنالایزرهای پیشنهادی موتور EENS -------------------------
         if sectionalizer_nodes and st.show_opt_sectionalizers:
             sx, sy = [], []
+            switch_types = set()
             for item in sectionalizer_nodes:
                 try:
                     if isinstance(item, dict):
                         x, y = float(item["x"]), float(item["y"])
+                        switch_types.add(str(item.get("switch_type") or ""))
                     else:
                         nd = self.graph.nodes.get(item)
                         if nd is None or nd.coord is None:
@@ -504,10 +506,13 @@ class NetworkMapRenderer:
                 sy.append(y)
             if sx:
                 self._drawn.add("opt_sectionalizer")
+                names = {"recloser": "recloser", "sectionalizer": "sectionalizer", "disconnector": "disconnector"}
+                labels = sorted({names.get(t, "switch") for t in switch_types} or {"switch"})
+                self._opt_switch_label = "Proposed " + "/".join(labels) + " (EENS)"
                 ax.scatter(sx, sy, s=st.opt_sec_size, marker=st.opt_sec_marker,
                            facecolors="none", edgecolors=st.opt_sec_color,
                            linewidths=1.6, zorder=13,
-                           label="Proposed sectionalizer (EENS)")
+                           label=self._opt_switch_label)
 
         if highlight_point is not None:
             hx, hy = map(float, highlight_point)
@@ -729,13 +734,16 @@ class NetworkMapRenderer:
         for nid, nd in sorted(self.graph.nodes.items()):
             if nd.coord is None:
                 continue
+            if nd.kind == NodeKind.SOURCE:
+                # SOURCE objects remain distinct from attached trace junctions.
+                if _feeder_selected(getattr(nd, "feeder_hint", ""), feeder_filter):
+                    pts_src.append(self._c(nd.coord))
+                continue
             if feeder_filter is not None and not any(self._node_in_feeder(nid, fk) for fk in
                     (feeder_filter if isinstance(feeder_filter, (set, frozenset, list, tuple)) else [feeder_filter])):
                 continue
             c = self._c(nd.coord)
-            if nd.kind == NodeKind.SOURCE:
-                pts_src.append(c)
-            elif self.graph.transformer_ids_at.get(nid):
+            if self.graph.transformer_ids_at.get(nid):
                 pts_tf.append(c)
 
         terminal_x, terminal_y = [], []
@@ -883,7 +891,7 @@ class NetworkMapRenderer:
             handles.append(Line2D([], [], color=st.opt_sec_color,
                                   marker=st.opt_sec_marker, linestyle="None",
                                   markersize=9, markerfacecolor="none",
-                                  label="Proposed sectionalizer (EENS)"))
+                                  label=getattr(self, "_opt_switch_label", "Proposed switch (EENS)")))
         if "coordinate" in drawn:
             handles.append(Line2D([], [], color="#ff00aa", marker="X",
                                   linestyle="None", markersize=9,

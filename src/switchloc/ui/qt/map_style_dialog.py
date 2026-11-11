@@ -217,6 +217,17 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
     tbl.verticalHeader().setVisible(False)
     tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     lv.addWidget(tbl, 1)
+    feeder_buttons = QHBoxLayout()
+    for label, checked in (("انتخاب همهٔ فیدرها", True), ("حذف انتخاب همه", False)):
+        button = QPushButton(label)
+        def set_all(_checked=False, checked=checked):
+            for row in range(tbl.rowCount()):
+                item = tbl.item(row, 1)
+                if item is not None:
+                    item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        button.clicked.connect(set_all)
+        feeder_buttons.addWidget(button)
+    lv.addLayout(feeder_buttons)
     fw = QFormLayout()
     sp_w = QDoubleSpinBox(); sp_w.setRange(0.1, 8.0); sp_w.setSingleStep(0.1)
     sp_wf = QDoubleSpinBox(); sp_wf.setRange(0.1, 8.0); sp_wf.setSingleStep(0.1)

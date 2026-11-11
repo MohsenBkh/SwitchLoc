@@ -88,6 +88,17 @@ def transform_utm_to_project(easting: float, northing: float,
     return float(rx), float(ry)
 
 
+from functools import lru_cache
+
+
+@lru_cache(maxsize=64)
+def _wgs84_transformer(target_crs):
+    dst = CRS.from_user_input(target_crs)
+    if not dst.is_projected:
+        raise ValueError("CRS پروژه باید متری (projected) باشد.")
+    return Transformer.from_crs(CRS.from_epsg(4326), dst, always_xy=True)
+
+
 def transform_wgs84_to_project(lat: float, lon: float,
                                target_crs: str | int) -> tuple[float, float]:
     """(lat, lon) WGS84 → مختصات متری پروژه.
@@ -101,11 +112,7 @@ def transform_wgs84_to_project(lat: float, lon: float,
         raise ValueError("مختصات جغرافیایی نامعتبر است.")
     if not (-90.0 <= lat_f <= 90.0 and -180.0 <= lon_f <= 180.0):
         raise ValueError("مختصات جغرافیایی خارج از بازهٔ مجاز است.")
-    dst = CRS.from_user_input(target_crs)
-    if not dst.is_projected:
-        raise ValueError("CRS پروژه باید متری (projected) باشد.")
-    tr = Transformer.from_crs(CRS.from_epsg(4326), dst, always_xy=True)
-    x, y = tr.transform(lon_f, lat_f)
+    x, y = _wgs84_transformer(target_crs).transform(lon_f, lat_f)
     if not (math.isfinite(x) and math.isfinite(y)):
         raise ValueError("تبدیل مختصات نتیجهٔ معتبری برنگرداند.")
     return float(x), float(y)

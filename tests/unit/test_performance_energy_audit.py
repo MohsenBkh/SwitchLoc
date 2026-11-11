@@ -52,3 +52,17 @@ def test_map_panel_hides_both_layers():
     finally:
         tab.close()
         app.processEvents()
+
+
+def test_map_clear_study_control_dispatches_callback():
+    pytest.importorskip('PySide6.QtWidgets')
+    from PySide6.QtWidgets import QApplication
+    from switchloc.ui.qt.map_canvas import make_map_canvas
+    app = QApplication.instance() or QApplication([])
+    tab = make_map_canvas()
+    calls = []
+    tab.on_clear_study = lambda: calls.append(True)
+    tab.btn_clear_study.click()
+    assert calls == [True]
+    tab.close()
+    app.processEvents()

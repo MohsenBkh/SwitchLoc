@@ -413,3 +413,17 @@ def test_pdf_wide_table_goes_landscape_without_missing_glyphs(tmp_path):
              for p in PdfReader(path).pages]
     assert any(w > h for w, h in sizes), \
         "جدول پهن باید روی صفحهٔ افقی (A4 landscape) برود"
+
+
+def test_source_fwt_visible_under_feeder_filter_and_legend_matches_type():
+    b = NetBuilder()
+    b.source(0, 0, F1)
+    b.line([(0, 0), (100, 0)], feeder=F1)
+    graph = NetworkGraph.from_network(b.net, IssueLog())
+    traces = TracingEngine(graph, b.net, TracingPolicy()).trace_all(IssueLog())
+    renderer = NetworkMapRenderer(graph, traces=traces)
+    fig = Figure()
+    renderer.render_into(fig, feeder_filter={F1},
+                         sectionalizer_nodes=[{"x": 50, "y": 0, "switch_type": "recloser"}])
+    assert "source" in renderer._drawn
+    assert "recloser" in renderer._opt_switch_label

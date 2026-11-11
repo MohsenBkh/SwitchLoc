@@ -92,6 +92,7 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
             super().__init__(parent_)
             self.on_run = None           # callback(settings dict)
             self.on_show_map = None      # callback(selected node ids)
+            self.on_clear_study = None   # callback after user confirmation
             self.on_settings_changed = None
             self._result = None
             self._selected_nodes: list[str] = []
@@ -124,6 +125,9 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
             self.main_split.setSizes([610, 830])
 
             self._load_table_headers()
+            from .widgets import enable_copy_paste
+            for table in self.findChildren(QTableWidget):
+                enable_copy_paste(table, editable=True)
 
             # ---- سیگنال‌ها ----
             for w in (self.cmb_switch_type, self.cmb_method):
@@ -318,6 +322,10 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
             self.btn_map.clicked.connect(self._show_map)
             btns.addWidget(self.btn_run)
             btns.addWidget(self.btn_map)
+            self.btn_clear_study = QPushButton("پاک کردن مطالعه")
+            self.btn_clear_study.clicked.connect(
+                lambda: self.on_clear_study() if self.on_clear_study else None)
+            btns.addWidget(self.btn_clear_study)
             btns.addStretch(1)
             gv.addLayout(btns)
             self.status = QLabel(
@@ -1032,6 +1040,19 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
             self.status.setText(
                 "نتیجهٔ ذخیره‌شدهٔ پروژه بارگذاری شد؛ برای اجرای جدید "
                 "تنظیمات را تأیید و «اجرای جایابی» را بزنید.")
+
+        def clear_result(self) -> None:
+            """Clear displayed results only; inputs and calculation settings remain."""
+            self._result = None
+            self._selected_nodes = []
+            for table in (self.summary_table, self.results_table, self.detail_table):
+                table.setRowCount(0)
+            self.panel.clear()
+            self._set_kpis(None, None, None, None)
+            self.btn_map.setEnabled(False)
+            self.grp_detail.setTitle("همهٔ کاندیدها — بار پایین‌دست (kW)، طول (km)")
+            self.status.setText("نتیجهٔ مطالعه پاک شد؛ برای مطالعه جدید اجرا کنید.")
+            self._auto_rates_text_set({})
 
         def selected_nodes(self) -> list:
             return list(self._selected_nodes)

@@ -29,14 +29,10 @@ CAPACITY_COLUMNS = ("Feeder", "Nominal kW", "Peak kW (خودکار از مدل �
 
 
 def default_capacity_rows(feeder_keys) -> list[dict]:
-    """New feeder rows: همهٔ ظرفیت‌ها نامعلوم می‌مانند تا مهندس وارد کند.
-
-    مقدار پیش‌فرضِ ساختگی (۷۰۰۰ kW) عمداً حذف شد — هیچ مقدار پیش‌فرضی به‌عنوان
-    ظرفیت تأییدشدهٔ مهندس به‌کار نمی‌رود.
-    """
-    return [{"feeder_key": k, "nominal_kw": None,
+    """New rows use an explicitly marked, editable engineering default."""
+    return [{"feeder_key": k, "nominal_kw": 7000.0,
              "peak_kw": None, "peak_source": "unknown",
-             "emergency_kw": None, "note": ""}
+             "emergency_kw": None, "note": "پیش‌فرض ۷۰۰۰ kW؛ نیازمند تأیید مهندس"}
             for k in feeder_keys]
 
 
@@ -225,7 +221,8 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
                float((v or {}).get("p_kw") or 0.0)
                for fk, v in lpq_rows.items()}
     for i, k in enumerate(feeder_keys):
-        row = dict(_lookup_by_feeder(cap_rows, k) or {})
+        saved_row = _lookup_by_feeder(cap_rows, k)
+        row = dict(saved_row if saved_row is not None else default_capacity_rows([k])[0])
         # پیک از ورودی واحد مدل بار خوانده می‌شود — یک منبع، بدون ورودی موازی
         row["peak_kw"] = lpq_now.get(k) or None
         if row["peak_kw"] is None:
@@ -247,8 +244,8 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
             tbl.setItem(i, j, cell)
     tbl.setFixedHeight(min(360, 40 * (len(feeder_keys) + 1) + 12))
     v2.addWidget(make_explain_label(
-        "ظرفیت نامی/اضطراری هر فیدر را مهندس وارد می‌کند؛ هیچ مقدار "
-        "پیش‌فرض ساختگی وجود ندارد و مقادیر از GIS حدس زده نمی‌شوند. "
+        "ظرفیت نامی پیش‌فرض ۷۰۰۰ kW است و باید توسط مهندس بررسی شود؛ "
+        "این مقدار از GIS برداشت نشده است. ظرفیت اضطراری را مهندس وارد می‌کند. "
         "ستون «Peak kW» فقط نمایش است و از همان ورودی تب «Load Model» "
         "(P فیدر) خوانده می‌شود — یک ورودی واحد برای همهٔ محاسبات بار. "
         "خالی = نامشخص → طرح‌های انتقالی «نیازمند تأیید ظرفیت» می‌شوند "
@@ -382,6 +379,9 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
         }
 
     dlg.apply = apply                    # type: ignore[attr-defined]
+    from .widgets import enable_copy_paste
+    for table in dlg.findChildren(QTableWidget):
+        enable_copy_paste(table, editable=True)
     return dlg
 
 

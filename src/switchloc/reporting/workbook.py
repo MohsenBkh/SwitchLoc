@@ -324,3 +324,21 @@ def export_workbook(m: StudyModel, path: str) -> str:
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out)
     return str(out)
+
+
+def export_dashboard_feeder_indices(dashboard: dict, path: str) -> str:
+    """Export the displayed feeder metrics even when placement has not run."""
+    from types import SimpleNamespace
+    rows = []
+    for source in dashboard.get("feeders") or []:
+        row = dict(source)
+        row["ens_before_kwh"] = source.get("ens_kwh")
+        rows.append(row)
+    indices = (dashboard.get("outage") or {}).get("service_indices") or {}
+    model = SimpleNamespace(feeder_table=lambda: rows, feeder_indices=indices)
+    wb = Workbook()
+    wb.remove(wb.active)
+    write_feeder_indices_sheet(wb, model)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    wb.save(path)
+    return str(path)

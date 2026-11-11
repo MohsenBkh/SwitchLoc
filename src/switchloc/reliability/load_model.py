@@ -59,7 +59,7 @@ LEVEL_FA = {
 }
 
 #: پیش‌فرض ضریب بارگذاری (سیاست شرکت — قابل تنظیم و ثبت در settings_log)
-DEFAULT_LOADING_FACTOR = 0.7
+DEFAULT_LOADING_FACTOR = 1.0
 #: پیش‌فرض ضریب جایگزین (رفتار قبلی نرم‌افزار: kVA ≈ kW)
 DEFAULT_SUBSTITUTE_FACTOR = 1.0
 

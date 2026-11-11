@@ -720,6 +720,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.on_style_request = None
             self.on_zone_selected = None
             self.on_feeders_changed = None
+            self.on_clear_study = None
             self._osm_img = None
             self._osm_extent = None
             self._osm_note = ""
@@ -867,6 +868,11 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.btn_style.setFixedWidth(120)
             self.btn_style.clicked.connect(self._on_style_clicked)
             strip.addWidget(self.btn_style)
+            self.btn_clear_study = QPushButton("پاک کردن مطالعهٔ EENS")
+            self.btn_clear_study.setToolTip("پاک کردن نتیجهٔ جایابی کلید و علامت‌های آن، با تأیید کاربر")
+            self.btn_clear_study.clicked.connect(
+                lambda: self.on_clear_study() if self.on_clear_study else None)
+            strip.addWidget(self.btn_clear_study)
 
             self.osm = QCheckBox("OSM background")
             self.osm.setFixedWidth(125)

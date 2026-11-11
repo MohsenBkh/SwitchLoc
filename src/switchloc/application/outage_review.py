@@ -93,6 +93,11 @@ def suggest_event_places(records: Iterable, gazetteer: PlaceGazetteer,
                          limit: int = 5) -> list[OutagePlaceSuggestion]:
     """Suggest places from free-text descriptions; suggestions are never assignments."""
     out = []
+    cache = {}
+    def search(text):
+        if text not in cache:
+            cache[text] = gazetteer.search(text, limit=limit)
+        return cache[text]
     for rec in records:
         # The outage workbook's «نام پست» is the primary location field
         # (often a village, farm, BTS site or other named place). Search it
@@ -104,11 +109,11 @@ def suggest_event_places(records: Iterable, gazetteer: PlaceGazetteer,
         # equipment first creates spurious substring matches for generic
         # words; contextual fallback is used only when the primary field has
         # no candidates.
-        matches = gazetteer.search(station, limit=limit) if station else []
+        matches = search(station) if station else []
         text = station or context
         if not matches and context:
             text = " ".join(x for x in (station, context) if x)
-            matches = gazetteer.search(text, limit=limit)
+            matches = search(text)
         out.append(OutagePlaceSuggestion(str(_attr_or_dict(rec, "id") or ""),
                                          text, tuple(matches)))
     return out
@@ -419,6 +424,8 @@ def plan_review_rows(records: Iterable, *,
         def transform(lat: float, lon: float):
             return _tr(lat, lon, project_crs)
     rows: list[ReviewRowPlan] = []
+    pick_cache = {}
+    options_cache = {}
     for rec in records:
         eid = str(getattr(rec, "id", "") or "")
         raw_feeder = str(getattr(rec, "feeder_key", "")
@@ -472,10 +479,13 @@ def plan_review_rows(records: Iterable, *,
             row.status = str(old.get("status"))
             pick = None
         else:
-            pick = pick_zone(geometries, feeder=feeder, point=point,
-                             max_distance_m=max_zone_distance_m,
-                             feeder_only=feeder_only,
-                             reason=("no-crs" if row.zone_basis == "no-crs" else ""))
+            cache_key = (feeder, point, row.zone_basis == "no-crs")
+            if cache_key not in pick_cache:
+                pick_cache[cache_key] = pick_zone(
+                    geometries, feeder=feeder, point=point,
+                    max_distance_m=max_zone_distance_m, feeder_only=feeder_only,
+                    reason=("no-crs" if row.zone_basis == "no-crs" else ""))
+            pick = pick_cache[cache_key]
             row.zone_id = pick.zone_id
             row.zone_basis = pick.basis
             row.nearest_zone_distance_m = pick.nearest_distance_m
@@ -489,8 +499,11 @@ def plan_review_rows(records: Iterable, *,
             elif not row.zone_id:
                 row.zone_note = ("زون متناظر از فیدر/مختصات تعیین نشد؛ "
                                  "انتخاب دستی لازم است.")
-        row.zone_options = zone_options(geometries, feeder, point=point,
-                                        feeder_only=feeder_only)
+        opt_key = (feeder, point)
+        if opt_key not in options_cache:
+            options_cache[opt_key] = zone_options(geometries, feeder, point=point,
+                                                   feeder_only=feeder_only)
+        row.zone_options = options_cache[opt_key]
         row.place_id = next((o["place_id"] for o in opts
                              if o.get("is_default")), "")
         rows.append(row)

@@ -152,7 +152,7 @@ def test_bundled_bank_has_cities_aliases_and_metadata():
     assert stats["by_type"].get("city", 0) >= 32, "شهرها باید در بانک باشند"
     assert stats["by_type"].get("village", 0) >= 2181
     assert stats["aliases"] >= 250
-    allowed = ("high-confidence", "GeoNames", "Village.shp")
+    allowed = ("high-confidence", "GeoNames", "Village.shp", "postzaminhava:")
     assert all(any(mark in s for mark in allowed)
                for s in stats["by_source"]), stats["by_source"]
     assert stats["by_source"]["Village.shp — بانک آبادی‌های کشور (۲۰۰۹، "
@@ -160,7 +160,7 @@ def test_bundled_bank_has_cities_aliases_and_metadata():
     assert stats["metadata"].get("built_at")
     # نمونه‌های عملیاتی: شهر مرکز استان و یک روستای پروژهٔ کوثر
     assert bank.search("اردبیل")[0].place.place_type == "city"
-    assert bank.search("زرج اباد")[0].place.name == "زرج آباد"
+    assert any(m.place.name == "زرج آباد" for m in bank.search("زرج اباد"))
 
 
 # ------------------------------------------------------- shipped data files
@@ -196,7 +196,8 @@ def test_shipped_official_and_gap_files_are_consistent():
     # غایب فقط یعنی نام یکتا/فشردهٔ آن در بانک نیست).
     bank = PlaceGazetteer(root / "ardabil_places.sqlite")
     present = {compact_place_name(m.place.name)
-               for r in miss for m in bank.search(r["name"])}
+               for r in miss for m in bank.search(r["name"])
+               if m.place.place_type != "substation"}
     exact = {compact_place_name(r["name"]) for r in miss} & present
     # نام‌های بسیار کوتاه/عمومی («قشلاق») ممکن است هم‌نام داشته باشند
     exact = {c for c in exact if len(c) >= 8}

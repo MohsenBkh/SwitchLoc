@@ -125,6 +125,7 @@ class PlaceGazetteer:
             self._migrate(db)
             db.execute('CREATE INDEX IF NOT EXISTS idx_places_compact '
                        'ON places(compact_name)')
+            db.execute("CREATE INDEX IF NOT EXISTS idx_alias_compact ON aliases(replace(replace(normalized_alias,' ',''),'-',''))")
 
     def _migrate(self, db) -> None:
         """افزودن ستون‌های نسخهٔ ۱.۱۳ به بانک‌های قدیمی (بدون حذف داده)."""
@@ -296,26 +297,25 @@ class PlaceGazetteer:
         for i in range(len(tokens)):
             for j in range(i + 1, len(tokens) + 1):
                 spans.add(_compact_of(" ".join(tokens[i:j])))
+        # Search indexed whole-token spans instead of scanning every place and
+        # alias for every outage. All candidates are still scored below.
+        names = {" ".join(tokens[i:j]) for i in range(len(tokens))
+                 for j in range(i + 1, len(tokens) + 1)}
+        compact = {_compact_of(n) for n in names if len(_compact_of(n)) >= _MIN_COMPACT_LEN}
+        names.add(q)
+        compact.add(q_compact)
+        rows = []
         with self._connect() as db:
-            rows = db.execute('''
-                SELECT p.*, p.normalized_name AS matched_name,
-                       p.name AS matched_text, 0 AS is_alias
-                FROM places p
-                WHERE p.normalized_name=?
-                   OR (p.compact_name<>'' AND p.compact_name=?)
-                   OR instr(?, ' '||p.normalized_name||' ')>0
-                   OR (length(p.compact_name)>=? AND instr(?, p.compact_name)>0)
-                UNION ALL
-                SELECT p.*, a.normalized_alias AS matched_name,
-                       a.alias AS matched_text, 1 AS is_alias
-                FROM aliases a JOIN places p USING(place_id)
-                WHERE a.normalized_alias=?
-                   OR instr(?, ' '||a.normalized_alias||' ')>0
-                   OR (length(?)>=? AND instr(?, replace(a.normalized_alias,' ',''))>0)
-                LIMIT ?''',
-                (q, q_compact, padded, _MIN_COMPACT_LEN, q_compact,
-                 q, padded, _compact_of(q), _MIN_COMPACT_LEN, q_compact,
-                 max(limit * 6, 24))).fetchall()
+            for values, sql in (
+                (names, "SELECT p.*, p.normalized_name AS matched_name, p.name AS matched_text FROM places p WHERE p.normalized_name IN ({})"),
+                (compact, "SELECT p.*, p.normalized_name AS matched_name, p.name AS matched_text FROM places p WHERE p.compact_name IN ({})"),
+                (names, "SELECT p.*, a.normalized_alias AS matched_name, a.alias AS matched_text FROM aliases a JOIN places p USING(place_id) WHERE a.normalized_alias IN ({})"),
+                (compact, "SELECT p.*, a.normalized_alias AS matched_name, a.alias AS matched_text FROM aliases a JOIN places p USING(place_id) WHERE replace(replace(a.normalized_alias,' ',''),'-','') IN ({})"),
+            ):
+                values = sorted(values)
+                for start in range(0, len(values), 400):
+                    batch = values[start:start + 400]
+                    rows.extend(db.execute(sql.format(",".join("?" for _ in batch)), batch).fetchall())
         found = {}
         for r in rows:
             matched = r['matched_name'] or ""

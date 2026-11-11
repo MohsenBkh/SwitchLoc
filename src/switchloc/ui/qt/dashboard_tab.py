@@ -115,7 +115,7 @@ def make_dashboard_tab(parent=None):
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import (QAbstractItemView, QGridLayout,
                                    QHBoxLayout, QLabel, QScrollArea,
-                                   QTableWidget, QTableWidgetItem,
+                                   QTableWidget, QTableWidgetItem, QPushButton, QFileDialog, QMessageBox,
                                    QTabWidget, QVBoxLayout, QWidget)
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
     from matplotlib.figure import Figure
@@ -222,6 +222,9 @@ def make_dashboard_tab(parent=None):
             lay.addWidget(self.canvas)
             self.chart_box, self.charts = _build_chart_section()()
             lay.addWidget(self.chart_box)
+            self.btn_export_indices = QPushButton("خروجی اکسل شاخص‌های فیدرها…")
+            self.btn_export_indices.clicked.connect(self._export_indices)
+            lay.addWidget(self.btn_export_indices)
             lay.addWidget(QLabel("<b>Feeder matrix — trace, λ/r, EP/TL, "
                                  "ENS, rank, selected scheme</b>"))
             lay.addWidget(self.feeder_table, 2)
@@ -251,6 +254,8 @@ def make_dashboard_tab(parent=None):
         # -- public ------------------------------------------------------
         def show_dashboard(self, dash: dict) -> None:
             """Render one `build_dashboard()` payload."""
+            self._dashboard = dash
+            self.btn_export_indices.setEnabled(bool(dash.get("feeders")))
             k = dash.get("kpis", {})
             self.cards["feeders"].setText(str(k.get("feeders", 0)))
             self.cards["zones"].setText(str(k.get("zones", 0)))
@@ -273,6 +278,19 @@ def make_dashboard_tab(parent=None):
             self._fill_zone_table(dash.get("zones") or [])
             self._fill_econ_table(dash.get("economics") or [])
             self._fill_notes(dash)
+
+        def _export_indices(self):
+            path, _ = QFileDialog.getSaveFileName(
+                self, "ذخیره شاخص‌های فیدرها", "feeder_indices.xlsx", "Excel (*.xlsx)")
+            if not path:
+                return
+            if not path.lower().endswith(".xlsx"):
+                path += ".xlsx"
+            try:
+                from ...reporting.workbook import export_dashboard_feeder_indices
+                export_dashboard_feeder_indices(self._dashboard, path)
+            except Exception as exc:
+                QMessageBox.warning(self, "خطا در خروجی اکسل", str(exc))
 
         # -- internals -----------------------------------------------------
         def _fill_charts(self, dash: dict) -> None:

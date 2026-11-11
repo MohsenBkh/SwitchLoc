@@ -165,3 +165,55 @@ def test_persian_help_text_documents_the_defaults(app):
     texts = " ".join(w.text() for w in dlg.findChildren(QtWidgets.QLabel))
     assert "تأیید مهندسی" in texts
     assert "اولین گزینهٔ فهرست" in texts
+
+
+def test_sort_keeps_decisions_on_their_events(app):
+    from PySide6.QtCore import Qt
+    records = [_rec("e2"), _rec("e1")]
+    suggestions = {"e1": _suggestion(), "e2": _suggestion()}
+    plans = plan_review_rows(records, suggestions=suggestions, geometries=GEOMS,
+                             project_crs="EPSG:32639", transform=_transform)
+    dlg = make_outage_review_dialog(None, records=records, plans=plans,
+                                    geometries=GEOMS, transform=_transform)
+    table = dlg.findChildren(QtWidgets.QTableWidget)[0]
+    table.sortItems(0, Qt.SortOrder.AscendingOrder)
+    assert table.item(0, 0).data(Qt.ItemDataRole.UserRole) == "e1"
+    table.cellWidget(0, 6).setCurrentIndex(table.cellWidget(0, 6).findData("z2"))
+    rows, _, _ = dlg.decisions()
+    by_id = {r['event_id']: r for r in rows}
+    assert by_id['e1']['zone_id'] == 'z2'
+    assert by_id['e2']['zone_id'] == 'z1'
+    dlg.close()
+
+
+def test_large_review_loads_incrementally_and_disables_save(app):
+    from PySide6.QtWidgets import QDialogButtonBox
+    records = [_rec(f'e{i}') for i in range(501)]
+    plans = plan_review_rows(records, suggestions={}, geometries={})
+    dlg = make_outage_review_dialog(None, records=records, plans=plans, geometries={})
+    table = dlg.findChildren(QtWidgets.QTableWidget)[0]
+    buttons = dlg.findChild(QDialogButtonBox)
+    save = buttons.button(QDialogButtonBox.StandardButton.Save)
+    assert table.rowCount() == 0 and not save.isEnabled()
+    while dlg._review_loader.isActive():
+        QtWidgets.QApplication.processEvents()
+    assert table.rowCount() == 501 and save.isEnabled()
+    assert dlg.decisions()[1] == 501
+    dlg.close()
+
+
+def test_shared_zone_models_detach_before_mutation(app):
+    records = [_rec('e1'), _rec('e2')]
+    suggestions = {'e1': _suggestion(), 'e2': _suggestion()}
+    plans = plan_review_rows(records, suggestions=suggestions, geometries=GEOMS,
+                             project_crs='EPSG:32639', transform=_transform)
+    dlg = make_outage_review_dialog(None, records=records, plans=plans,
+                                    geometries=GEOMS, transform=_transform)
+    table = dlg.findChildren(QtWidgets.QTableWidget)[0]
+    other_before = [table.cellWidget(1, 6).itemText(i)
+                    for i in range(table.cellWidget(1, 6).count())]
+    place = table.cellWidget(0, 5)
+    place.setCurrentIndex(place.count() - 1)
+    assert [table.cellWidget(1, 6).itemText(i)
+            for i in range(table.cellWidget(1, 6).count())] == other_before
+    dlg.close()
