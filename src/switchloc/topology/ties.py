@@ -40,7 +40,8 @@ from ..domain.enums import YesNoUnknown
 from ..validation.issues import (IssueLog, ValidationIssue, SEVERITY_INFO,
                                  SEVERITY_WARNING)
 from .graph import NetworkGraph
-from .tracing import FeederTrace, TracingEngine, feeder_key
+from .tracing import (FeederTrace, TracingEngine, feeder_id,
+                      same_feeder)
 
 
 @dataclass
@@ -173,10 +174,10 @@ class TieDetectionService:
             for n in tr.nodes:
                 trace_of_node.setdefault(n, tr.feeder_key)
         for sw in sorted(self.net.switches, key=lambda s: s.id):
-            hk = feeder_key(sw.feeder_name)
+            hk = feeder_id(sw.feeder_name)
             tk = trace_of_node.get(sw.node_id, "")
-            if not hk or not tk or hk == tk:
-                continue
+            if not hk or not tk or hk == tk or same_feeder(hk, tk):
+                continue                       # یک فیدر با نگارش کوتاه/آراسته
             if sw.node_id in overlap:
                 continue                       # R1 territory (A-09)
             pair = key_pair(hk, tk)

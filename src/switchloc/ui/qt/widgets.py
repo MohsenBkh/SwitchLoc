@@ -98,7 +98,7 @@ def make_explain_label(text: str, parent=None):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QPushButton,
                                    QTextBrowser, QVBoxLayout)
-    btn = QPushButton("ⓘ راهنما")
+    btn = QPushButton("راهنما")
     btn.setFixedHeight(28)
     btn.setMaximumWidth(104)
     btn.setToolTip("برای مشاهده توضیحات و راهنمای این بخش کلیک کنید")
@@ -303,8 +303,37 @@ def enable_copy_paste(table, editable: bool = False,
                 return True
             return False
 
+    previous = getattr(table, "_sw_copy_filter", None)
+    if previous is not None:
+        table.removeEventFilter(previous)
     table._sw_copy_filter = _Filter(table)     # keep a reference alive
     table.installEventFilter(table._sw_copy_filter)
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QMenu
+    table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    if not getattr(table, "_sw_context_connected", False):
+        def context_menu(pos):
+            menu = QMenu(table)
+            copy = menu.addAction("کپی")
+            paste = menu.addAction("چسباندن")
+            paste.setEnabled(bool(table.property("sw_paste_enabled")))
+            menu.addSeparator()
+            select = menu.addAction("انتخاب همه")
+            chosen = menu.exec(table.viewport().mapToGlobal(pos))
+            if chosen is copy:
+                QGuiApplication.clipboard().setText(rows_to_tsv(_selected_rows(table)))
+            elif chosen is paste:
+                result = _paste_rows(table, tsv_to_rows(QGuiApplication.clipboard().text()))
+                callback = getattr(table, "_sw_paste_callback", None)
+                if callable(callback):
+                    callback(*result)
+            elif chosen is select:
+                table.selectAll()
+        table.customContextMenuRequested.connect(context_menu)
+        table._sw_context_connected = True
+    table.setProperty("sw_paste_enabled", editable)
+    table._sw_paste_callback = on_paste
 
 
 def _select_line(table, is_column: bool, idx: int,

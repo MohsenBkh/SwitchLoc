@@ -54,7 +54,8 @@ def test_build_dashboard_network_only(topo_two_feeders):
     assert dash["has_topology"] and not dash["has_placement"]
     assert dash["lambda_source"] == "no outage data (λ = 0)"
     rows = dash["feeders"]
-    assert [r["feeder_key"] for r in rows] == ["F1", "F2"]
+    # v1.16: شناسهٔ فیدر، نام کامل GIS است (نه توکن کوتاه)
+    assert [r["feeder_key"] for r in rows] == ["F1 - KHALKHAL", "F2 - KHALKHAL"]
     assert rows[0]["edges"] == 1 and rows[0]["transformers"] == 1
     assert rows[0]["rank"] is None and rows[0]["scheme_kind"] is None
 
@@ -89,14 +90,14 @@ def test_feeder_rows_merge_outage_ranking_and_scheme(topo_two_feeders):
     }
     rows = feeder_rows(topo.traces,
                        summarize_outage(outage)["lambda_r"], snap)
-    f1 = {r["feeder_key"]: r for r in rows}["F1"]
+    f1 = {r["feeder_key"]: r for r in rows}["F1 - KHALKHAL"]
     assert f1["lambda_per_year"] == 3.25 and f1["r_minutes"] == 45.0
     assert f1["u_hours"] == 2.44
     assert f1["ep_percent"] == 62.5 and f1["total_load_kw"] == 800.0
     assert f1["rank"] == 1 and f1["score"] == 0.5123
     assert f1["scheme_kind"] == "sequential_nc" and f1["n_switches"] == 2
     # F2 has no outage row → falls back to the ranking λ (0.0), no invention
-    f2 = {r["feeder_key"]: r for r in rows}["F2"]
+    f2 = {r["feeder_key"]: r for r in rows}["F2 - KHALKHAL"]
     assert f2["lambda_per_year"] == 0.0 and f2["scheme_kind"] is None
 
 
@@ -156,7 +157,7 @@ def test_build_dashboard_everything_missing_is_safe():
 def test_dashboard_selected_feeders_filters_every_network_kpi(topo_two_feeders):
     net, topo = topo_two_feeders
     dash = build_dashboard(net=net, topo=topo, scope=["F2"])
-    assert [r["feeder_key"] for r in dash["feeders"]] == ["F2"]
+    assert [r["feeder_key"] for r in dash["feeders"]] == ["F2 - KHALKHAL"]
     assert dash["kpis"]["feeders"] == 1
     assert dash["kpis"]["length_km"] == dash["feeders"][0]["km"]
     assert dash["kpis"]["transformers"] == 1

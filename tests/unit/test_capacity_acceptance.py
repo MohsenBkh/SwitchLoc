@@ -214,15 +214,15 @@ def test_status_labels_are_explicit():
     assert "تأیید" in STATUS_FA[ST_ACCEPTED]
 
 
-def test_new_feeder_capacity_is_unknown_until_engineer_enters_it():
+def test_new_feeder_capacity_has_editable_marked_default():
     from switchloc.ui.qt.settings_dialog import default_capacity_rows
     rows = default_capacity_rows(["F1", "F2"])
-    assert [r["nominal_kw"] for r in rows] == [None, None]
+    assert [r["nominal_kw"] for r in rows] == [7000.0, 7000.0]
     assert all(r["peak_kw"] is None and r["emergency_kw"] is None
                for r in rows)
     from switchloc.ui.qt.settings_dialog import parse_capacity_rows
     parsed = parse_capacity_rows(rows)
-    assert all(r["nominal_source"] == "unknown" for r in parsed)
+    assert all(r["nominal_source"] == "user" for r in parsed)
     from switchloc.placement.capacity import FeederCapacity
     assert all(not FeederCapacity.from_row(r).has_basic_data
                for r in parsed)
