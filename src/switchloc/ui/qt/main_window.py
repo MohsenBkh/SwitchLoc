@@ -459,7 +459,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                    "load_model": {}, "criteria": {}, "coverage": {},
                    "weights": [],                # وزن‌های جدول ۱۶ (تأیید ورودی‌ها)
                    "tie_reviews": {},            # نیاز ۱۲ — A-09 review
-                   "outage_feeder_files": {},    # فایل خاموشی هر فیدر
+                   "outage_feeder_files": {},    # نام فایل‌های ذخیره‌شده در پروژه
                    "manual_evals": [],           # ارزیابی جایابی دستی
                    "lambda_overrides": {},       # تأیید ورودی‌ها — ویرایش λ/r
                    "map_style": None,            # تنظیمات نمایشی نقشه
@@ -835,8 +835,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     of_lay.addWidget(make_explain_label(
         "<b>فایل خاموشی هر فیدر</b> — کنار داده GIS هر فیدر، کتاب‌کار "
         "خاموشی همان فیدر را وارد کنید (دوبار کلیک روی ردیف). پردازش، "
-        "λ/r و مواجهه واقعی داده را محاسبه می‌کند (نیاز ۸). ورود فایل "
-        "خاموشی اختیاری است؛ بدون آن λ=۰ فرض و صریحاً اعلام می‌شود."))
+        "λ/r و مواجهه واقعی داده را محاسبه می‌کند (نیاز ۸). "
+        "پس از انتخاب، فایل در پروژه ذخیره می‌شود؛ برای محاسبه دکمه "
+        "پردازش را بزنید. نبود داده به معنی λ=۰ نیست."))
     of_table = QTableWidget(0, 2)
     of_table.setHorizontalHeaderLabels(["Feeder", "Outage workbook (xlsx)"])
     of_table.horizontalHeader().setStretchLastSection(True)
@@ -856,7 +857,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             it = QTableWidgetItem(k)
             it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
             of_table.setItem(i, 0, it)
-            of_table.setItem(i, 1, QTableWidgetItem(files.get(k, "")))
+            of_table.setItem(i, 1, QTableWidgetItem(
+                ("ذخیره در پروژه: " + files[k]) if k in files else ""))
 
     def do_pick_feeder_outage(row: int) -> None:
         files = state.setdefault("outage_feeder_files", {})
@@ -866,8 +868,21 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             "Excel workbook (*.xlsx *.xlsm)")
         if not path:
             return
-        files[of_table.item(row, 0).text()] = path
-        of_table.item(row, 1).setText(path)
+        db = state.get("db")
+        if not db:
+            QMessageBox.warning(win, "فایل خاموشی", "ابتدا پروژه را باز یا ایجاد کنید.")
+            return
+        try:
+            from ...persistence.outage_workbooks import save_workbook
+            key = of_table.item(row, 0).text()
+            meta = save_workbook(db, key, path)
+        except Exception as exc:
+            QMessageBox.critical(win, "ذخیره فایل خاموشی", str(exc))
+            return
+        files[key] = meta["filename"]
+        of_table.item(row, 1).setText("ذخیره در پروژه: " + meta["filename"])
+        state["dirty"] = True
+        status_msg("فایل خاموشی در پروژه ذخیره شد؛ برای محاسبه، پردازش را اجرا کنید.")
 
     of_table.doubleClicked.connect(
         lambda idx: do_pick_feeder_outage(idx.row()))
@@ -918,6 +933,14 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         state["plc"] = None
         state["outage"] = None          # a fresh project has no outage run
         state["outage_store"] = None
+        try:
+            from ...persistence.outage_workbooks import list_workbooks, COLLECTIVE_KEY
+            state["outage_feeder_files"] = {
+                k: v["filename"] for k, v in list_workbooks(str(res.db_path)).items()
+                if k != COLLECTIVE_KEY} if res.db_path else {}
+        except Exception as exc:
+            state["outage_feeder_files"] = {}
+            _log.warning("could not read stored outage workbooks: %s", exc)
         state["capacity_rows"] = []
         state["manual_evals"] = []
         state["lambda_overrides"] = {}
@@ -968,11 +991,20 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                 "The database contains no importable network.")
             return
         state["net"], state["db"] = net, str(path)
+        from ...persistence.outage_workbooks import list_workbooks, COLLECTIVE_KEY
+        try:
+            stored_files = list_workbooks(str(path))
+            state["outage_feeder_files"] = {k: v["filename"] for k, v in stored_files.items()
+                                             if k != COLLECTIVE_KEY}
+        except Exception as exc:
+            state["outage_feeder_files"] = {}
+            QMessageBox.warning(win, "فایل‌های خاموشی", f"خواندن فایل‌ها ناموفق بود: {exc}")
         state["dirty"] = False
         state["topo"] = state["run_id"] = None
         state["plc"] = None
         topo_panel.setPlainText(_PANEL_HINT)
         btn_show_map.setEnabled(False)
+        btn_review_outages.setEnabled(False)
         _load_project_kv(str(path))          # استایل‌ها + نام گزارش (مورد ۲/۴)
         # a persisted outage run of THIS project feeds the dashboard λ/r
         state["outage"] = None
@@ -1078,6 +1110,10 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     btn_review_outages = QPushButton("Review outage places / zones")
     btn_review_outages.setEnabled(False)
     btn_row_o.addWidget(btn_review_outages)
+    btn_outage_history = QPushButton("مشاهده سوابق خاموشی")
+    btn_row_o.addWidget(btn_outage_history)
+    btn_saved_workbooks = QPushButton("فایل‌های اکسل پروژه")
+    btn_row_o.addWidget(btn_saved_workbooks)
     btn_row_o.addStretch(1)
     right_col.addLayout(btn_row_o)
 
@@ -1122,6 +1158,30 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             state["_persisted_outage_records"] = [
                 OutageRecord(**event) for event in payload.get("events", [])]
         return state.get("_persisted_outage_records") or []
+
+    def open_outage_history():
+        records = outage_records()
+        if not records:
+            QMessageBox.information(win, "سوابق خاموشی",
+                "هنوز رخداد پردازش‌شده‌ای در این پروژه وجود ندارد. "
+                "فایل‌های ذخیره‌شده را با دکمه پردازش اجرا کنید.")
+            return
+        from .outage_history_dialog import show_outage_history
+        show_outage_history(win, records)
+
+    btn_outage_history.clicked.connect(open_outage_history)
+
+    def open_saved_workbooks():
+        if not state.get("db"):
+            QMessageBox.information(win, "فایل خاموشی", "ابتدا پروژه را باز کنید.")
+            return
+        from .outage_history_dialog import show_saved_workbooks
+        try:
+            show_saved_workbooks(win, state["db"])
+        except Exception as exc:
+            QMessageBox.critical(win, "فایل خاموشی", str(exc))
+
+    btn_saved_workbooks.clicked.connect(open_saved_workbooks)
 
     def outage_gazetteer():
         """بانک آفلاین مکان‌ها — یک‌بار بارگذاری؛ نبود فایل = غیرفعال."""
@@ -1331,17 +1391,30 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             "Excel workbook (*.xlsx *.xlsm)")
         if not path:
             return
-        cov = dict(state.get("coverage") or {})
         db = state["db"]
+        try:
+            from ...persistence.outage_workbooks import save_workbook, COLLECTIVE_KEY
+            save_workbook(db, COLLECTIVE_KEY, path)
+            state["dirty"] = True
+        except Exception as exc:
+            QMessageBox.critical(win, "ذخیره فایل خاموشی", str(exc))
+            return
+        cov = dict(state.get("coverage") or {})
         feeder_loads = _feeder_load_kw(state)
         selected_energy_unit = energy_unit.currentData()
 
         def work():
-            return OutageService(OutageSettings(
+            from tempfile import TemporaryDirectory
+            from ...persistence.outage_workbooks import export_workbook
+            with TemporaryDirectory(prefix="switchloc-outage-") as folder:
+                stored_path = export_workbook(db, COLLECTIVE_KEY,
+                                               Path(folder) / ("outage" + Path(path).suffix.lower()))
+                return OutageService(OutageSettings(
                 user="ui-user", persist=True,
                 model_feeders=tuple(study_feeder_keys()),
                 feeder_load_kw=feeder_loads,
                 energy_unit=selected_energy_unit,
+                workbook_label="project:" + Path(path).name,
                 scope_feeder=(state.get("scope") if isinstance(state.get("scope"), str) else None),
                 scope_feeders=(tuple(state.get("scope") or [])
                                if isinstance(state.get("scope"), (list, tuple, set)) else ()),
@@ -1350,7 +1423,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 force_cover_months=tuple(cov.get("force_cover_months") or ()),
                 force_exclude_months=tuple(
                     cov.get("force_exclude_months") or ()),
-            )).run(path, out_db=db, report_dir=str(_reports_dir()),
+            )).run(str(stored_path), out_db=db, report_dir=str(_reports_dir()),
                    project_name=Path(db).stem)
 
         def done(res) -> None:
@@ -1403,12 +1476,22 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         selected_energy_unit = energy_unit.currentData()
 
         def work():
-            return OutageService(OutageSettings(
+            from tempfile import TemporaryDirectory
+            from ...persistence.outage_workbooks import export_workbook
+            with TemporaryDirectory(prefix="switchloc-outages-") as folder:
+                extracted = {}
+                for index, (key, name) in enumerate(sorted(files.items())):
+                    suffix = Path(name).suffix.lower()
+                    target = Path(folder) / f"feeder-{index}{suffix}"
+                    export_workbook(db, key, target)
+                    extracted[key] = str(target)
+                return OutageService(OutageSettings(
                 user="ui-user", persist=True,
                 model_feeders=tuple(study_feeder_keys()),
                 feeder_load_kw=feeder_loads,
                 energy_unit=selected_energy_unit,
-                per_feeder_files=dict(files),
+                per_feeder_files=extracted,
+                per_feeder_labels={k: "project:" + name for k, name in files.items()},
                 scope_feeder=(state.get("scope") if isinstance(state.get("scope"), str) else None),
                 scope_feeders=(tuple(state.get("scope") or [])
                                if isinstance(state.get("scope"), (list, tuple, set)) else ()),
@@ -3136,7 +3219,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             from ...persistence.store import ProjectStore
             store = ProjectStore(path); store.close()
             state.update({"db": path, "net": None, "topo": None, "run_id": None,
-                          "plc": None, "outage": None, "outage_store": None,
+                          "plc": None, "outage": None, "outage_store": None, "outage_feeder_files": {},
                           "capacity_rows": [], "manual_evals": [], "manual_zone_result": None, "manual_tie_pairs": [], "scope": None,
                           "dirty": False})
             refresh_dashboard(); refresh_project_info(); remember_project(path)
@@ -3205,6 +3288,10 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             store.close()
             if net is not None:
                 state["net"], state["db"] = net, str(db_path)
+                from ...persistence.outage_workbooks import list_workbooks, COLLECTIVE_KEY
+                state["outage_feeder_files"] = {
+                    k: v["filename"] for k, v in list_workbooks(str(db_path)).items()
+                    if k != COLLECTIVE_KEY}
                 _load_project_kv(str(db_path))   # استایل‌ها + نام گزارش
                 # prior placement run → phase-5 exports available
                 btn_exports.setEnabled(_has_plc)

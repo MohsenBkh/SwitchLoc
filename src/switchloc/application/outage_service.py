@@ -45,6 +45,9 @@ class OutageSettings:
     #: feeder_key → مسیر فایل اکسل خاموشی همان فیدر؛ وقتی غیرخالی باشد،
     #: همه رکوردهای هر فایل به همان فیدر منسوب و فایل‌ها ادغام می‌شوند.
     per_feeder_files: dict = field(default_factory=dict)
+    #: Stable project-local names when paths are temporary extracts.
+    per_feeder_labels: dict = field(default_factory=dict)
+    workbook_label: str = ""
     #: دامنه تک‌فیدر؛ فایل جمعی نیز پیش از طبقه‌بندی فقط به این فیدر محدود می‌شود.
     scope_feeder: str | None = None
     #: explicit multi-feeder study set; takes precedence over scope_feeder
@@ -118,6 +121,8 @@ class OutageService:
                     fpath, feeder_mapper=fixed_feeder_mapper(fkey),
                     source_tag=fkey)
                 records.extend(recs)
+                if fkey in st.per_feeder_labels:
+                    stt["file"] = st.per_feeder_labels[fkey]
                 reader_stats["sources"].append(
                     {"feeder_key": fkey, "file": stt["file"],
                      "records": stt["records"],
@@ -136,6 +141,8 @@ class OutageService:
                 raise ValueError("workbook یا per_feeder_files باید داده شود.")
             records, reader_stats = read_outage_workbook(
                 workbook, feeder_mapper=default_feeder_mapper(st.model_feeders))
+            if st.workbook_label:
+                reader_stats["file"] = st.workbook_label
 
         # دامنه تک‌فیدر: هیچ رخداد فیدر دیگری وارد طبقه‌بندی، پوشش یا λ/r نمی‌شود.
         if st.scope_feeders or st.scope_feeder:
@@ -309,7 +316,7 @@ class OutageService:
                 "force_exclude_months": list(st.force_exclude_months),
                 "basis_note": "λ بر مخرج روزهای واقعی دارای پوشش داده (نیاز ۸)",
             },
-            "per_feeder_files": dict(st.per_feeder_files or {}),
+            "per_feeder_files": dict(st.per_feeder_labels or st.per_feeder_files or {}),
             "scope_feeder": st.scope_feeder,
             "feeder_load_kw": dict(st.feeder_load_kw or {}),
             "energy_unit": st.energy_unit,
