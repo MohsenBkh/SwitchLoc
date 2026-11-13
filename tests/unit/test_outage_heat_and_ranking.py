@@ -142,3 +142,17 @@ def test_style_default_levels_cover_example_of_the_user():
     assert assign_heat_level(1, MapStyle().outage_heat_levels)["color"] == "#2e7d32"
     assert assign_heat_level(5, MapStyle().outage_heat_levels)["color"] == "#ef6c00"
     assert assign_heat_level(20, MapStyle().outage_heat_levels)["color"] == "#c62828"
+
+
+def test_heat_counts_restricts_selected_edges():
+    points = [{"x": 1000, "y": 0}]
+    assert outage_heat_counts(points, _Graph(), radius_m=10, edge_ids={"e1"}) == {"e1": 1}
+    assert outage_heat_counts(points, _Graph(), radius_m=10, edge_ids=set()) == {}
+
+
+def test_coordinate_style_and_default_link_roundtrip():
+    st = MapStyle()
+    assert not st.show_outage_links
+    st.coordinate_size, st.coordinate_color, st.coordinate_marker = 120, "#123456", "D"
+    back = MapStyle.from_dict(st.as_dict())
+    assert (back.coordinate_size, back.coordinate_color, back.coordinate_marker) == (120, "#123456", "D")

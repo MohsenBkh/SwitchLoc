@@ -980,14 +980,18 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         state["_persisted_outage_records"] = None
         try:
             _st = ProjectStore(str(path))
-            state["outage_store"] = _st.load_outages()
+            try:
+                state["outage_store"] = _st.load_outages()
+            finally:
+                _st.close()
             state["_persisted_outage_records"] = None
-            _st.close()
         except ValueError:
             state["outage_store"] = None           # project has no outage run
         except Exception as exc:                       # noqa: BLE001
             _log.warning("outage data of %s not loaded: %s", path, exc)
             state["outage_store"] = None
+            QMessageBox.warning(win, "داده خاموشی",
+                                f"خواندن داده خاموشی پروژه ناموفق بود: {exc}")
         try:   # capacities persisted for THIS project (نیاز ۹)
             _st = ProjectStore(str(path))
             state["capacity_rows"] = [c.as_dict() for c in
@@ -1041,6 +1045,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         refresh_scope_choices()
         refresh_outage_feeder_table()
         refresh_manual_feeders()
+        show_persisted_outage_summary()
         refresh_map()
         refresh_dashboard()
         remember_project(str(path))
@@ -1060,6 +1065,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     energy_unit.addItem("نامشخص / تخمین خودکار", "auto")
     energy_unit.addItem("kWh", "kwh")
     energy_unit.addItem("MWh", "mwh")
+    energy_unit.setCurrentIndex(energy_unit.findData("mwh"))
     energy_unit.setToolTip("واحد اعلام‌شده در منبع را انتخاب کنید؛ حالت خودکار فقط تخمین است.")
     energy_row.addWidget(energy_unit)
     energy_row.addStretch(1)
@@ -1084,6 +1090,25 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     except AttributeError:
         pass
     right_col.addWidget(outage_panel, 1)
+
+    def show_persisted_outage_summary():
+        payload = state.get("outage_store") or {}
+        events = payload.get("events") or []
+        if not payload:
+            outage_panel.clear()
+            return
+        lines = ["داده‌های خاموشی ذخیره‌شده پروژه",
+                 f"تعداد رخداد: {len(events):,}",
+                 f"تاریخ اجرا: {payload.get('created_at', '—')}",
+                 f"وضعیت: {payload.get('verdict', '—')}", "", "ماتریس λ/r:"]
+        for row in payload.get("lambda_r") or []:
+            lines.append(f"  {row.get('feeder_key', '—')}: "
+                         f"λ={float(row.get('lambda_per_year') or 0):.2f}/yr, "
+                         f"r={float(row.get('r_minutes') or 0):.1f} min, "
+                         f"رخداد تصادفی={row.get('events_random', 0)}")
+        lines.append("\nبرای نمایش مکان‌ها، توپولوژی را اجرا و بازبینی خاموشی‌ها را باز کنید.")
+        outage_panel.setPlainText("\n".join(lines))
+
 
     # ---------------- خاموشی‌های دارای مختصات (نقشه) --------------------
     def outage_records():
@@ -1331,6 +1356,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         def done(res) -> None:
             state["dirty"] = True
             state["outage"] = res
+            state["outage_store"] = None
+            state["_persisted_outage_records"] = None
             state["outage_points"] = []          # لایهٔ نقشه از نو ساخته می‌شود
             state["outage_points_built"] = False
             btn_review_outages.setEnabled(bool(res.records) and state.get("topo") is not None)
@@ -1396,6 +1423,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         def done(res) -> None:
             state["dirty"] = True
             state["outage"] = res
+            state["outage_store"] = None
+            state["_persisted_outage_records"] = None
             state["outage_points"] = []
             state["outage_points_built"] = False
             btn_review_outages.setEnabled(bool(res.records) and state.get("topo") is not None)
@@ -2980,6 +3009,11 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
     # ---------------- application chrome (menus / toolbar / sidebar) ------
     def show_help() -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        guide = _asset_dir() / "help" / "SwitchLoc_Guide_FA.pdf"
+        if guide.is_file() and QDesktopServices.openUrl(QUrl.fromLocalFile(str(guide))):
+            return
         QMessageBox.information(
             win, "SwitchLoc — Help",
             "<b>گردش کار مطالعه (TAV122-02/00 — روش سطح اول)</b>"
@@ -3180,6 +3214,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                 f"Could not open project:\n{exc}")
     refresh_scope_choices()
     refresh_outage_feeder_table()
+    show_persisted_outage_summary()
     refresh_dashboard()
     refresh_plan_table()
     refresh_tie_table()

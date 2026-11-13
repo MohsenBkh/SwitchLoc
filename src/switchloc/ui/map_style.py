@@ -118,6 +118,9 @@ class MapStyle:
     no_tie_size: float = 26.0
     no_tie_marker: str = "D"
     source_color: str = "#111111"
+    coordinate_size: float = 150.0
+    coordinate_marker: str = "X"
+    coordinate_color: str = "#ff00aa"
     source_size: float = 70.0
     source_marker: str = "s"
     transformer_color: str = "#555555"
@@ -148,7 +151,7 @@ class MapStyle:
     outage_label_color: str = "#37474f"
     outage_label_alpha: float = 0.95
     show_outage_labels: bool = True
-    show_outage_links: bool = True
+    show_outage_links: bool = False
     # -- توزیع رنگی مسیر فیدرها بر اساس تکرار خاموشی (DIgSILENT-style) ----
     outage_heat_enabled: bool = False
     #: شعاع اثر هر خاموشی بر یال‌های فیدر (متر) — پیش‌فرض ۵۰۰۰ و **بدون
@@ -278,7 +281,7 @@ class MapStyle:
         # marker sanity — an invalid code would raise at render time
         for name in ("switch_marker", "fct_marker", "dcs_marker",
                      "cbr_marker", "rec_marker", "sec_marker",
-                     "unknown_device_marker", "no_tie_marker", "source_marker",
+                     "unknown_device_marker", "no_tie_marker", "source_marker", "coordinate_marker",
                      "transformer_marker", "proposed_marker", "manual_marker",
                      "outage_marker", "opt_sec_marker"):
             if getattr(st, name) not in MARKER_CHOICES:

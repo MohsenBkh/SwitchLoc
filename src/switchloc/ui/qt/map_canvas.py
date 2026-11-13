@@ -648,7 +648,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
     switch affects rendering only; the network graph, zone model and
     engineering calculations are never mutated.
     """
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import Qt, QTimer
     from PySide6.QtGui import QAction, QIcon, QStandardItem, QStandardItemModel
     from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox,
                                    QHBoxLayout, QLabel, QListWidget,
@@ -754,6 +754,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.switch_list.setToolTip(
                 "با برداشتن تیک، فقط نماد همان کلید از نقشه حذف می‌شود؛ "
                 "داده و محاسبات شبکه بدون تغییر باقی می‌ماند.")
+            self._switch_redraw_timer = QTimer(self)
+            self._switch_redraw_timer.setSingleShot(True)
+            self._switch_redraw_timer.timeout.connect(self._apply)
             self.switch_list.itemChanged.connect(self._switch_item_changed)
             sv.addWidget(self.switch_list, 1)
             self.switch_panel = switch_box
@@ -1314,21 +1317,16 @@ def make_map_canvas(parent=None, osm_fetch=None):
                     self._switch_user_hidden.add(sid)
                     self._switch_user_shown.discard(sid)
             else:
-                # parent category: apply its state to all children — ولی نه
-                # حالت نیمه‌انتخاب خودکار (AutoTristate) که Qt هنگام
-                # تغییر یک فرزند می‌سازد
-                state = item.checkState(0)
-                if state == Qt.CheckState.PartiallyChecked:
-                    return
-                for i in range(item.childCount()):
-                    child = item.child(i)
-                    child.setCheckState(0, state)
+                # Qt AutoTristate propagates parent changes to children.
+                # Each child updates the state; coalesce all redraws below.
+                return
             total = sum(self.switch_list.topLevelItem(i).childCount()
                         for i in range(self.switch_list.topLevelItemCount()))
             self.switch_count.setText(f"{total} کلید | {total-len(self._hidden_switch_ids)} قابل نمایش")
-            self._apply()
+            self._switch_redraw_timer.start(50)
 
         def _set_all_switches(self, visible: bool) -> None:
+            self._switch_redraw_timer.stop()
             self.switch_list.blockSignals(True)
             hidden = set()
             total = 0

@@ -281,9 +281,15 @@ class SwitchPlacementService:
             return [k for k in all_keys
                     if any(same_feeder(k, w) for w in wanted)]
 
+        def _has_unique_rate(mapping, name):
+            from ..topology.tracing import same_feeder
+            return name in mapping or sum(1 for k in mapping
+                                          if same_feeder(k, name)) == 1
+
         if source == "outage":
             rates = dict(outage_rates)
-            missing = [k for k in _scoped_keys() if k not in outage_rates]
+            missing = [k for k in _scoped_keys()
+                       if not _has_unique_rate(outage_rates, k)]
             if missing:
                 warnings.append(
                     "برای فیدر(های) " + ", ".join(missing) +
@@ -347,7 +353,8 @@ class SwitchPlacementService:
 
         repair_times = dict(r_by_feeder) if auto_rates else {}
         if auto_rates:
-            missing_r = [k for k in _scoped_keys() if k not in repair_times]
+            missing_r = [k for k in _scoped_keys()
+                         if not _has_unique_rate(repair_times, k)]
             if missing_r:
                 warnings.append(
                     "برای فیدر(های) " + ", ".join(missing_r) +

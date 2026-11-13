@@ -788,7 +788,7 @@ def _point_segment_distance(px: float, py: float, ax: float, ay: float,
 
 
 def outage_heat_counts(points: Iterable[dict], graph, *,
-                       radius_m: float = 300.0) -> dict[str, int]:
+                       radius_m: float = 300.0, edge_ids=None) -> dict[str, int]:
     """تعداد خاموشی‌های نزدیک هر یال (متناسب با تکرار در طول فیدر).
 
     هر نقطهٔ خاموشی به **همهٔ** یال‌هایی که در شعاع ``radius_m`` آن هستند
@@ -805,17 +805,21 @@ def outage_heat_counts(points: Iterable[dict], graph, *,
     if not pts or graph is None:
         return out
     radius = max(1.0, float(radius_m))
+    bounds = (min(p[0] for p in pts), max(p[0] for p in pts),
+              min(p[1] for p in pts), max(p[1] for p in pts))
     for eid, edge in (getattr(graph, "edges", {}) or {}).items():
+        if edge_ids is not None and eid not in edge_ids:
+            continue
         a = getattr(graph.nodes, "get", lambda *_: None)(edge.a)
         b = getattr(graph.nodes, "get", lambda *_: None)(edge.b)
         if a is None or b is None or a.coord is None or b.coord is None:
             continue
         ax, ay = float(a.coord[0]), float(a.coord[1])
         bx, by = float(b.coord[0]), float(b.coord[1])
-        if max(ax, bx) + radius < min(p[0] for p in pts) or \
-                min(ax, bx) - radius > max(p[0] for p in pts) or \
-                max(ay, by) + radius < min(p[1] for p in pts) or \
-                min(ay, by) - radius > max(p[1] for p in pts):
+        if max(ax, bx) + radius < bounds[0] or \
+                min(ax, bx) - radius > bounds[1] or \
+                max(ay, by) + radius < bounds[2] or \
+                min(ay, by) - radius > bounds[3]:
             continue
         n = sum(1 for px, py in pts
                 if _point_segment_distance(px, py, ax, ay, bx, by) <= radius)

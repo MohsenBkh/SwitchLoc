@@ -47,7 +47,7 @@ def test_style_has_a_drawable_outage_layer_by_default():
     st = MapStyle.default_for(feeders=["F1"])
     assert st.show_outages is True
     assert st.show_outage_labels is True
-    assert st.show_outage_links is True
+    assert st.show_outage_links is False
     assert st.hidden_outage_ids is None
     assert st.outage_marker                 # مارکر معتبر پیش‌فرض
     assert st.outage_size > 0
@@ -74,7 +74,9 @@ def test_outage_marker_whitelist_rejects_garbage():
 
 
 def test_renderer_draws_the_layer_when_enabled(tmp_path):
-    r = _renderer()
+    style = MapStyle()
+    style.show_outage_links = True
+    r = _renderer(style=style)
     out = r.render(str(tmp_path / "on.png"), outage_points=POINTS, dpi=70)
     assert Path(out).is_file() and Path(out).stat().st_size > 3000
     assert "outage" in r._drawn
@@ -129,3 +131,27 @@ def test_style_hidden_ids_apply_when_no_explicit_list_is_passed(tmp_path):
     r2 = _renderer(style=st)
     r2.render(str(tmp_path / "style_shown.png"), outage_points=POINTS, dpi=70)
     assert "outage" in r2._drawn
+
+
+def test_heat_does_not_draw_for_unselected_feeder(tmp_path):
+    st = MapStyle()
+    st.outage_heat_enabled = True
+    r = _renderer(style=st)
+    r.render(str(tmp_path / 'heat.png'), outage_points=POINTS,
+             feeder_filter={'F2'}, dpi=70)
+    assert 'outage_heat' not in r._drawn
+
+
+def test_coordinate_symbol_uses_style(tmp_path):
+    from matplotlib.figure import Figure
+    st = MapStyle()
+    st.coordinate_color = '#123456'
+    st.coordinate_size = 222
+    st.coordinate_marker = 'D'
+    r = _renderer(style=st)
+    fig = Figure()
+    r.render_into(fig, highlight_point=(10, 20))
+    coord = next(c for c in fig.axes[0].collections
+                 if c.get_label() == 'Entered UTM coordinate')
+    assert coord.get_sizes()[0] == 222
+    assert tuple(coord.get_facecolors()[0][:3]) == pytest.approx((18/255, 52/255, 86/255))

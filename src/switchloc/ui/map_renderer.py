@@ -437,9 +437,13 @@ class NetworkMapRenderer:
                 try:
                     from ..application.outage_review import (
                         assign_heat_level, outage_heat_counts)
+                    heat_points = [p for p in visible if feeder_filter is None
+                                   or (p.get("feeder") and _feeder_selected(
+                                       str(p["feeder"]), feeder_filter))]
                     counts = outage_heat_counts(
-                        visible, self.graph,
-                        radius_m=float(getattr(st, "outage_heat_radius_m", 300.0)))
+                        heat_points, self.graph,
+                        radius_m=float(getattr(st, "outage_heat_radius_m", 300.0)),
+                        edge_ids=selected_edges)
                 except Exception:                 # noqa: BLE001
                     counts = {}
                 seg_by_color: dict[str, list] = {}
@@ -517,7 +521,7 @@ class NetworkMapRenderer:
         if highlight_point is not None:
             hx, hy = map(float, highlight_point)
             self._drawn.add("coordinate")
-            ax.scatter([hx], [hy], s=150, marker="X", color="#ff00aa",
+            ax.scatter([hx], [hy], s=st.coordinate_size, marker=st.coordinate_marker, color=st.coordinate_color,
                        edgecolors="white", linewidths=1.2, zorder=20,
                        label="Entered UTM coordinate")
 
@@ -893,7 +897,7 @@ class NetworkMapRenderer:
                                   markersize=9, markerfacecolor="none",
                                   label=getattr(self, "_opt_switch_label", "Proposed switch (EENS)")))
         if "coordinate" in drawn:
-            handles.append(Line2D([], [], color="#ff00aa", marker="X",
+            handles.append(Line2D([], [], color=st.coordinate_color, marker=st.coordinate_marker,
                                   linestyle="None", markersize=9,
                                   label="Entered UTM coordinate"))
         if manual:

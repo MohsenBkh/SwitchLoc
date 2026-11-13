@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('build_assets/splash.png', 'build_assets'), ('build_assets/logo.png', 'build_assets'), ('build_assets/icon.png', 'build_assets'), ('build_assets/fonts', 'build_assets/fonts'), ('data/geography/ardabil_places.sqlite', 'data/geography')]
+datas = [('build_assets/splash.png', 'build_assets'), ('build_assets/logo.png', 'build_assets'), ('build_assets/icon.png', 'build_assets'), ('build_assets/fonts', 'build_assets/fonts'), ('build_assets/help', 'build_assets/help'), ('data/geography/ardabil_places.sqlite', 'data/geography')]
 binaries = []
 hiddenimports = ['shapefile', 'PySide6.QtSvg', 'matplotlib.backends.backend_qtagg', 'switchloc.ui.osm_tiles', 'switchloc.ui.qt.splash', 'switchloc.ui.qt.settings_dialog', 'switchloc.ui.qt.chrome', 'switchloc.ui.qt.theme', 'switchloc.ui.qt.icons', 'switchloc.ui.qt.i18n', 'switchloc.ui.qt.worker']
 tmp_ret = collect_all('arabic_reshaper')

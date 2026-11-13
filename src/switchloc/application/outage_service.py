@@ -53,7 +53,7 @@ class OutageSettings:
     #: بار هر فیدر (kW) برای استنتاج سهم مشترکین متأثر از «انرژی توزیع‌نشده»
     feeder_load_kw: dict = field(default_factory=dict)
     #: واحد «انرژی توزیع‌نشده»: auto | mwh | kwh (A-08 — اعلام‌نشده)
-    energy_unit: str = "auto"
+    energy_unit: str = "mwh"
     #: تعداد مشترکین هر فیدر (اختیاری؛ فقط برای مشترک-دقیقه و تعداد قطع)
     customers: dict = field(default_factory=dict)
 
