@@ -52,7 +52,11 @@ def test_map_style_dialog_roundtrip_and_book(app):
         None, ["F1", "F2"], base,
         book={"چاپ": {"feeder_width": 1.8, "feeder_colors": {"F1": "#005500"}}},
         active_name="چاپ")
-    tbl = dlg.findChildren(QtWidgets.QTableWidget)[0]
+    # دیالوگ چند جدول دارد (رنگ فیدرها، سطوح توزیع رنگی خاموشی…)؛
+    # جدول فیدرها با نام فیدرها شناسایی می‌شود، نه با ترتیب ساخت.
+    tbl = next(t for t in dlg.findChildren(QtWidgets.QTableWidget)
+               if t.rowCount() and t.item(0, 0) is not None
+               and t.item(0, 0).text() == "F1")
     # جدول رنگ فیدرها دقیقاً با رنگ‌های اولیه رندرر پر شده (مورد ۱)
     rows = [(tbl.item(i, 0).text(), tbl.cellWidget(i, 1))
             for i in range(tbl.rowCount())]

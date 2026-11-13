@@ -451,3 +451,41 @@ def test_zone_callout_drag_moves_box_keeps_anchor_and_persists(canvas):
     assert c._zone_label_positions["zone-1"] == pytest.approx(
         ann.get_position())
     assert c._pan is None
+
+
+@pytest.mark.skipif(not HAS_QT, reason="PySide6.QtWidgets is not importable")
+def test_unchecking_one_switch_does_not_hide_its_whole_category(app):
+    """باگ: حالت «نیمه‌انتخاب» والد (AutoTristate) به فرزندان تحمیل می‌شد و
+    خاموش‌کردن یک کلید، همهٔ کلیدهای آن دسته را پنهان می‌کرد."""
+    from PySide6.QtCore import Qt
+    from switchloc.topology.graph import NetworkGraph
+    from switchloc.topology.tracing import TracingEngine, TracingPolicy
+    from switchloc.ui.map_renderer import NetworkMapRenderer
+    from switchloc.ui.qt.map_canvas import make_map_canvas
+    from switchloc.validation.issues import IssueLog
+    from conftest import NetBuilder
+
+    b = NetBuilder()
+    b.source(0, 0, "F1")
+    b.line([(0, 0), (50, 0), (100, 0), (150, 0)], feeder="F1")
+    b.switch(50, 0, feeder="F1")
+    b.switch(100, 0, feeder="F1")
+    b.transformer(150, 0, feeder="F1")
+    g = NetworkGraph.from_network(b.net, IssueLog())
+    traces = TracingEngine(g, b.net, TracingPolicy()).trace_all(IssueLog())
+    rend = NetworkMapRenderer(g, traces=traces, zones=None,
+                              switches={s.id: s for s in b.net.switches})
+    tab = make_map_canvas()
+    tab.show_network(rend, title="switches")
+
+    tree = tab.switch_list
+    children = [tree.topLevelItem(i).child(j)
+                for i in range(tree.topLevelItemCount())
+                for j in range(tree.topLevelItem(i).childCount())]
+    assert len(children) == 2 and children[0].parent().childCount() == 2
+    first = children[0]
+    first.setCheckState(0, Qt.CheckState.Unchecked)
+    assert len(tab._hidden_switch_ids) == 1
+    assert first.data(0, Qt.ItemDataRole.UserRole) in tab._hidden_switch_ids
+    # برچسب شمارش هم درست به‌روز می‌شود
+    assert "1 قابل نمایش" in tab.switch_count.text()

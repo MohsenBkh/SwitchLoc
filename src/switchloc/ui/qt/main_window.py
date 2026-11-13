@@ -296,10 +296,56 @@ def fmt_outage_result(res) -> str:
                      f"({f.events_random} random events / "
                      f"{f.exposure_days or f.years_covered} "
                      f"{'days exposure' if f.exposure_days else 'years'})")
+    ind = getattr(res, "indices", None)
+    if ind is not None and getattr(ind, "feeders", None):
+        lines.append("")
+        lines.append("SAIDI/SAIFI :" if ind.has_result else
+                     "SAIDI/SAIFI : (نیاز به بار فیدر — محاسبه نشد)")
+        lines.append(f"واحد انرژی: {ind.energy_unit.upper()} ({ind.energy_unit_source})؛ ENS سالانه = مجموع انرژی / سال مواجهه")
+        for f in ind.feeders:
+            if getattr(f, "energy_records", 0):
+                lines.append(f"  {f.feeder_key}: مجموع خام انرژی={f.energy_raw_total:,.4f}؛ تعداد={f.energy_records}؛ مواجهه={f.exposure_years:.4f} سال؛ ENS={f.ens_kwh_per_year:,.2f} kWh/سال")
+            if not f.events_counted:
+                lines.append(f"  - {f.feeder_key}: — "
+                             "(رخداد قابل محاسبه نداشت)")
+                continue
+            lines.append(
+                f"  - {f.feeder_key}: SAIFI={f.saifi:.2f} int/yr  "
+                f"SAIDI={f.saidi:,.1f} min/yr  CAIDI={f.caidi:.1f} min  "
+                f"ASAI={f.asai * 100:.4f}%  "
+                f"({f.events_counted}/{f.events_total} events, "
+                f"{f.exposure_years:.3f} yr)")
+        if ind.has_result:
+            lines.append(f"  = system: SAIFI={ind.saifi:.2f} int/yr  "
+                         f"SAIDI={ind.saidi:,.1f} min/yr  "
+                         f"CAIDI={ind.caidi:.1f} min  "
+                         f"ASAI={ind.asai * 100:.4f}%  "
+                         f"[{ind.aggregation}, {ind.load_basis}, "
+                         f"energy {ind.energy_unit.upper()}]")
     lines.append("")
     lines.append("Next: run Placement — it reads this λ/r matrix "
                  "(latest outage run) automatically.")
     return "\n".join(lines)
+
+
+def _feeder_load_kw(state) -> dict:
+    """بار هر فیدر (kW) برای شاخص‌های SAIDI/SAIFI.
+
+    منبع: P واردشده در «مدل بار» (همان P_load کاربر). اگر برای فیدری P
+    وارد نشده باشد، هیچ عددی ساخته نمی‌شود: شاخص آن فیدر فقط از قطع‌کننده
+    (بریکر/ریکلوزر) و به‌صورت «کف» محاسبه می‌شود و علتش در گزارش می‌آید.
+    """
+    from ...topology.tracing import feeder_id
+    out: dict = {}
+    model = dict(state.get("load_model") or {})
+    for key, val in (model.get("feeder_pq") or {}).items():
+        try:
+            p_kw = float((val or {}).get("p_kw") or 0.0)
+        except (TypeError, ValueError):
+            p_kw = 0.0
+        if p_kw > 0:
+            out[feeder_id(key)] = p_kw
+    return out
 
 
 def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
@@ -344,7 +390,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
     assets = _asset_dir()
-    logo = assets / "logo.png"
+    logo = assets / "icon.png"
     if logo.exists():
         app.setWindowIcon(QIcon(str(logo)))
 
@@ -366,9 +412,19 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     from ..qt.dashboard_tab import make_dashboard_tab
     from ..qt.map_canvas import make_map_canvas
     from ..qt.mapping_wizard import MappingWizardPage
+    from ..qt.switch_placement_tab import make_sectionalizer_tab
     from ...application.import_service import ImportService, ImportSettings
     from ...application.outage_service import OutageService, OutageSettings
-    from ...application.outage_review import OutageReviewStore, suggest_event_places
+    from ...application.outage_review import (OutageReviewStore,
+                                              build_zone_geometries,
+                                              default_gazetteer_path,
+                                              outage_map_points,
+                                              plan_review_rows,
+                                              suggest_event_places)
+    from ...application.switch_placement_service import (
+        SwitchPlacementAppSettings, SwitchPlacementService)
+    from ...reliability.switch_placement import SwitchPlacementSettings
+    from ...gis.crs import transform_wgs84_to_project
     from ...reliability.zone_outages import calculate_zone_up
     from ...geography.places import PlaceGazetteer
     from ...application.topology_service import TopologyService, TopologySettings
@@ -403,7 +459,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                    "load_model": {}, "criteria": {}, "coverage": {},
                    "weights": [],                # وزن‌های جدول ۱۶ (تأیید ورودی‌ها)
                    "tie_reviews": {},            # نیاز ۱۲ — A-09 review
-                   "outage_feeder_files": {},    # فایل خاموشی هر فیدر
+                   "outage_feeder_files": {},    # نام فایل‌های ذخیره‌شده در پروژه
                    "manual_evals": [],           # ارزیابی جایابی دستی
                    "lambda_overrides": {},       # تأیید ورودی‌ها — ویرایش λ/r
                    "map_style": None,            # تنظیمات نمایشی نقشه
@@ -411,11 +467,26 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                    "map_style_name": "",
                    "report_project_name": "",    # نام پروژه در گزارش (مورد ۴)
                    "plan_reviews": {},           # تأیید نهایی مهندسی
-                   "_loading": False, "dirty": False}
+                   "outage_reviews": {},         # بازبینی ذخیره‌شدهٔ زون/مکان
+                   "outage_points": [],          # خاموشی‌های دارای مختصات (نقشه)
+                   "outage_points_built": False,  # لایهٔ نقشه یک‌بار ساخته شود
+                   "zone_geometries": None,      # هندسهٔ زون‌ها (کش)
+                   "zone_geometry_topo": None,   # توپولوژی متناظر کش
+                   "gazetteer": None,            # بانک آفلاین مکان‌ها (کش)
+                   "sectionalizer": None,        # نتیجهٔ موتور EENS
+                   "sectionalizer_settings": {},  # تنظیمات تب (پروژه)
+                   "outage_last_save": "",       # پیام آخرین ذخیرهٔ بازبینی
+                   "_loading": False, "_loading_kv": False, "dirty": False}
+
+    import copy
+    _empty_project_state = copy.deepcopy(state)
+    _empty_project_state["db"] = None
 
     step("Preparing map canvas…")
     map_tab = make_map_canvas(win)
     dash_tab = make_dashboard_tab(win)
+    sec_tab = make_sectionalizer_tab(win)
+    _default_sectionalizer_settings = sec_tab.settings()
 
     # ---------------- Dashboard refresh ----------------------------------
     def refresh_dashboard() -> None:
@@ -485,22 +556,63 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             store.set_kv("map_style_active", active_name)
             store.set_kv("report_project_name",
                          state.get("report_project_name") or "")
+            # تنظیمات تب بهینه‌سازی سکشنالایزر (با پروژه ذخیره/بازگردانده می‌شود)
+            if state.get("sectionalizer_settings"):
+                store.set_kv("sectionalizer_settings",
+                             dict(state["sectionalizer_settings"]))
             store.close()
             state["dirty"] = True
+            return True
         except Exception as exc:                   # noqa: BLE001
             _write_log(_fmt_exc(exc))
+            return False
 
     def _load_project_kv(path: str) -> None:
+        _pending = state.get("_kv_timer")       # نوشتن معلق پروژهٔ قبلی
+        if _pending is not None:
+            try:
+                _pending.stop()
+            except Exception:                      # noqa: BLE001
+                pass
+        state["_loading_kv"] = True
+        try:
+            _load_project_kv_inner(path)
+        finally:
+            state["_loading_kv"] = False
+
+    def _load_project_kv_inner(path: str) -> None:
         try:
             store = ProjectStore(str(path))
             book = store.get_kv("map_styles") or {}
             name = store.get_kv("map_style_active") or ""
             state["report_project_name"] = store.get_kv(
                 "report_project_name") or ""
+            sec_settings = store.get_kv("sectionalizer_settings") or {}
+            sec_study = store.get_kv("sectionalizer_study") or None
             store.close()
         except Exception as exc:                   # noqa: BLE001
             _log.warning("project settings of %s not loaded: %s", path, exc)
             return
+        if isinstance(sec_settings, dict) and sec_settings:
+            state["sectionalizer_settings"] = dict(sec_settings)
+            # دو سطح ذخیره‌سازی: تنظیمات موتور + تنظیمات تب. هر دو باید
+            # برگردند، وگرنه روش «دستی» و ظرفیت پشتیبان گم می‌شوند.
+            eng = dict(sec_settings.get("engine") or {})
+            for key, value in sec_settings.items():
+                if key != "engine" and value is not None:
+                    eng.setdefault(key, value)
+            backup = sec_settings.get("backup_kw")
+            if isinstance(backup, dict) and backup:
+                values = [float(v) for v in backup.values()
+                          if v is not None]
+                if eng.get("backup_kw") is None and values:
+                    eng["backup_kw"] = max(values)
+            try:
+                sec_tab.apply_settings(eng)
+            except Exception as exc:               # noqa: BLE001
+                _log.warning("sectionalizer settings not applied: %s", exc)
+        if isinstance(sec_study, dict) and sec_study.get("study"):
+            state["sectionalizer_persisted"] = sec_study
         if isinstance(book, dict) and book:
             from ..map_style import MapStyle
             state["map_styles_book"] = book
@@ -535,6 +647,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             state["map_style"] = map_tab._renderer.style
         _persist_project_kv()
     map_tab.on_feeders_changed = _persist_map_feeders
+    # تغییر روشن/خاموشی خاموشی‌ها در استایل نقشه ذخیره می‌شود
+    map_tab.on_outages_changed = _persist_map_feeders
 
     # ---------------- feeder keys of the open project ---------------------
     def feeder_keys() -> list:
@@ -544,8 +658,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             return sorted({t.feeder_key for t in topo.traces if t.feeder_key})
         if net is None:
             return []
-        from ...topology.tracing import feeder_key as normalize_feeder_key
-        keys = {normalize_feeder_key(n.feeder_name)
+        from ...topology.tracing import feeder_id as normalize_feeder_id
+        keys = {normalize_feeder_id(n.feeder_name)
                 for n in net.nodes if n.feeder_name}
         return sorted(k for k in keys if k)
 
@@ -651,6 +765,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         refresh_dashboard()
 
     def _scope_mode_changed(_on=False) -> None:
+        if not _on:
+            return
         scope_cmb.setEnabled(rb_single.isChecked())
         scope_list.setEnabled(rb_selected.isChecked())
         _scope_selection()
@@ -726,8 +842,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     of_lay.addWidget(make_explain_label(
         "<b>فایل خاموشی هر فیدر</b> — کنار داده GIS هر فیدر، کتاب‌کار "
         "خاموشی همان فیدر را وارد کنید (دوبار کلیک روی ردیف). پردازش، "
-        "λ/r و مواجهه واقعی داده را محاسبه می‌کند (نیاز ۸). ورود فایل "
-        "خاموشی اختیاری است؛ بدون آن λ=۰ فرض و صریحاً اعلام می‌شود."))
+        "λ/r و مواجهه واقعی داده را محاسبه می‌کند (نیاز ۸). "
+        "پس از انتخاب، فایل در پروژه ذخیره می‌شود؛ برای محاسبه دکمه "
+        "پردازش را بزنید. نبود داده به معنی λ=۰ نیست."))
     of_table = QTableWidget(0, 2)
     of_table.setHorizontalHeaderLabels(["Feeder", "Outage workbook (xlsx)"])
     of_table.horizontalHeader().setStretchLastSection(True)
@@ -747,7 +864,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             it = QTableWidgetItem(k)
             it.setFlags(it.flags() & ~Qt.ItemFlag.ItemIsEditable)
             of_table.setItem(i, 0, it)
-            of_table.setItem(i, 1, QTableWidgetItem(files.get(k, "")))
+            of_table.setItem(i, 1, QTableWidgetItem(
+                ("ذخیره در پروژه: " + files[k]) if k in files else ""))
 
     def do_pick_feeder_outage(row: int) -> None:
         files = state.setdefault("outage_feeder_files", {})
@@ -757,8 +875,21 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             "Excel workbook (*.xlsx *.xlsm)")
         if not path:
             return
-        files[of_table.item(row, 0).text()] = path
-        of_table.item(row, 1).setText(path)
+        db = state.get("db")
+        if not db:
+            QMessageBox.warning(win, "فایل خاموشی", "ابتدا پروژه را باز یا ایجاد کنید.")
+            return
+        try:
+            from ...persistence.outage_workbooks import save_workbook
+            key = of_table.item(row, 0).text()
+            meta = save_workbook(db, key, path)
+        except Exception as exc:
+            QMessageBox.critical(win, "ذخیره فایل خاموشی", str(exc))
+            return
+        files[key] = meta["filename"]
+        of_table.item(row, 1).setText("ذخیره در پروژه: " + meta["filename"])
+        state["dirty"] = True
+        status_msg("فایل خاموشی در پروژه ذخیره شد؛ برای محاسبه، پردازش را اجرا کنید.")
 
     of_table.doubleClicked.connect(
         lambda idx: do_pick_feeder_outage(idx.row()))
@@ -775,6 +906,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     left_col.addLayout(btn_row)
 
     def do_import() -> None:
+        if state.get("net") is not None and not _confirm_pending_changes():
+            return
         folder = QFileDialog.getExistingDirectory(
             win, "Select the GIS data folder (Shapefile / GeoJSON / GPKG / Excel / CSV)")
         if not folder:
@@ -801,6 +934,13 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                  title="Import")
 
     def _import_done(res) -> None:
+        _reset_project()
+        from ...persistence.engineering_load import load_load_model
+        try:
+            state["load_model"] = load_load_model(str(res.db_path)) if res.db_path else {}
+        except Exception as exc:
+            state["load_model"] = {}
+            QMessageBox.warning(win, "مدل بار", f"بازیابی بار پروژه ناموفق بود: {exc}")
         state["net"] = res.network
         state["dirty"] = True
         state["db"] = res.db_path
@@ -809,6 +949,14 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         state["plc"] = None
         state["outage"] = None          # a fresh project has no outage run
         state["outage_store"] = None
+        try:
+            from ...persistence.outage_workbooks import list_workbooks, COLLECTIVE_KEY
+            state["outage_feeder_files"] = {
+                k: v["filename"] for k, v in list_workbooks(str(res.db_path)).items()
+                if k != COLLECTIVE_KEY} if res.db_path else {}
+        except Exception as exc:
+            state["outage_feeder_files"] = {}
+            _log.warning("could not read stored outage workbooks: %s", exc)
         state["capacity_rows"] = []
         state["manual_evals"] = []
         state["lambda_overrides"] = {}
@@ -858,25 +1006,47 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             QMessageBox.warning(win, "Open project",
                                 "The database contains no importable network.")
             return
+        _reset_project()
+        from ...persistence.engineering_load import load_load_model
+        state["load_model"] = {}
+        try:
+            state["load_model"] = load_load_model(str(path))
+        except Exception as exc:
+            QMessageBox.warning(win, "مدل بار", f"بازیابی بار پروژه ناموفق بود: {exc}")
         state["net"], state["db"] = net, str(path)
+        from ...persistence.outage_workbooks import list_workbooks, COLLECTIVE_KEY
+        try:
+            stored_files = list_workbooks(str(path))
+            state["outage_feeder_files"] = {k: v["filename"] for k, v in stored_files.items()
+                                             if k != COLLECTIVE_KEY}
+        except Exception as exc:
+            state["outage_feeder_files"] = {}
+            QMessageBox.warning(win, "فایل‌های خاموشی", f"خواندن فایل‌ها ناموفق بود: {exc}")
         state["dirty"] = False
         state["topo"] = state["run_id"] = None
         state["plc"] = None
         topo_panel.setPlainText(_PANEL_HINT)
         btn_show_map.setEnabled(False)
+        btn_review_outages.setEnabled(False)
         _load_project_kv(str(path))          # استایل‌ها + نام گزارش (مورد ۲/۴)
         # a persisted outage run of THIS project feeds the dashboard λ/r
         state["outage"] = None
         state["outage_store"] = None
+        state["_persisted_outage_records"] = None
         try:
             _st = ProjectStore(str(path))
-            state["outage_store"] = _st.load_outages()
-            _st.close()
+            try:
+                state["outage_store"] = _st.load_outages()
+            finally:
+                _st.close()
+            state["_persisted_outage_records"] = None
         except ValueError:
             state["outage_store"] = None           # project has no outage run
         except Exception as exc:                       # noqa: BLE001
             _log.warning("outage data of %s not loaded: %s", path, exc)
             state["outage_store"] = None
+            QMessageBox.warning(win, "داده خاموشی",
+                                f"خواندن داده خاموشی پروژه ناموفق بود: {exc}")
         try:   # capacities persisted for THIS project (نیاز ۹)
             _st = ProjectStore(str(path))
             state["capacity_rows"] = [c.as_dict() for c in
@@ -906,9 +1076,31 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             f"Feeders: {s.get('feeders', 0)}\n\n"
             "Next: enter the per-feeder outage files (if available), then "
             "run topology.")
+        # کش‌های وابسته به پروژه پاک می‌شوند (هندسهٔ زون، مختصات خاموشی‌ها)
+        state["zone_geometries"] = None
+        state["zone_geometry_topo"] = None
+        state["outage_reviews"] = {}
+        state["outage_points"] = []
+        state["outage_points_built"] = False
+        state["sectionalizer"] = None
+        state["sectionalizer_map_nodes"] = []
+        persisted = state.get("sectionalizer_persisted") or None
+        if isinstance(persisted, dict) and persisted.get("study"):
+            try:
+                sec_tab.show_persisted(persisted)
+                state["sectionalizer_map_nodes"] = [
+                    {"id": c.get("node"), "x": float(c["coord"][0]),
+                     "y": float(c["coord"][1]), "label": c.get("label", ""),
+                     "switch_type": f.get("switch_type", "")}
+                    for f in (persisted["study"].get("feeders") or [])
+                    for c in ((f.get("best") or {}).get("selected") or [])
+                    if c.get("coord")]
+            except Exception as exc:               # noqa: BLE001
+                _log.warning("persisted sectionalizer study not shown: %s", exc)
         refresh_scope_choices()
         refresh_outage_feeder_table()
         refresh_manual_feeders()
+        show_persisted_outage_summary()
         refresh_map()
         refresh_dashboard()
         remember_project(str(path))
@@ -922,6 +1114,17 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         "هر فیدر بالا؛ موتور، شش طبقه را دسته‌بندی و λ/r را روی مواجهه "
         "واقعی داده محاسبه می‌کند (ماه‌های بدون داده حدس زده نمی‌شوند) "
         "و ماتریس در پروژه ذخیره می‌شود."))
+    energy_row = QHBoxLayout()
+    energy_row.addWidget(QLabel("واحد انرژی فایل خاموشی:"))
+    energy_unit = QComboBox()
+    energy_unit.addItem("نامشخص / تخمین خودکار", "auto")
+    energy_unit.addItem("kWh", "kwh")
+    energy_unit.addItem("MWh", "mwh")
+    energy_unit.setCurrentIndex(energy_unit.findData("mwh"))
+    energy_unit.setToolTip("واحد اعلام‌شده در منبع را انتخاب کنید؛ حالت خودکار فقط تخمین است.")
+    energy_row.addWidget(energy_unit)
+    energy_row.addStretch(1)
+    right_col.addLayout(energy_row)
     btn_row_o = QHBoxLayout()
     btn_outage = QPushButton(t("Import outage list (single workbook)…"))
     btn_outage_feeders = QPushButton(t("Process per-feeder outage files"))
@@ -930,6 +1133,10 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     btn_review_outages = QPushButton("Review outage places / zones")
     btn_review_outages.setEnabled(False)
     btn_row_o.addWidget(btn_review_outages)
+    btn_outage_history = QPushButton("مشاهده سوابق خاموشی")
+    btn_row_o.addWidget(btn_outage_history)
+    btn_saved_workbooks = QPushButton("فایل‌های اکسل پروژه")
+    btn_row_o.addWidget(btn_saved_workbooks)
     btn_row_o.addStretch(1)
     right_col.addLayout(btn_row_o)
 
@@ -943,121 +1150,250 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         pass
     right_col.addWidget(outage_panel, 1)
 
+    def show_persisted_outage_summary():
+        payload = state.get("outage_store") or {}
+        events = payload.get("events") or []
+        if not payload:
+            outage_panel.clear()
+            return
+        lines = ["داده‌های خاموشی ذخیره‌شده پروژه",
+                 f"تعداد رخداد: {len(events):,}",
+                 f"تاریخ اجرا: {payload.get('created_at', '—')}",
+                 f"وضعیت: {payload.get('verdict', '—')}", "", "ماتریس λ/r:"]
+        for row in payload.get("lambda_r") or []:
+            lines.append(f"  {row.get('feeder_key', '—')}: "
+                         f"λ={float(row.get('lambda_per_year') or 0):.2f}/yr, "
+                         f"r={float(row.get('r_minutes') or 0):.1f} min, "
+                         f"رخداد تصادفی={row.get('events_random', 0)}")
+        lines.append("\nبرای نمایش مکان‌ها، توپولوژی را اجرا و بازبینی خاموشی‌ها را باز کنید.")
+        outage_panel.setPlainText("\n".join(lines))
+
+
+    # ---------------- خاموشی‌های دارای مختصات (نقشه) --------------------
+    def outage_records():
+        """Return live records or the latest persisted project's outage events."""
+        live = state.get("outage")
+        if live is not None:
+            return list(getattr(live, "records", []) or [])
+        payload = state.get("outage_store") or {}
+        if not state.get("_persisted_outage_records"):
+            from ...reliability.outages import OutageRecord
+            state["_persisted_outage_records"] = [
+                OutageRecord(**event) for event in payload.get("events", [])]
+        return state.get("_persisted_outage_records") or []
+
+    def open_outage_history():
+        records = outage_records()
+        if not records:
+            QMessageBox.information(win, "سوابق خاموشی",
+                "هنوز رخداد پردازش‌شده‌ای در این پروژه وجود ندارد. "
+                "فایل‌های ذخیره‌شده را با دکمه پردازش اجرا کنید.")
+            return
+        from .outage_history_dialog import show_outage_history
+        show_outage_history(win, records)
+
+    btn_outage_history.clicked.connect(open_outage_history)
+
+    def open_saved_workbooks():
+        if not state.get("db"):
+            QMessageBox.information(win, "فایل خاموشی", "ابتدا پروژه را باز کنید.")
+            return
+        from .outage_history_dialog import show_saved_workbooks
+        try:
+            show_saved_workbooks(win, state["db"])
+        except Exception as exc:
+            QMessageBox.critical(win, "فایل خاموشی", str(exc))
+
+    btn_saved_workbooks.clicked.connect(open_saved_workbooks)
+
+    def outage_gazetteer():
+        """بانک آفلاین مکان‌ها — یک‌بار بارگذاری؛ نبود فایل = غیرفعال."""
+        if state.get("gazetteer") is None:
+            path = default_gazetteer_path()
+            try:
+                state["gazetteer"] = PlaceGazetteer(path) if path else False
+            except Exception as exc:               # noqa: BLE001
+                _log.warning("gazetteer unavailable: %s", exc)
+                state["gazetteer"] = False
+        return state["gazetteer"] or None
+
+    def outage_suggestions(records) -> dict:
+        gaz = outage_gazetteer()
+        if gaz is None:
+            return {}
+        try:
+            return {x.event_id: x for x in suggest_event_places(records, gaz)}
+        except Exception as exc:                   # noqa: BLE001
+            _log.warning("place suggestions failed: %s", exc)
+            return {}
+
+    def load_outage_reviews() -> dict:
+        db = state.get("db")
+        if state.get("outage_reviews"):
+            return dict(state["outage_reviews"])
+        if not db:
+            return {}
+        try:
+            state["outage_reviews"] = OutageReviewStore(str(db)).load()
+        except Exception as exc:                   # noqa: BLE001
+            _log.warning("outage reviews not readable: %s", exc)
+            state["outage_reviews"] = {}
+        return dict(state["outage_reviews"])
+
+    def zone_geometry_map() -> dict:
+        """هندسهٔ زون‌ها برای انتساب خودکار (کش‌شده روی همان توپولوژی)."""
+        topo = state.get("topo")
+        if topo is None:
+            return {}
+        if state.get("zone_geometry_topo") is not topo:
+            state["zone_geometries"] = build_zone_geometries(topo.graph,
+                                                             topo.zones)
+            state["zone_geometry_topo"] = topo
+        return state.get("zone_geometries") or {}
+
+    def outage_point_transform():
+        crs = project_crs()
+        if not crs:
+            return None
+
+        def _tr(lat, lon):
+            return transform_wgs84_to_project(lat, lon, crs)
+        return _tr
+
+    def rebuild_outage_points() -> list:
+        """رخدادهای دارای مختصات را برای لایهٔ نقشه آماده می‌کند.
+
+        منطق در ``application.outage_review.outage_map_points`` است (بدون Qt
+        و آزمون‌پذیر)؛ این‌جا فقط کش حالت و ورودی‌های پروژه بسته می‌شود.
+        """
+        recs = outage_records()
+        if not recs:
+            state["outage_points"] = []
+            state["outage_points_built"] = True
+            return []
+        points = outage_map_points(
+            recs, geometries=zone_geometry_map(), saved=load_outage_reviews(),
+            suggestions=outage_suggestions(recs),
+            transform=outage_point_transform())
+        state["outage_points"] = points
+        state["outage_points_built"] = True
+        return points
+
     def review_outage_locations() -> None:
-        """Engineer confirms event place and affected zone; no auto-assignment."""
-        records = list(getattr(state.get("outage"), "records", []) or [])
+        """بازبینی محل/زون با انتخاب خودکار زون و پیش‌فرض تأیید مهندسی."""
+        records = outage_records()
         topo = state.get("topo")
         if not records or topo is None or not getattr(topo, "zones", None):
-            QMessageBox.information(win, "Outage review",
-                                    "ابتدا فایل خاموشی را وارد و تحلیل توپولوژی را اجرا کنید.")
+            QMessageBox.information(
+                win, "Outage review",
+                "ابتدا فایل خاموشی را وارد و تحلیل توپولوژی را اجرا کنید.")
             return
         db_path = state.get("db")
         if not db_path:
+            QMessageBox.information(
+                win, "Outage review",
+                "پروژه را ذخیره کنید؛ بازبینی داخل فایل پروژه ذخیره می‌شود.")
             return
-        gaz_path = Path(__file__).resolve().parents[4] / "data" / "geography" / "ardabil_places.sqlite"
-        gaz = PlaceGazetteer(gaz_path)
-        suggestions = {x.event_id: x for x in suggest_event_places(records, gaz)}
-        zones = list(topo.zones.zones)
-        zone_labels = [(f"{z.feeder} | Zone {z.zone_no} | {z.id}", z.id) for z in zones]
-        store = OutageReviewStore(db_path)
-        saved = store.load()
-        dlg = QDialog(win)
-        dlg.setWindowTitle("بازبینی محل و زون رخدادهای خاموشی")
-        dlg.resize(1380, 760)
-        dlg.setWindowFlags(dlg.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint |
-                           Qt.WindowType.WindowMinimizeButtonHint)
-        layout = QVBoxLayout(dlg)
-        info = QLabel(f"پیشنهاد نام مکان صرفاً راهنماست (تعداد مکان‌های ثبت‌شده در بانک: {gaz.count():,}). فقط زونی که مهندس صریحاً انتخاب و تأیید کند ذخیره می‌شود؛ رخدادهای بدون انتساب در محاسبات زون توزیع نمی‌شوند.")
-        info.setWordWrap(True)
-        layout.addWidget(info)
-        table = QTableWidget(len(records), 8, dlg)
-        table.setHorizontalHeaderLabels(["رخداد", "نام پست", "فیدر", "تاریخ", "توضیحات", "مکان پیشنهادی", "زون متاثر (تأیید مهندس)", "وضعیت"])
-        table.setWordWrap(True)
-        table.setAlternatingRowColors(True)
-        table.setColumnWidth(0, 90); table.setColumnWidth(1, 150)
-        table.setColumnWidth(2, 75); table.setColumnWidth(3, 95)
-        table.setColumnWidth(4, 320); table.setColumnWidth(5, 170)
-        table.setColumnWidth(6, 250); table.setColumnWidth(7, 110)
-        for i, rec in enumerate(records):
-            table.setItem(i, 0, QTableWidgetItem(str(rec.event_no or rec.id)))
-            table.setItem(i, 1, QTableWidgetItem(str(rec.substation or "—")))
-            table.setItem(i, 2, QTableWidgetItem(str(rec.feeder_key or rec.feeder_raw)))
-            table.setItem(i, 3, QTableWidgetItem(str(rec.date_j or "")))
-            table.setItem(i, 4, QTableWidgetItem(str(rec.notes or rec.cause_raw or "")))
-            sug = suggestions.get(str(rec.id))
-            place_box = QComboBox()
-            place_box.addItem("بدون مکان تأییدشده", "")
-            if sug:
-                for m in sug.matches:
-                    place_box.addItem(
-                        f"{m.place.name} ({m.confidence}) — "
-                        f"{m.place.lat:.5f}, {m.place.lon:.5f}",
-                        m.place.place_id)
-            old = saved.get(str(rec.id), {})
-            old_pid = old.get("place_id", "")
-            ix = place_box.findData(old_pid)
-            if ix >= 0: place_box.setCurrentIndex(ix)
-            table.setCellWidget(i, 5, place_box)
-            zone_box = QComboBox()
-            zone_box.addItem("— انتخاب زون —", "")
-            from ...topology.tracing import feeder_key as _norm_fk
-            rec_fk = str(rec.feeder_key or _norm_fk(rec.feeder_raw) or "").strip()
-            feeder_zones = [(label, zid) for label, zid in zone_labels
-                            if not rec_fk or label.split(" | ", 1)[0] == rec_fk]
-            for label, zid in feeder_zones: zone_box.addItem(label, zid)
-            zi = zone_box.findData(old.get("zone_id", ""))
-            if zi >= 0: zone_box.setCurrentIndex(zi)
-            table.setCellWidget(i, 6, zone_box)
-            status_box = QComboBox()
-            status_box.addItem("در انتظار بررسی", "pending")
-            status_box.addItem("تأیید مهندس", "confirmed")
-            status_box.addItem("رد رخداد", "rejected")
-            status_box.setCurrentIndex(max(0, status_box.findData(old.get("status", "pending"))))
-            table.setCellWidget(i, 7, status_box)
-            table.setRowHeight(i, 48)
-        layout.addWidget(table, 1)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        layout.addWidget(buttons)
-        buttons.rejected.connect(dlg.reject)
-        def save_reviews():
+        def work():
+            gaz = outage_gazetteer()
+            suggestions = outage_suggestions(records)
+            geoms = zone_geometry_map()
+            saved = load_outage_reviews()
+            transform = outage_point_transform()
+            crs = project_crs() or ""
+            plans = plan_review_rows(
+                records, suggestions=suggestions, saved=saved, geometries=geoms,
+                project_crs=crs, transform=transform)
+            return gaz, geoms, transform, crs, plans
+
+        def done(prepared):
+            gaz, geoms, transform, crs, plans = prepared
+            if gaz is not None:
+                try:
+                    bank_line = (f"تعداد مکان‌های ثبت‌شده در بانک آفلاین: "
+                                 f"{gaz.count():,}. ")
+                except Exception:                      # noqa: BLE001
+                    bank_line = ""
+            else:
+                bank_line = ("بانک آفلاین مکان‌ها یافت نشد؛ پیشنهاد مکان غیرفعال "
+                             "است (متغیر محیطی SWITCHLOC_GAZETTEER را به مسیر "
+                             "بانک اشاره دهید). ")
+            if not crs:
+                bank_line += ("CRS پروژه مشخص نیست؛ جای‌گذاری مختصات پیشنهادها "
+                              "روی زون ممکن نیست. ")
+            auto = sum(1 for p in plans if p.zone_id)
+            from ..qt.outage_review_dialog import make_outage_review_dialog
+            dlg = make_outage_review_dialog(
+                win, records=records, plans=plans, geometries=geoms,
+                transform=transform, bank_line=bank_line,
+                info_extra=(f"انتخاب خودکار زون: {auto} از {len(plans)} ردیف "
+                            "تشخیص داده شد."))
+            if not dlg.exec():
+                return
+            decisions, skipped, no_zone = dlg.decisions()
+            store = OutageReviewStore(str(db_path))
+            by_id = {str(getattr(r, "id", "")): r for r in records}
             n = 0
-            for i, rec in enumerate(records):
-                zone_box = table.cellWidget(i, 6)
-                status_box = table.cellWidget(i, 7)
-                place_box = table.cellWidget(i, 5)
-                zid, status = zone_box.currentData(), status_box.currentData()
-                if status == "pending" or (status == "confirmed" and not zid):
+            failed = 0
+            for d in decisions:
+                try:
+                    store.save(d["event_id"], d["zone_id"],
+                               place_id=d.get("place_id") or "",
+                               place_name=d.get("place_name") or "",
+                               reviewer="engineer-ui", status=d["status"],
+                               coord_x=d.get("coord_x"), coord_y=d.get("coord_y"),
+                               zone_basis=d.get("zone_basis") or "")
+                except ValueError:
+                    failed += 1
                     continue
-                place_id = place_box.currentData() or ""
-                place_name = place_box.currentText() if place_id else ""
-                store.save(str(rec.id), str(zid), place_id=str(place_id),
-                           place_name=place_name, reviewer="engineer-ui", status=str(status))
-                rec.review_status = "confirmed" if status == "confirmed" else "rejected"
+                rec = by_id.get(d["event_id"])
+                if rec is not None:
+                    rec.review_status = ("confirmed" if d["status"] == "confirmed"
+                                         else "rejected")
                 n += 1
+            state["outage_reviews"] = store.load()
             state["outage_zone_assignments"] = store.confirmed_event_to_zone()
             state["dirty"] = True
-            coverage = (getattr(state.get("outage"), "levels", {}) or {}).get("coverage") or {}
+            rebuild_outage_points()
+            coverage = (getattr(state.get("outage"), "levels", {}) or {}).get(
+                "coverage") or {}
             exposure_years = float(coverage.get("exposure_years") or 0.0)
             if exposure_years > 0 and state.get("topo") is not None:
                 from ..dashboard_data import zone_load_map
                 loads = zone_load_map(state["topo"], state.get("net"),
                                       state.get("load_model") or {},
-                                      placement=(state["plc"].result if state.get("plc") else None))
+                                      placement=(state["plc"].result
+                                                 if state.get("plc") else None))
                 if any(float(v or 0) > 0 for v in loads.values()):
-                    metrics = calculate_zone_up(records, state["outage_zone_assignments"],
+                    metrics = calculate_zone_up(records,
+                                                state["outage_zone_assignments"],
                                                 loads, exposure_years)
-                    state["zone_up_mwh"] = {z: m.up_mwh_per_year for z, m in metrics.items()}
-                    state["zone_outage_hours"] = {z: m.outage_hours_per_year for z, m in metrics.items()}
-                    refresh_map()
-                    summary = f"شاخص‌های زون نیز محاسبه شد؛ مبنای مواجهه {exposure_years:.4f} سال."
+                    state["zone_up_mwh"] = {z: m.up_mwh_per_year
+                                            for z, m in metrics.items()}
+                    state["zone_outage_hours"] = {z: m.outage_hours_per_year
+                                                  for z, m in metrics.items()}
+                    summary = (f"شاخص‌های زون نیز محاسبه شد؛ مبنای مواجهه "
+                               f"{exposure_years:.4f} سال.")
                 else:
-                    summary = "بار زون در مدل بار فعلی قابل محاسبه نیست؛ شاخص U×P تا تکمیل بار نامشخص می‌ماند."
+                    summary = ("بار زون در مدل بار فعلی قابل محاسبه نیست؛ شاخص "
+                               "U×P تا تکمیل بار نامشخص می‌ماند.")
             else:
-                summary = "پوشش زمانی معتبر در دسترس نیست؛ شاخص سالانه U×P محاسبه نشد."
-            QMessageBox.information(dlg, "ذخیره بازبینی", f"{n} انتساب/رد مهندسی ذخیره شد. رخدادهای تأییدنشده بدون انتساب باقی ماندند.\n{summary}")
-            dlg.accept()
-        buttons.accepted.connect(save_reviews)
-        dlg.exec()
+                summary = ("پوشش زمانی معتبر در دسترس نیست؛ شاخص سالانه U×P "
+                           "محاسبه نشد.")
+            refresh_map()
+            skipped_txt = ""
+            if skipped:
+                skipped_txt = (f"\n{skipped} ردیف بدون تصمیم ماند "
+                               f"({no_zone} ردیف تأییدشده بدون زون بود).")
+            failed_txt = f"\n{failed} ردیف به‌دلیل داده ناقص ذخیره نشد." if failed else ""
+            QMessageBox.information(
+                dlg, "ذخیره بازبینی",
+                f"{n} انتساب/رد مهندسی ذخیره شد.{skipped_txt}{failed_txt}\n"
+                f"{summary}\nنقشه با لایهٔ خاموشی‌های دارای مختصات به‌روز شد.")
+            refresh_dashboard()
+
+        run_task(win, "در حال آماده‌سازی بازبینی خاموشی‌ها…", work, done,
+                 error_box(win, "آماده‌سازی بازبینی ناموفق بود"), title="Outage review")
 
     btn_review_outages.clicked.connect(lambda *_: review_outage_locations())
 
@@ -1078,13 +1414,30 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             "Excel workbook (*.xlsx *.xlsm)")
         if not path:
             return
-        cov = dict(state.get("coverage") or {})
         db = state["db"]
+        try:
+            from ...persistence.outage_workbooks import save_workbook, COLLECTIVE_KEY
+            save_workbook(db, COLLECTIVE_KEY, path)
+            state["dirty"] = True
+        except Exception as exc:
+            QMessageBox.critical(win, "ذخیره فایل خاموشی", str(exc))
+            return
+        cov = dict(state.get("coverage") or {})
+        feeder_loads = _feeder_load_kw(state)
+        selected_energy_unit = energy_unit.currentData()
 
         def work():
-            return OutageService(OutageSettings(
+            from tempfile import TemporaryDirectory
+            from ...persistence.outage_workbooks import export_workbook
+            with TemporaryDirectory(prefix="switchloc-outage-") as folder:
+                stored_path = export_workbook(db, COLLECTIVE_KEY,
+                                               Path(folder) / ("outage" + Path(path).suffix.lower()))
+                return OutageService(OutageSettings(
                 user="ui-user", persist=True,
                 model_feeders=tuple(study_feeder_keys()),
+                feeder_load_kw=feeder_loads,
+                energy_unit=selected_energy_unit,
+                workbook_label="project:" + Path(path).name,
                 scope_feeder=(state.get("scope") if isinstance(state.get("scope"), str) else None),
                 scope_feeders=(tuple(state.get("scope") or [])
                                if isinstance(state.get("scope"), (list, tuple, set)) else ()),
@@ -1093,15 +1446,20 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 force_cover_months=tuple(cov.get("force_cover_months") or ()),
                 force_exclude_months=tuple(
                     cov.get("force_exclude_months") or ()),
-            )).run(path, out_db=db, report_dir=str(_reports_dir()),
+            )).run(str(stored_path), out_db=db, report_dir=str(_reports_dir()),
                    project_name=Path(db).stem)
 
         def done(res) -> None:
             state["dirty"] = True
             state["outage"] = res
+            state["outage_store"] = None
+            state["_persisted_outage_records"] = None
+            state["outage_points"] = []          # لایهٔ نقشه از نو ساخته می‌شود
+            state["outage_points_built"] = False
             btn_review_outages.setEnabled(bool(res.records) and state.get("topo") is not None)
             outage_panel.setPlainText(fmt_outage_result(res))
             refresh_dashboard()
+            refresh_map()
             QMessageBox.information(
                 win, "Outage analysis ready",
                 f"Verdict: {res.verdict}\n"
@@ -1137,12 +1495,26 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             return
         cov = dict(state.get("coverage") or {})
         db = state["db"]
+        feeder_loads = _feeder_load_kw(state)
+        selected_energy_unit = energy_unit.currentData()
 
         def work():
-            return OutageService(OutageSettings(
+            from tempfile import TemporaryDirectory
+            from ...persistence.outage_workbooks import export_workbook
+            with TemporaryDirectory(prefix="switchloc-outages-") as folder:
+                extracted = {}
+                for index, (key, name) in enumerate(sorted(files.items())):
+                    suffix = Path(name).suffix.lower()
+                    target = Path(folder) / f"feeder-{index}{suffix}"
+                    export_workbook(db, key, target)
+                    extracted[key] = str(target)
+                return OutageService(OutageSettings(
                 user="ui-user", persist=True,
                 model_feeders=tuple(study_feeder_keys()),
-                per_feeder_files=dict(files),
+                feeder_load_kw=feeder_loads,
+                energy_unit=selected_energy_unit,
+                per_feeder_files=extracted,
+                per_feeder_labels={k: "project:" + name for k, name in files.items()},
                 scope_feeder=(state.get("scope") if isinstance(state.get("scope"), str) else None),
                 scope_feeders=(tuple(state.get("scope") or [])
                                if isinstance(state.get("scope"), (list, tuple, set)) else ()),
@@ -1157,9 +1529,14 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         def done(res) -> None:
             state["dirty"] = True
             state["outage"] = res
+            state["outage_store"] = None
+            state["_persisted_outage_records"] = None
+            state["outage_points"] = []
+            state["outage_points_built"] = False
             btn_review_outages.setEnabled(bool(res.records) and state.get("topo") is not None)
             outage_panel.setPlainText(fmt_outage_result(res))
             refresh_dashboard()
+            refresh_map()
             QMessageBox.information(
                 win, "Outage analysis ready (per-feeder files)",
                 f"Verdict: {res.verdict}\n"
@@ -1213,7 +1590,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         def done(res) -> None:
             state["dirty"] = True
             state["topo"] = res
-            btn_review_outages.setEnabled(bool(getattr(state.get("outage"), "records", [])))
+            btn_review_outages.setEnabled(bool(outage_records()))
             topo_panel.setPlainText(fmt_topology_result(res))
             btn_show_map.setEnabled(True)
             refresh_scope_choices()
@@ -1229,6 +1606,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 f"Tie-switch candidates: {len(res.ties)}\n\n"
                 f"Details are shown in this tab; the Map tab is now "
                 f"interactive.")
+            # One analysis is sufficient. Selecting the Map tab triggers the
+            # deferred render when topology was started on another page.
+            tabs.setCurrentWidget(map_tab)
 
         run_task(win, "Running topology analysis…", work, done,
                  error_box(win, "Topology failed"), title="Topology")
@@ -1353,7 +1733,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         "(Phase 4)</b>"))
     plac_help_row = QHBoxLayout()
     plac_help_row.addWidget(QLabel("<b>جایابی و ارزیابی طرح‌های کلیدگذاری</b>"))
-    plac_help_btn = QPushButton("ⓘ راهنمای این بخش")
+    plac_help_btn = QPushButton("راهنمای این بخش")
     plac_help_btn.setMaximumWidth(150)
     plac_help_btn.clicked.connect(lambda: QMessageBox.information(
         win, "راهنمای جایابی",
@@ -1400,20 +1780,25 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                     "برای تحلیل محدود، دست‌کم یک فیدر را انتخاب کنید.")
                 return
             active_set = set(active_keys)
+            from ...topology.tracing import same_feeder as _same_feeder
+
+            def _in_active(name) -> bool:
+                return any(_same_feeder(name, a) for a in active_set)
+
             load_model = dict(state.get("load_model") or {})
             if state.get("scope"):
                 load_model["feeder_pq"] = {
                     k: v for k, v in (load_model.get("feeder_pq") or {}).items()
-                    if k in active_set}
+                    if _in_active(k)}
             dlg = make_settings_dialog(win, active_keys, {
                 "load_model": load_model,
                 "capacity_rows": [r for r in (state.get("capacity_rows") or [])
-                                  if r.get("feeder_key") in active_set],
+                                  if _in_active(r.get("feeder_key"))],
                 "cost_model": state.get("cost_model") or {},
                 "criteria": state.get("criteria") or {},
                 "coverage": state.get("coverage") or {},
             }, feeder_s_rated={k: v for k, v in feeder_s_rated().items()
-                               if k in active_set})
+                               if _in_active(k)})
             if not dlg.exec():
                 return
             applied = dlg.apply()
@@ -1423,22 +1808,23 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 win, "Engineering settings",
                 f"{exc}\n\nDetails were saved to {log_path_text()}.")
             return
-        if state.get("scope"):
-            old_lm = dict(state.get("load_model") or {})
-            new_lm = dict(applied["load_model"])
-            old_pq = dict(old_lm.get("feeder_pq") or {})
-            new_pq = dict(new_lm.get("feeder_pq") or {})
-            old_pq.update(new_pq)
-            new_lm["feeder_pq"] = old_pq
-            state["load_model"] = new_lm
-        else:
-            state["load_model"] = applied["load_model"]
+        from ...persistence.engineering_load import merge_scoped_load_model, save_load_model
+        new_lm = (merge_scoped_load_model(state.get("load_model") or {},
+                                           applied["load_model"], active_keys)
+                  if state.get("scope") else applied["load_model"])
+        if state.get("db"):
+            try:
+                save_load_model(str(state["db"]), new_lm)
+            except Exception as exc:
+                QMessageBox.critical(win, "ذخیره مدل بار", f"ذخیره ناموفق بود: {exc}")
+                return
+        state["load_model"] = new_lm
         state["criteria"] = applied["criteria"]
         state["coverage"] = applied["coverage"]
         state["cost_model"] = applied["cost_model"]
         if scope_is_restricted():
             keep = [r for r in (state.get("capacity_rows") or [])
-                    if r.get("feeder_key") not in active_set]
+                    if not _in_active(r.get("feeder_key"))]
             state["capacity_rows"] = keep + applied["capacity_rows"]
         else:
             state["capacity_rows"] = applied["capacity_rows"]
@@ -2223,7 +2609,16 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             return False
         edits = dlg.result_edits()
         if edits:
+            previous_load = __import__("copy").deepcopy(state.get("load_model") or {})
             _apply_input_edits(edits)
+            if state.get("db") and ("load_model" in edits or "feeder_pq" in edits):
+                try:
+                    from ...persistence.engineering_load import save_load_model
+                    save_load_model(str(state["db"]), state["load_model"])
+                except Exception as exc:
+                    state["load_model"] = previous_load
+                    QMessageBox.critical(win, "ذخیره مدل بار", f"ذخیره ناموفق بود: {exc}")
+                    return False
         # Load Scaling is the default.  Do not silently calculate zero-load
         # feeders when the required feeder-total P/Q has not been supplied.
         load_cfg = state.setdefault("load_model", {})
@@ -2275,8 +2670,22 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
         def work():
             from ...reporting.service import ExportSettings, ReportService
+            # نوع مطالعه‌ای که کاربر واقعاً اجرا کرده است: اگر آخرین اجرا
+            # «جایابی کلید/EENS» بوده، گزارش نهایی فقط همان مطالعه را
+            # مستند می‌کند (درخواست کاربر v1.15).
+            study_type = "eens" if state.get("sectionalizer") else "auto"
+            outage_res = state.get("outage")
+            lam_rows = _lam_rows_of(outage_res)
+            idx_payload = {}
+            if outage_res is not None:
+                idx = getattr(outage_res, "indices", None)
+                if idx is not None and hasattr(idx, "as_dict"):
+                    idx_payload = idx.as_dict()
             settings = ExportSettings(out_dir=out_dir, formats=formats,
-                                      project_name=name, manual_evals=manual)
+                                      project_name=name, manual_evals=manual,
+                                      study_type=study_type,
+                                      outage_lambda=lam_rows,
+                                      feeder_indices=idx_payload)
             if plc is not None and net is not None and topo is not None:
                 return ReportService(settings).run(
                     db_path=db, net=net, topo=topo, placement=plc.result,
@@ -2438,10 +2847,226 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                "و مقایسه اقتصادی (خروجی کامل گام‌های ۴-۸):"))
     plac_rcol.addWidget(plac_panel, 1)
 
+    # --------------- روش جایابی بهینهٔ کلید و کاهش EENS ----------------------
+    def do_sectionalizer() -> None:
+        """اجرای موتور جایابی بهینهٔ کلید روی پروژهٔ باز."""
+        db = state.get("db")
+        if not db:
+            QMessageBox.warning(
+                win, "روش جایابی بهینهٔ کلید",
+                "ابتدا پروژه را باز یا وارد کنید؛ نتیجه در همان فایل پروژه "
+                "ذخیره می‌شود.")
+            return
+        cfg = dict(sec_tab.settings() or {})
+        state["sectionalizer_settings"] = cfg
+
+        # ---- ری‌چک کامل ورودی‌ها قبل از اجرا (درخواست کاربر v1.15) ----
+        # مشکل قبلی: موتور بی‌صدا با دادهٔ بار پیش‌فرض کار می‌کرد. اکنون
+        # همهٔ ورودی‌های مؤثر (نوع مطالعه، مدل بار، λ/r واقعی هر فیدر،
+        # زمان‌ها و پارامترهای جست‌وجو) در یک پنجره بازبینی می‌شوند و
+        # تا تأیید کاربر اجرایی انجام نمی‌شود.
+        preflight = None
+        try:
+            from ...application.study_preflight import preflight_from_settings
+            from ..qt.preflight_dialog import make_preflight_dialog
+            from ...persistence.store import ProjectStore
+            persisted_outages: dict = {}
+            try:
+                _st = ProjectStore(str(db))
+                try:
+                    persisted_outages = dict(_st.load_outages() or {})
+                finally:
+                    _st.close()
+            except Exception:                       # noqa: BLE001
+                persisted_outages = {}
+            topo_now = state.get("topo")
+            all_keys = sorted({getattr(t, "feeder_key", None)
+                               for t in (getattr(topo_now, "traces", None) or [])} - {None})
+            load_total = None
+            if topo_now is not None and state.get("net") is not None:
+                try:
+                    from ...reliability.load_model import (LoadModelSettings,
+                                                           build_node_loads)
+                    lm_in = dict(state.get("load_model") or {})
+                    lm_in.setdefault("level", "estimated")
+                    _loads = build_node_loads(
+                        topo_now.graph, state.get("net"),
+                        LoadModelSettings.from_dict(lm_in))
+                    load_total = sum(float(v or 0.0)
+                                     for v in _loads.node_kw.values())
+                except Exception:                   # noqa: BLE001
+                    load_total = None
+            backup_kw = {}
+            if float(cfg.get("backup_kw") or 0.0) > 0:
+                backup_kw = {k: float(cfg["backup_kw"])
+                             for k in (study_feeder_keys() or ())}
+            preflight = preflight_from_settings(
+                settings=cfg, load_model=state.get("load_model"),
+                load_total_kw=load_total,
+                feeders=list(study_feeder_keys() or ()),
+                all_feeders=all_keys,
+                persisted_outages=persisted_outages,
+                backup_kw=backup_kw,
+                s_rated_kva={k: v for k, v in feeder_s_rated().items()
+                             if k in set(study_feeder_keys() or ())})
+            dlg = make_preflight_dialog(win, preflight)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                sec_tab.set_busy(False, "اجرا توسط کاربر لغو شد.")
+                return
+        except Exception as exc:                    # noqa: BLE001
+            # اگر خود پنجرهٔ ری‌چک خطا داد، اجرا متوقف نمی‌شود اما بی‌صدا
+            # هم رد نمی‌شود.
+            QMessageBox.warning(
+                win, "ری‌چک ورودی‌ها",
+                f"پنجرهٔ بازبینی ورودی‌ها باز نشد: {exc}\n"
+                "اجرا با همان تنظیمات فعلی ادامه می‌یابد.")
+        engine = SwitchPlacementSettings(
+            switch_type=str(cfg.get("switch_type", "sectionalizer")),
+            total_failure_rate_per_year=float(
+                cfg.get("total_failure_rate_per_year", 30.0)),
+            repair_time_min=float(cfg.get("repair_time_min", 50.0)),
+            restoration_time_min=float(cfg.get("restoration_time_min", 20.0)),
+            manual_restoration_time_min=float(
+                cfg.get("manual_restoration_time_min", 30.0)),
+            transient_max_duration_min=float(
+                cfg.get("transient_max_duration_min", 3.0)),
+            transient_interruption_min=float(
+                cfg.get("transient_interruption_min", 1.0)),
+            reclose_time_min=float(cfg.get("reclose_time_min", 0.25)),
+            reclose_success_probability=float(
+                cfg.get("reclose_success_probability", 0.7)),
+            max_sectionalizers=int(cfg.get("max_sectionalizers", 3)),
+            min_candidate_depth=int(cfg.get("min_candidate_depth", 3)),
+            max_downstream_load_ratio=float(
+                cfg.get("max_downstream_load_ratio", 0.8)),
+            restoration_model=str(cfg.get("restoration_model", "uniform")),
+            use_existing_switches=bool(cfg.get("use_existing_switches", True)),
+        )
+        backup = float(cfg.get("backup_kw") or 0.0)
+        app_settings = SwitchPlacementAppSettings(
+            user="ui-user", persist=True, engine=engine,
+            method=str(cfg.get("method", "uniform")),
+            load_model=dict(state.get("load_model") or {}),
+            failure_rate_source=str(cfg.get("failure_rate_source", "outage")),
+            backup_kw=({k: backup for k in (study_feeder_keys() or ())}
+                       if backup > 0 else {}),
+            feeder_keys=tuple(study_feeder_keys() or ()),
+            report_dir=str(_reports_dir()))
+        net, topo = state.get("net"), state.get("topo")
+
+        def work():
+            return SwitchPlacementService(app_settings).run(
+                str(db), net=net, topo=topo)
+
+        def _sec_nodes_of(study) -> list:
+            out = []
+            for f in getattr(study, "feeders", []) or []:
+                for c in (f.best.selected if f.best else []):
+                    if c.coord is not None:
+                        out.append({"id": c.node, "x": float(c.coord[0]),
+                                    "y": float(c.coord[1]),
+                                    "label": c.label, "switch_type": getattr(f, "switch_type", "")})
+            return out
+
+        def done(res) -> None:
+            state["sectionalizer"] = res
+            state["dirty"] = True
+            state["sectionalizer_map_nodes"] = _sec_nodes_of(res.study)
+            sec_tab.show_result(res)
+            refresh_map()
+            status_msg(
+                f"جایابی کلید: EENS "
+                f"{res.study.baseline_eens_kwh / 1000.0:,.2f} → "
+                f"{res.study.best_eens_kwh / 1000.0:,.2f} MWh/سال "
+                f"(کاهش {res.study.improvement_percent:.2f}%)")
+            if res.warnings:
+                QMessageBox.information(
+                    win, "روش جایابی بهینهٔ کلید",
+                    f"اجرا کامل شد؛ {len(res.warnings)} هشدار:\n• "
+                    + "\n• ".join(res.warnings))
+
+        def _ok(res) -> None:
+            sec_tab.set_busy(False)
+            done(res)
+
+        def _fail(exc) -> None:
+            sec_tab.set_busy(False, "اجرا ناموفق بود.")
+            error_box(win, "جایابی بهینهٔ کلید ناموفق بود")(exc)
+
+        sec_tab.set_busy(True, "در حال محاسبه…")
+        run_task(win, "جایابی بهینهٔ کلید و EENS…", work, _ok, _fail,
+                 title="Switch placement & EENS")
+
+    def show_sectionalizer_on_map(nodes=None) -> None:
+        """نمایش پیشنهادهای انتخاب‌شده روی نقشه (فیلتر بر اساس گره‌ها)."""
+        chosen = {str(n) for n in (nodes or []) if n}
+        if chosen:
+            cached = list(state.get("sectionalizer_map_nodes") or [])
+            filtered = [n for n in cached if str(n.get("id")) in chosen]
+            if filtered:
+                state["sectionalizer_map_nodes"] = filtered
+        tabs.setCurrentWidget(map_tab)
+        refresh_map()
+
+    def clear_switch_study() -> None:
+        answer = QMessageBox.question(
+            win, "پاک کردن مطالعه",
+            "نتیجهٔ ذخیره‌شدهٔ جایابی کلید و EENS و نماد کلیدهای پیشنهادی "
+            "آن پاک شود؟ داده‌های GIS، خاموشی، تنظیمات و سایر مطالعات باقی می‌مانند.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            if state.get("db"):
+                from ...application.switch_placement_service import clear_persisted_study
+                clear_persisted_study(str(state["db"]))
+        except Exception as exc:
+            QMessageBox.warning(win, "پاک کردن مطالعه", str(exc))
+            return
+        state["sectionalizer"] = None
+        state["sectionalizer_persisted"] = None
+        state["sectionalizer_map_nodes"] = []
+        state["dirty"] = True
+        sec_tab.clear_result()
+        map_tab._opt_sec_nodes = []
+        refresh_map()
+        status_msg("نتیجهٔ مطالعه و کلیدهای پیشنهادی EENS پاک شد.")
+
+    sec_tab.on_run = lambda settings=None: do_sectionalizer()
+    sec_tab.on_show_map = show_sectionalizer_on_map
+    sec_tab.on_clear_study = clear_switch_study
+    map_tab.on_clear_study = clear_switch_study
+
+    # ذخیرهٔ KV با تأخیر کوتاه (debounce): هر تغییر ویجت یک نوشتن در
+    # SQLite انجام نمی‌دهد؛ چند تغییر سریع در یک نوشتن جمع می‌شود.
+    from PySide6.QtCore import QTimer as _QTimer
+    _kv_timer = _QTimer(win)
+    _kv_timer.setSingleShot(True)
+    _kv_timer.setInterval(600)
+    _kv_timer.timeout.connect(lambda: _persist_project_kv())
+    state["_kv_timer"] = _kv_timer
+
+    def _persist_sec_settings(d=None) -> None:
+        if d is not None:
+            state["sectionalizer_settings"] = dict(d or {})
+        # هنگام بازکردن پروژه، apply_settings ویجت‌ها را تغییر می‌دهد؛ آن
+        # رویداد نباید KV ذخیره‌شده را بازنویسی کند.
+        if state.get("db") and not state.get("_loading_kv"):
+            state["dirty"] = True
+            _kv_timer.start()              # نوشتن با تأخیر ۶۰۰ میلی‌ثانیه
+    sec_tab.on_settings_changed = _persist_sec_settings
+
     # ---------------- Map tab ------------------------------------------------
     def refresh_map() -> None:
+        # Avoid rebuilding and rendering a large network while another page is active.
+        if tabs.currentWidget() is not map_tab:
+            state["_map_dirty"] = True
+            return
         topo = state.get("topo")
         if topo is None:
+            state["_map_dirty"] = False
+            map_tab.clear_project()
             return
         display_zones = state.get("manual_zone_result") or topo.zones
         renderer = NetworkMapRenderer(
@@ -2467,6 +3092,15 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         zone_loads = zone_load_map(
             display_topo, state.get("net"), state.get("load_model") or {},
             placement=None if state.get("manual_zone_result") else plc_result)
+        # سکشنالایزرهای پیشنهادی موتور EENS (درخواست کاربر — مورد ۱)
+        sec_nodes = list(state.get("sectionalizer_map_nodes") or [])
+        # لایهٔ خاموشی‌های دارای مختصات (درخواست کاربر — مورد ۴)
+        if outage_records() and not state.get("outage_points_built"):
+            rebuild_outage_points()
+        hidden_outages = set()
+        if state.get("map_style") is not None:
+            hidden_outages = {str(x) for x in
+                              (state["map_style"].hidden_outage_ids or [])}
         map_tab.show_network(renderer, title="SwitchLoc — Network Map",
                              proposed_nodes=proposed, crs=crs,
                              manual_nodes=manual or None,
@@ -2475,18 +3109,33 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                              zone_up_mwh=state.get("zone_up_mwh") or {},
                              zone_outage_hours=state.get("zone_outage_hours") or {},
                              manual_tie_pairs=state.get("manual_tie_pairs") or [],
+                             outage_points=state.get("outage_points") or [],
+                             hidden_outage_ids=hidden_outages,
+                             sectionalizer_nodes=sec_nodes,
                              feeder_filter=(state.get("scope")
                                             if isinstance(state.get("scope"), str)
                                             else "__ALL__"))
+        state["_map_dirty"] = False
 
     tabs.addTab(import_tab, "Data Import")
     tabs.addTab(topo_tab, "Topology")
     tabs.addTab(plac_tab, "Placement")
+    tabs.addTab(sec_tab, "Switch placement & EENS")
     tabs.addTab(dash_tab, "Dashboard")
     tabs.addTab(map_tab, "Map")
 
+    def _refresh_visible_map(_index):
+        if tabs.currentWidget() is map_tab and state.get("_map_dirty"):
+            refresh_map()
+    tabs.currentChanged.connect(_refresh_visible_map)
+
     # ---------------- application chrome (menus / toolbar / sidebar) ------
     def show_help() -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        guide = _asset_dir() / "help" / "SwitchLoc_Guide_FA.pdf"
+        if guide.is_file() and QDesktopServices.openUrl(QUrl.fromLocalFile(str(guide))):
+            return
         QMessageBox.information(
             win, "SwitchLoc — Help",
             "<b>گردش کار مطالعه (TAV122-02/00 — روش سطح اول)</b>"
@@ -2498,10 +3147,16 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             "<li><b>Placement</b>: تنظیمات مهندسی (مدل بار Load Scaling، "
             "ظرفیت نیاز ۹، هزینه‌ها)، اجرای جایابی، جایابی دستی کلید با "
             "کلیک روی نقشه یا مختصات UTM، و تأیید نهایی طرح.</li>"
+            "<li><b>Switch placement &amp; EENS</b>: روش جایابی بهینهٔ "
+            "کلید (ریکلوزر/سکشنالایزر/سکسیونر) با سه روش EENS — "
+            "دایرکشنال، یکنواخت (λ و r واقعی، خودکار) و دستی — و نمایش "
+            "پیشنهادها روی نقشه.</li>"
             "<li><b>Dashboard</b>: نمای مدیریتی (λ/r، رتبه، ENS، جدول آشتی "
             "ترانس‌ها).</li>"
             "<li><b>Map</b>: نقشه تعاملی — اسکرول زوم، درگ جابجایی، دابل‌کلیک "
-            "زوم، انتخاب محدوده (ذره‌بین)، پس‌زمینه OSM.</li>"
+            "زوم، انتخاب محدوده (ذره‌بین)، پس‌زمینه OSM، لایهٔ خاموشی‌های "
+            "دارای مختصات (روشن/خاموش تک‌تک) و تنظیمات نمایشی آن در تب "
+            "«خاموشی‌ها»ی Map style.</li>"
             "</ol>"
             "<b>جداول</b>: کلیک روی هدر ستون = مرتب‌سازی؛ Ctrl+C = کپی "
             "(TSV سازگار با Excel)؛ در جدول‌های ورودی Ctrl+V = چسباندن."
@@ -2528,7 +3183,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         if not state.get("dirty"):
             return True
         answer = QMessageBox.question(win, "تغییرات پروژه",
-            "تغییرات پروژه فعلی ذخیره نشده است. آیا ذخیره شود؟",
+            "تغییرات پروژه فعلی بررسی شود؟ برخی داده‌ها بلافاصله در SQLite "
+            "ذخیره شده‌اند و انتخاب صرف‌نظر آنها را برنمی‌گرداند. "
+            "تنظیمات نمایشی معلق فقط با ذخیره ثبت می‌شوند.",
             QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Save)
         if answer == QMessageBox.StandardButton.Cancel:
@@ -2542,6 +3199,11 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         """Flush the SQLite project; all engineering records are persisted transactionally."""
         import sqlite3
         from pathlib import Path as _Path
+        timer = state.get("_kv_timer")
+        if timer is not None and timer.isActive():
+            timer.stop()
+            if not _persist_project_kv():
+                raise RuntimeError("ذخیره تنظیمات معلق پروژه ناموفق بود؛ گزارش خطا را بررسی کنید.")
         target = _Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         current = state.get("db")
@@ -2594,6 +3256,48 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             QMessageBox.critical(win, "Save As", f"ذخیره نسخه مستقل ناموفق بود:\n{exc}")
             return False
 
+    def _reset_project() -> None:
+        """Forget project state and visible results, without modifying its database."""
+        timer = state.get("_kv_timer")
+        if timer is not None:
+            timer.stop()
+        state.clear()
+        state.update(copy.deepcopy(_empty_project_state))
+        state["_kv_timer"] = timer
+        state["_loading_kv"] = True
+        try:
+            sec_tab.apply_settings(_default_sectionalizer_settings)
+            sec_tab.clear_result()
+            rb_multi.setChecked(True)
+            map_tab.clear_project()
+            for panel in (import_panel, outage_panel, plac_panel, manual_panel):
+                panel.clear()
+            topo_panel.setPlainText(_PANEL_HINT)
+            for table in (tie_table, manual_table, manual_result_table, plan_table):
+                table.setRowCount(0)
+            for button in (btn_show_map, btn_show_plac_map, btn_exports, btn_review_outages):
+                button.setEnabled(False)
+            refresh_scope_choices()
+            manual_add_row()
+            refresh_dashboard()
+            refresh_project_info()
+            set_workflow("Import")
+        finally:
+            state["_loading_kv"] = False
+
+    def do_close_project() -> None:
+        from .worker import is_busy
+        if is_busy():
+            QMessageBox.information(win, "بستن پروژه", "عملیات جاری هنوز تمام نشده است؛ لطفاً صبر کنید.")
+            return
+        if not state.get("db") and state.get("net") is None:
+            return
+        if not _confirm_pending_changes():
+            return
+        _reset_project()
+        tabs.setCurrentWidget(import_tab)
+        status_msg("پروژه بسته شد؛ برنامه همچنان باز است.")
+
     def do_new_project() -> None:
         if not _confirm_pending_changes(): return
         path, _ = QFileDialog.getSaveFileName(win, "ایجاد پروژه جدید", str(_projects_dir() / "NewProject.sqlite"), "SwitchLoc project (*.sqlite)")
@@ -2602,8 +3306,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         try:
             from ...persistence.store import ProjectStore
             store = ProjectStore(path); store.close()
+            _reset_project()
             state.update({"db": path, "net": None, "topo": None, "run_id": None,
-                          "plc": None, "outage": None, "outage_store": None,
+                          "plc": None, "outage": None, "outage_store": None, "outage_feeder_files": {}, "load_model": {},
                           "capacity_rows": [], "manual_evals": [], "manual_zone_result": None, "manual_tie_pairs": [], "scope": None,
                           "dirty": False})
             refresh_dashboard(); refresh_project_info(); remember_project(path)
@@ -2621,6 +3326,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         handlers={
             "open_project": do_open_project,
             "new_project": do_new_project,
+            "close_project": do_close_project,
             "save_project": do_save_project,
             "save_project_as": do_save_project_as,
             "import_gis": do_import,
@@ -2671,7 +3377,13 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 _log.warning("capacities/reviews not loaded: %s", exc)
             store.close()
             if net is not None:
+                from ...persistence.engineering_load import load_load_model
+                state["load_model"] = load_load_model(str(db_path))
                 state["net"], state["db"] = net, str(db_path)
+                from ...persistence.outage_workbooks import list_workbooks, COLLECTIVE_KEY
+                state["outage_feeder_files"] = {
+                    k: v["filename"] for k, v in list_workbooks(str(db_path)).items()
+                    if k != COLLECTIVE_KEY}
                 _load_project_kv(str(db_path))   # استایل‌ها + نام گزارش
                 # prior placement run → phase-5 exports available
                 btn_exports.setEnabled(_has_plc)
@@ -2681,6 +3393,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                 f"Could not open project:\n{exc}")
     refresh_scope_choices()
     refresh_outage_feeder_table()
+    show_persisted_outage_summary()
     refresh_dashboard()
     refresh_plan_table()
     refresh_tie_table()

@@ -8,8 +8,8 @@ Six official criteria per feeder (weights ۱،۲،۲،۳،۱،۱ — PDF-verifie
   (2) EP نرمال‌شده                      — from the n-1 engine (جدول ۱۴);
   (3) معکوس TL نرمال‌شده                — transferability inverted: the
       less a feeder can be backed up, the higher its priority;
-  (4) مجموع اولویت بارهای فیدر         — Σ(priority × load index) with
-      the جدول ۱۲ priorities; categories are unassigned in the sample
+  (4) مجموع اولویت بارهای فیدر         — Σ(priority × load kW) روی
+      ترانس‌های زون‌های مطالعه (یک مبنای واحد)؛ categories are unassigned in the sample
       GIS → the default priority is applied and REGISTERED (open
       decision 3, never guessed per load);
   (5) نرخ خرابی تصادفی λ نرمال‌شده      — total random λ of the Phase-3
@@ -97,12 +97,14 @@ def load_priority_by_transformer(net: CanonicalNetwork,
 
 def feeder_criterion4(net: CanonicalNetwork, n1: NMinusOneResult,
                       feeder_key: str, prio_of_tr: dict[str, float],
-                      st: RankingSettings) -> float:
+                      st: RankingSettings,
+                      load_kw_of_transformer: dict[str, float] | None = None
+                      ) -> float:
     """Criterion 4 = مجموع اولویت بارهای فیدر (جدول ۱۱/۱۲).
 
-    * ``load_weighted`` (default, A-14): Σ priority × capacity_kva over
-      the feeder's transformers — the only reading that lets the load
-      magnitude of جدول ۱۱ enter the priority.
+    * ``load_weighted`` (default, A-14): Σ priority × **بار همان ترانس در
+      مدل بار واحد** (kW) — یک مبنای واحد با زون‌ها/ENS. اگر نگاشت بار
+      داده نشود، به‌صورت سابق capacity_kva (شاخص ظرفیت) استفاده می‌شود.
     * ``priority_sum``: the literal Σ priority (count of load points).
     """
     tree = n1.trees.get(feeder_key)
@@ -115,9 +117,12 @@ def feeder_criterion4(net: CanonicalNetwork, n1: NMinusOneResult,
                          for t in tr_ids))
     total = 0.0
     for tid in tr_ids:
-        t = tr_by_id.get(tid)
-        cap = (t.capacity_kva or 0.0) if t is not None else 0.0
-        total += prio_of_tr.get(tid, st.default_load_priority) * cap
+        if load_kw_of_transformer is not None:
+            base = max(0.0, float(load_kw_of_transformer.get(tid, 0.0) or 0.0))
+        else:
+            t = tr_by_id.get(tid)
+            base = (t.capacity_kva or 0.0) if t is not None else 0.0
+        total += prio_of_tr.get(tid, st.default_load_priority) * base
     return total
 
 
@@ -125,7 +130,9 @@ def rank_feeders(n1: NMinusOneResult, net: CanonicalNetwork,
                  lam_matrix: list[FeederLambdaR] | None = None,
                  settings: RankingSettings | None = None,
                  scope_feeder: str | None = None,
-                 scope_feeders=None) -> RankingResult:
+                 scope_feeders=None,
+                 transformer_load_kw: dict[str, float] | None = None,
+                 ) -> RankingResult:
     """Assemble the 6 criteria; single-feeder studies normalize only that feeder."""
     st = settings or RankingSettings()
     issues: list = []
@@ -169,7 +176,8 @@ def rank_feeders(n1: NMinusOneResult, net: CanonicalNetwork,
     raw1 = [float(ties_count[k]) for k in keys]
     raw2 = [ep_of[k] for k in keys]
     raw3 = [tl_of[k] for k in keys]
-    raw4 = [feeder_criterion4(net, n1, k, prio_of_tr, st) for k in keys]
+    raw4 = [feeder_criterion4(net, n1, k, prio_of_tr, st,
+                              transformer_load_kw) for k in keys]
     raw5 = [(lam_of[k].lambda_per_year
              if st.lambda_source == "total_random"
              else lam_of[k].lambda_reducible_per_year) if k in lam_of else 0.0

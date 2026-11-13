@@ -50,3 +50,16 @@ def test_v03_ens_total_sums_zones():
     zones = [F.ZoneUP("z1", 2.0, 30, 1.0), F.ZoneUP("z2", 1.0, 60, 0.5)]
     # z1: U=1.0h, ENS=1.0 ; z2: U=1.0h, ENS=0.5
     assert F.ens_total(zones) == pytest.approx(1.5)
+
+
+def test_tl_is_independent_max_of_restorable_not_the_ep_worst_fault():
+    """جدول ۱۴: TL بیشینهٔ مستقل بار قابل انتقال است — هم‌خوان با
+    docstring compute_ep_tl و TAV122_TRACEABILITY (TL = ماکزیمم درصد بار
+    قابل انتقال).  ردیف واگرا: بدترین خطای EP الزاماً بیشترین بازیابی را
+    ندارد."""
+    rows = [F.ZoneFaultRow("Z0", 1800, 100),    # بدترین EP (۷۲٪)
+            F.ZoneFaultRow("Z1", 200, 900)]     # بیشترین restorable (36٪)
+    r = F.compute_ep_tl(rows, 2500)
+    assert r.ep_percent == pytest.approx(72.0)
+    assert r.tl_percent == pytest.approx(36.0)
+    assert r.worst_zone == "Z0"

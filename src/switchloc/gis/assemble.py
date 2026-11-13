@@ -30,7 +30,7 @@ from .mapping.layer_mapping import LayerMappingService
 from .mapping.slots import SLOTS
 from .readers.base import Feature, LayerInfo
 from .segmentation import split_polyline
-from .snap import snap_points, ambiguous_device_candidates
+from .snap import CentroidIndex, snap_points
 from ..domain.entities import (Branch, CanonicalNetwork, CRSDefinition, Feeder,
                                LineSegment, LoadPt, Node, SourceRecord,
                                Substation, SwitchDev, Transformer)
@@ -208,6 +208,7 @@ class CanonicalAssembler:
                     endpoints.append((0.0, 0.0))
                 ep_owner.append((li_name, id(f), vi))
         snap_res = snap_points(endpoints, self.ctx.snap_tol_m)
+        ep_lookup = {owner: i for i, owner in enumerate(ep_owner)}
 
         # nodes from endpoint clusters
         node_by_key: dict[str, Node] = {}
@@ -267,8 +268,8 @@ class CanonicalAssembler:
                     source_file="", layer=li_name, record_id=f.record_id,
                     impact_fa="هر دو مقدار حفظ شد؛ محاسبات طول از مقدار ثبت‌شده "
                               "با توزیع تناسبی استفاده می‌کند."))
-            ka = snap_res.point_keys[self._ep_index(li_name, id(f), 0, ep_owner)]
-            kb = snap_res.point_keys[self._ep_index(li_name, id(f), len(pts) - 1, ep_owner)]
+            ka = snap_res.point_keys[ep_lookup[(li_name, id(f), 0)]]
+            kb = snap_res.point_keys[ep_lookup[(li_name, id(f), len(pts) - 1)]]
             net.branches.append(Branch(
                 kind=_LINE_SLOT_TO_KIND[slot], node_a=ka, node_b=kb,
                 length_registered_m=reg_len, length_geometric_m=geo_len,
@@ -285,6 +286,7 @@ class CanonicalAssembler:
 
         # --- devices ------------------------------------------------------
         centroid_items = list(snap_res.centroids.items())
+        centroid_index = CentroidIndex(snap_res.centroids, self.ctx.snap_tol_m)
         for li_name, f, slot in device_feats:
             ci = crsinfo_of_layer[li_name]
             src = self._source(li_name, f)
@@ -303,8 +305,7 @@ class CanonicalAssembler:
             if pt is None:
                 node_id = self._device_node(net, NodeKind.DEVICE_HV, None, f.feeder)
             else:
-                cands = ambiguous_device_candidates(pt, snap_res.centroids,
-                                                    self.ctx.snap_tol_m)
+                cands = centroid_index.candidates(pt)
                 if not cands:
                     # orphan: own node + distance to nearest cluster
                     nd = self._device_node(net, NodeKind.DEVICE_HV, pt, f.feeder)

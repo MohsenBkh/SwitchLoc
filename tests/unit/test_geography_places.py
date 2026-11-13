@@ -23,3 +23,29 @@ def test_csv_import(tmp_path):
     db = PlaceGazetteer(tmp_path / 'places.sqlite')
     assert db.import_csv(f) == 1
     assert db.search('Ardabil')[0].place.name == 'اردبیل'
+
+
+def test_bundled_ardabil_gazetteer_matches_release_claim():
+    """سند انتشار ۱.۱۰.۱ ادعا می‌کند ۱٬۰۰۶ سکونتگاه با اطمینان بالا در
+    بانک آفلاین مخزن وارد شده‌اند. این آزمون صرفاً بررسی فقط-خواندنی
+    است و هیچ فایلی ایجاد/تغییر نمی‌کند."""
+    import sqlite3
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2]
+    bank = root / "data" / "geography" / "ardabil_places.sqlite"
+    assert bank.is_file(), "بانک آفلاین اردبیل از مخزن حذف شده است"
+    with sqlite3.connect(f"file:{bank}?mode=ro", uri=True) as db:
+        n, = db.execute("select count(*) from places").fetchone()
+        beyond, = db.execute(
+            "select count(*) from places "
+            "where lat not between -90 and 90 or lon not between -180 and 180"
+        ).fetchone()
+        sources = [r[0] for r in db.execute(
+            "select distinct source from places")]
+    # v1.15: بانک از GeoNames/OSM + شیپ‌فایل آبادی‌ها (Village.shp) ساخته شده
+    assert n >= 2220
+    assert beyond == 0
+    # منابع مجاز: بانک OSM اولیه + GeoNames (v1.13.1). هر منبع ناشناخته
+    # باید صریح اضافه شود، نه اینکه بی‌صدا وارد بانک شود.
+    allowed = ("high-confidence", "GeoNames", "Village.shp", "postzaminhava:")
+    assert all(any(mark in s for mark in allowed) for s in sources), sources

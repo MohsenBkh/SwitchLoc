@@ -271,6 +271,7 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
     a_new = act("New project…", "file-plus", H.get("new_project", lambda: None), "Ctrl+N")
     a_open = act("Open project…", "folder", lambda: H["open_project"](None),
                  "Ctrl+O")
+    a_close = act("Close project", "exit", H.get("close_project", lambda: None), "Ctrl+Shift+W")
     a_save = act("Save project", "save", H.get("save_project", lambda: None), "Ctrl+S")
     a_save_as = act("Save project as…", "save-as", H.get("save_project_as", lambda: None), "Ctrl+Shift+S")
     a_import = act("Import GIS data…", "import", H["import_gis"], "Ctrl+I")
@@ -298,7 +299,7 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
     # ---------------- menus ----------------
     mbar = win.menuBar()
     m_file = mbar.addMenu(t("&File"))
-    for a in (a_new, a_open, a_save, a_save_as):
+    for a in (a_new, a_open, a_close, a_save, a_save_as):
         m_file.addAction(a)
     ch.recent_menu = m_file.addMenu(t("Recent projects"))
     m_file.addSeparator()
@@ -317,9 +318,10 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
     m_study.addAction(a_style)
 
     m_view = mbar.addMenu(t("&View"))
-    nav_names = ["Data Import", "Topology", "Placement", "Dashboard", "Map"]
     for i in range(tabs.count()):
-        title = nav_names[i] if i < len(nav_names) else tabs.tabText(i)
+        # عنوان از خود تب خوانده می‌شود تا افزودن تب جدید (مثل
+        # «Sectionalizer & EENS») هیچ نگهداری فهرست دستی نخواهد
+        title = tabs.tabText(i)
         a = QAction(t(title), win)
         a.setShortcut(QKeySequence(f"Ctrl+{i + 1}"))
         a.triggered.connect(lambda _c=False, k=i: tabs.setCurrentIndex(k))
@@ -367,7 +369,7 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
     tb.setFloatable(False)
     tb.setIconSize(QSize(22, 22))
     tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-    for a in (a_open, a_import, a_outage):
+    for a in (a_open, a_save, a_import, a_outage):
         tb.addAction(a)
     tb.addSeparator()
     for a in (a_topo, a_plac):
@@ -398,10 +400,15 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
     ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
     sl.addWidget(brand)
     sl.addWidget(ver)
-    nav_icons = ["database", "topology", "placement", "dashboard", "map"]
+    # نماد ناوبری بر اساس عنوان تب — تب ناشناخته نماد «layers» می‌گیرد
+    nav_icon_by_title = {
+        "Data Import": "database", "Topology": "topology",
+        "Placement": "placement", "Sectionalizer & EENS": "bolt",
+        "Dashboard": "dashboard", "Map": "map",
+    }
     tabs.tabBar().setVisible(False)
     for i in range(tabs.count()):
-        title = nav_names[i] if i < len(nav_names) else tabs.tabText(i)
+        title = tabs.tabText(i)
         b = QToolButton()
         b.setObjectName("NavButton")
         b.setText(t(title))
@@ -412,8 +419,7 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
         b.setSizePolicy(QSizePolicy.Policy.Expanding,
                         QSizePolicy.Policy.Fixed)
         b.setToolTip(f"{t(title)}  (Ctrl+{i + 1})")
-        ch.decorate(b, nav_icons[i] if i < len(nav_icons) else "layers",
-                    "nav")
+        ch.decorate(b, nav_icon_by_title.get(title, "layers"), "nav")
         b.clicked.connect(lambda _c=False, k=i: tabs.setCurrentIndex(k))
         sl.addWidget(b)
         ch._nav_buttons.append(b)
@@ -477,7 +483,7 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
     ch._drop_filter = _DropFilter(win)
     win.installEventFilter(ch._drop_filter)
 
-    ch._actions = {"new": a_new, "open": a_open, "save": a_save, "save_as": a_save_as, "import": a_import, "outage": a_outage,
+    ch._actions = {"new": a_new, "open": a_open, "close": a_close, "save": a_save, "save_as": a_save_as, "import": a_import, "outage": a_outage,
                    "topology": a_topo, "placement": a_plac,
                    "settings": a_set, "exports": a_exp, "approve": a_appr}
     return ch

@@ -104,7 +104,9 @@ class ZoneResult:
     boundary_of_switch: dict = dc_field(default_factory=dict)
 
     def zones_of_feeder(self, feeder: str) -> list[SwitchZone]:
-        return sorted((z for z in self.zones if z.feeder == feeder),
+        from .tracing import same_feeder
+
+        return sorted((z for z in self.zones if same_feeder(z.feeder, feeder)),
                       key=lambda z: z.zone_no)
 
     def zone_by_id(self, zone_id: str) -> SwitchZone | None:

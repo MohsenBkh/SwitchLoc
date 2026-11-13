@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# SQLite sidecars (the project .sqlite itself is tracked deliberately)
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
+
+# Local scratch / reports
+.arena-scratch/
+reports/
