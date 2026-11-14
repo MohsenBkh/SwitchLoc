@@ -117,8 +117,10 @@ class Level2PlacementService:
             unresolved.extend(tie_ambiguities)
             if st.level2.no_budget > len(ties):
                 raise ValueError(
-                    f"بودجهٔ NO={st.level2.no_budget} ولی فقط {len(ties)} کاندید اتصال "
-                    "دارای شناسهٔ کلید در توپولوژی وجود دارد.")
+                    f"بودجهٔ NO={st.level2.no_budget} ولی فقط {len(ties)} کاندید tie معتبر "
+                    "در دامنهٔ فیدرهای انتخاب‌شده وجود دارد. فقط tie-switchهای موجود با شناسهٔ "
+                    "یکتای GIS قابل ارزیابی‌اند؛ تعداد NO را کاهش دهید یا فیدر/توپولوژی را بررسی کنید. "
+                    "جایابی کلید NO جدید در این نسخه پشتیبانی نمی‌شود.")
             no_states = list(itertools.combinations(ties, st.level2.no_budget))
             if not no_states:
                 raise ValueError("هیچ حالت NO قابل بررسی نیست.")

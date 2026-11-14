@@ -1,3 +1,7 @@
+from dataclasses import replace
+
+import pytest
+
 from switchloc.application.level2_placement_service import (
     Level2AppSettings, Level2PlacementService, level2_settings_from_data)
 from switchloc.domain.entities import StudyRunMeta
@@ -79,3 +83,10 @@ def test_level2_service_runs_exact_all_type_search_with_load_flow(tmp_path):
     assert result.flow_baseline[0]["status"] == "feasible"
     assert result.search_state_count == 3
     assert all(set(row) == {"F1"} for row in result.baseline_eens_by_type.values())
+
+    no_ties_settings = replace(
+        settings,
+        level2=Level2Settings(nc_budget_by_feeder={"F1": 1}, no_budget=1,
+                              max_search_states=100))
+    with pytest.raises(ValueError, match="کاندید tie معتبر"):
+        Level2PlacementService(no_ties_settings).run(str(db))

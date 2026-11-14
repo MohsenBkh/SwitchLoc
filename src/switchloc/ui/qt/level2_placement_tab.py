@@ -45,11 +45,13 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
             search_box = QGroupBox("فضای جست‌وجو")
             search = QFormLayout(search_box)
             self.no_budget = self._spin(0, 1000, 0)
+            self.no_candidates_label = QLabel("کاندید NO معتبر در دامنهٔ فعلی: —")
             self.max_states = self._spin(1, 100_000_000, 100_000)
             self.candidate_mode = QComboBox()
             self.candidate_mode.addItem("فقط نقاط بار (پیشنهادی)", "load_points")
             self.candidate_mode.addItem("همهٔ گره‌ها (جست‌وجوی بزرگ)", "all_nodes")
-            search.addRow("تعداد کلیدهای NO برای بررسی:", self.no_budget)
+            search.addRow("تعداد کاندیدهای NO موجود در GIS:", self.no_candidates_label)
+            search.addRow("تعداد کاندیدهای NO برای بررسی:", self.no_budget)
             search.addRow("حداکثر حالت‌های شمارش کامل:", self.max_states)
             search.addRow("مجموعهٔ کاندید نصب NC:", self.candidate_mode)
             types_row = QHBoxLayout()
@@ -196,10 +198,24 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
 
         def set_project_data(self, feeders, line_types=(), load_model=None,
                              saved_settings=None, project_key=None,
-                             line_ampacities=None):
+                             line_ampacities=None, available_no_count=0):
             """Refresh dynamic inputs from the currently open GIS project."""
             feeders = sorted({str(x) for x in feeders if str(x)})
             project_changed = project_key != self._project_key
+            scope_changed = feeders != self._feeders
+            requested_no = self.no_budget.value()
+            if (saved_settings and isinstance(saved_settings, dict)
+                    and (project_changed or scope_changed)):
+                requested_no = int((saved_settings.get("level2", {}) or {}).get(
+                    "no_budget", requested_no))
+            available_no_count = max(0, int(available_no_count))
+            self.no_budget.setRange(0, available_no_count)
+            self.no_budget.setEnabled(available_no_count > 0)
+            self.no_candidates_label.setText(str(available_no_count))
+            self.no_candidates_label.setToolTip(
+                "NO فقط از tie-switchهای موجود و دارای شناسهٔ یکتای GIS شمارش می‌شود؛ "
+                "در این فرم کلید NO جدید ساخته نمی‌شود.")
+            no_budget_clamped = requested_no > available_no_count
             if project_changed:
                 for row in range(self.feeder_table.rowCount()):
                     for col in range(1, self.feeder_table.columnCount()):
@@ -209,8 +225,8 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
                 for row in range(self.ampacity_table.rowCount()):
                     if self.ampacity_table.item(row, 1):
                         self.ampacity_table.item(row, 1).setText("")
-            changed = (feeders != self._feeders or project_changed)
-            if feeders != self._feeders:
+            changed = (scope_changed or project_changed)
+            if scope_changed:
                 self._feeders = feeders
                 self.feeder_table.setRowCount(len(feeders))
                 for row, feeder in enumerate(feeders):
@@ -249,6 +265,11 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
                 else:
                     self.status.setText(
                         "در دامنهٔ مطالعه فیدری نیست؛ انتخاب فیدرها را در بخش ورود داده بررسی کنید.")
+            if no_budget_clamped:
+                self.status.setText(
+                    f"بودجهٔ NO قبلی {requested_no} بود، اما فقط {available_no_count} کاندید معتبر "
+                    "در دامنه وجود دارد؛ بودجه به سقف معتبر محدود شد. در صورت نیاز فیدر/توپولوژی "
+                    "و کلیدهای tie را بررسی کنید.")
 
         def _toggle_load_cells(self, use_project):
             for row in range(self.feeder_table.rowCount()):

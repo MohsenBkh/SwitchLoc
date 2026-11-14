@@ -3144,6 +3144,14 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         feeders = [key for key in all_feeders
                    if any(same_feeder(key, selected)
                           for selected in selected_scope)]
+        available_no_count = 0
+        if topo is not None:
+            from ...application.level2_placement_service import _candidate_ties
+            candidates, _ = _candidate_ties(topo.ties)
+            available_no_count = sum(
+                any(same_feeder(tie.feeder_a, selected) for selected in feeders)
+                and any(same_feeder(tie.feeder_b, selected) for selected in feeders)
+                for tie in candidates)
         line_types = []
         line_ampacities = {}
         selected_branches = [branch for branch in (net.branches or [])
@@ -3176,7 +3184,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 _log.warning("could not read saved Level-2 settings: %s", exc)
         level2_tab.set_project_data(
             feeders, line_types, state.get("load_model") or {}, saved,
-            project_key=db_path, line_ampacities=line_ampacities)
+            project_key=db_path, line_ampacities=line_ampacities,
+            available_no_count=available_no_count)
 
     def _level2_project_inputs() -> dict:
         """Project load/outage/sectionalizer inputs for the Level-2 form."""
