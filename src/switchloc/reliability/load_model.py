@@ -122,6 +122,7 @@ class LoadModelResult:
     """خروجی مدل بار — مقدار + منشأ هر گره (ردیابی کامل)."""
     level: str = LEVEL_SCALED
     node_kw: dict = field(default_factory=dict)          # node → kW
+    node_kvar: dict = field(default_factory=dict)        # node → kvar (if known)
     node_origin: dict = field(default_factory=dict)      # node → برچسب منشأ
     per_feeder_kw: dict = field(default_factory=dict)    # feeder_key → kW
     coverage: dict = field(default_factory=dict)         # آمار پوشش
@@ -255,6 +256,7 @@ def build_node_loads(graph: NetworkGraph, net: CanonicalNetwork,
         for node, ids in sorted(graph.transformer_ids_at.items()):
             trs = [t for t in net.transformers if t.id in set(ids)]
             total = 0.0
+            total_q = 0.0
             origins = []
             for t in trs:
                 fk = feeder_key_of(t.feeder_name) or "(بدون برچسب)"
@@ -262,11 +264,15 @@ def build_node_loads(graph: NetworkGraph, net: CanonicalNetwork,
                 cap = float(t.capacity_kva or 0.0)
                 kw = res.transformer_kw_by_id.get(str(t.id), 0.0)
                 total += kw
+                sum_rated = float(pf.get("sum_s_rated_kva") or 0.0)
+                if sum_rated > 0.0:
+                    total_q += float(pf.get("q_kvar") or 0.0) * cap / sum_rated
                 if cap:
                     origins.append(
                         f"{t.id}: K={pf.get('k_scale', 0.0):.4g} × "
                         f"{cap:.0f}kVA × cosφ={pf.get('cos_phi', 0.0):.4g}")
             res.node_kw[node] = float(total)
+            res.node_kvar[node] = float(total_q)
             if total > 0:
                 res.node_origin[node] = ("scaled (" + "; ".join(origins)
                                          + ")")
@@ -278,6 +284,7 @@ def build_node_loads(graph: NetworkGraph, net: CanonicalNetwork,
         for node, lds in sorted(load_of_node.items()):
             if node not in res.node_kw:
                 res.node_kw[node] = sum(ld.p_kw for ld in lds)
+                res.node_kvar[node] = sum(float(ld.q_kvar or 0.0) for ld in lds)
                 res.node_origin[node] = ("real loads (no transformer): "
                                          + ",".join(sorted(ld.id
                                                            for ld in lds)))
@@ -391,19 +398,26 @@ def build_node_loads(graph: NetworkGraph, net: CanonicalNetwork,
                 if t.id in set(ids)]
         cap_sum = sum(c for _t, c in caps)
         if st.level == LEVEL_PRECISE:
-            real = sum(ld.p_kw for ld in load_of_node.get(node, []))
+            real_loads = load_of_node.get(node, [])
+            real = sum(ld.p_kw for ld in real_loads)
             res.node_kw[node] = float(real)
+            res.node_kvar[node] = sum(float(ld.q_kvar or 0.0)
+                                      for ld in real_loads)
             if real > 0:
                 res.node_origin[node] = (
                     "real loads: " + ",".join(sorted(ld.id for ld
                                                      in load_of_node[node])))
         elif st.level == LEVEL_ESTIMATED:
             res.node_kw[node] = cap_sum * st.loading_factor
+            res.node_kvar[node] = sum(float(ld.q_kvar or 0.0)
+                                      for ld in load_of_node.get(node, []))
             res.node_origin[node] = (
                 f"transformers ×LF({st.loading_factor:g}): "
                 + ",".join(sorted(t for t, _c in caps)))
         else:                                  # substitute
             res.node_kw[node] = cap_sum * st.substitute_factor
+            res.node_kvar[node] = sum(float(ld.q_kvar or 0.0)
+                                      for ld in load_of_node.get(node, []))
             res.node_origin[node] = (
                 f"transformers ×k({st.substitute_factor:g}): "
                 + ",".join(sorted(t for t, _c in caps)))
@@ -412,6 +426,7 @@ def build_node_loads(graph: NetworkGraph, net: CanonicalNetwork,
     for node, lds in sorted(load_of_node.items()):
         if node not in res.node_kw:
             res.node_kw[node] = sum(ld.p_kw for ld in lds)
+            res.node_kvar[node] = sum(float(ld.q_kvar or 0.0) for ld in lds)
             res.node_origin[node] = ("real loads (no transformer): "
                                      + ",".join(sorted(ld.id for ld in lds)))
 

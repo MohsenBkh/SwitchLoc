@@ -70,6 +70,7 @@ class GraphEdge:
     feeder_hint: str
     conductor: str = ""
     section_mm2: float | None = None
+    installation: str = ""
 
     def other(self, node: str) -> str:
         return self.b if node == self.a else self.a
@@ -340,7 +341,7 @@ class NetworkGraph:
                 id=eid, branch_id=br.id, seq=k, a=na, b=nb,
                 length_m=float(length), kind=br.kind.value,
                 feeder_hint=br.feeder_name, conductor=br.conductor,
-                section_mm2=br.section_mm2)
+                section_mm2=br.section_mm2, installation=br.installation)
             self.adj[na].append((nb, eid))
             self.adj[nb].append((na, eid))
             self.edges_of_branch[br.id].append(eid)

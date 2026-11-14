@@ -413,6 +413,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     from ..qt.map_canvas import make_map_canvas
     from ..qt.mapping_wizard import MappingWizardPage
     from ..qt.switch_placement_tab import make_sectionalizer_tab
+    from ..qt.level2_placement_tab import make_level2_placement_tab
     from ...application.import_service import ImportService, ImportSettings
     from ...application.outage_service import OutageService, OutageSettings
     from ...application.outage_review import (OutageReviewStore,
@@ -474,6 +475,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                    "zone_geometry_topo": None,   # توپولوژی متناظر کش
                    "gazetteer": None,            # بانک آفلاین مکان‌ها (کش)
                    "sectionalizer": None,        # نتیجهٔ موتور EENS
+                   "level2_placement": None,     # نتیجهٔ جایابی سطح ۲
                    "sectionalizer_settings": {},  # تنظیمات تب (پروژه)
                    "outage_last_save": "",       # پیام آخرین ذخیرهٔ بازبینی
                    "_loading": False, "_loading_kv": False, "dirty": False}
@@ -486,6 +488,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     map_tab = make_map_canvas(win)
     dash_tab = make_dashboard_tab(win)
     sec_tab = make_sectionalizer_tab(win)
+    level2_tab = make_level2_placement_tab(win)
     _default_sectionalizer_settings = sec_tab.settings()
 
     # ---------------- Dashboard refresh ----------------------------------
@@ -3117,10 +3120,46 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                             else "__ALL__"))
         state["_map_dirty"] = False
 
+    def _run_level2(config_path: str) -> None:
+        project_db = state.get("db")
+        if not project_db:
+            QMessageBox.warning(win, "پروژه باز نیست",
+                                "ابتدا یک پروژهٔ SQLite را باز یا ایجاد کنید.")
+            return
+        level2_tab.set_busy(True)
+
+        def work():
+            from ...application.level2_placement_service import (
+                Level2PlacementService, load_level2_config)
+            return Level2PlacementService(
+                load_level2_config(config_path)).run(str(project_db))
+
+        def done(result):
+            level2_tab.set_busy(False)
+            state["level2_placement"] = result
+            level2_tab.show_result(result)
+            status_msg(
+                f"جایابی سطح ۲: {sum(result.feasible_plan_count_by_type.values()):,} "
+                "آرایش مجاز بررسی/ثبت شد.")
+            if result.unresolved:
+                QMessageBox.information(
+                    win, "جایابی سطح ۲ — موارد نیازمند بررسی",
+                    "تحلیل تمام شد، اما مواردی نیازمند بازبینی است:\n• "
+                    + "\n• ".join(result.unresolved[:12]))
+
+        def failed(exc):
+            level2_tab.set_busy(False, "اجرای جایابی سطح ۲ ناموفق بود.")
+            error_box(win, "جایابی سطح ۲ ناموفق بود")(exc)
+
+        run_task(win, "در حال جست‌وجوی جایابی سطح دوم…", work, done,
+                 on_error=failed, title="جایابی سطح دوم")
+
+    level2_tab.on_run = _run_level2
     tabs.addTab(import_tab, "Data Import")
     tabs.addTab(topo_tab, "Topology")
     tabs.addTab(plac_tab, "Placement")
     tabs.addTab(sec_tab, "Switch placement & EENS")
+    tabs.addTab(level2_tab, "Level-2 placement + load flow")
     tabs.addTab(dash_tab, "Dashboard")
     tabs.addTab(map_tab, "Map")
 
