@@ -3134,18 +3134,26 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             except Exception as exc:
                 _log.warning("could not prepare feeder list for Level-2 form: %s", exc)
                 topo = None
-        feeders = ([str(item.feeder_key) for item in topo.traces]
-                   if topo is not None else
-                   sorted({str(x.feeder_name) for x in
-                           (net.branches or []) + (net.transformers or [])
-                           if str(x.feeder_name or "")}))
+        all_feeders = ([str(item.feeder_key) for item in topo.traces]
+                       if topo is not None else
+                       sorted({str(x.feeder_name) for x in
+                               (net.branches or []) + (net.transformers or [])
+                               if str(x.feeder_name or "")}))
+        from ...topology.tracing import same_feeder
+        selected_scope = {str(key) for key in study_feeder_keys()}
+        feeders = [key for key in all_feeders
+                   if any(same_feeder(key, selected)
+                          for selected in selected_scope)]
         line_types = []
         line_ampacities = {}
+        selected_branches = [branch for branch in (net.branches or [])
+                             if any(same_feeder(branch.feeder_name, key)
+                                    for key in feeders)]
         try:
             from ...application.equipment_types import EquipmentTypeCatalog
             catalog = EquipmentTypeCatalog()
             line_types = sorted({resolution.selected_type
-                                 for branch in (net.branches or [])
+                                 for branch in selected_branches
                                  for resolution in [catalog.resolve_branch(branch)]
                                  if resolution.status == "matched"
                                  and resolution.selected_type})
@@ -3170,12 +3178,113 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             feeders, line_types, state.get("load_model") or {}, saved,
             project_key=db_path, line_ampacities=line_ampacities)
 
+    def _level2_project_inputs() -> dict:
+        """Project load/outage/sectionalizer inputs for the Level-2 form."""
+        from ...topology.tracing import same_feeder
+        selected = list(study_feeder_keys() or [])
+        load_model = dict(state.get("load_model") or {})
+        outage_data = state.get("outage_store") or {}
+        db_path = state.get("db")
+        if db_path:
+            try:
+                from ...persistence.store import ProjectStore
+                store = ProjectStore(str(db_path))
+                try:
+                    if not load_model:
+                        load_model = dict(store.get_kv("engineering_load_model_v1", {}) or {})
+                    if not outage_data:
+                        outage_data = dict(store.load_outages() or {})
+                finally:
+                    store.close()
+            except Exception as exc:
+                _log.warning("could not collect Level-2 project inputs: %s", exc)
+        rates, repairs, transients = {}, {}, {}
+
+        def matching(mapping, feeder):
+            if feeder in mapping:
+                return mapping[feeder]
+            keys = [key for key in mapping if same_feeder(key, feeder)]
+            return mapping[keys[0]] if len(keys) == 1 else None
+
+        outage_rows = _lam_rows_of(state.get("outage"))
+        if not outage_rows:
+            outage_rows = _lam_rows_of(outage_data)
+        for row in outage_rows:
+            if not isinstance(row, dict):
+                row = getattr(row, "__dict__", {})
+            feeder = str(row.get("feeder_key") or "")
+            evidence = bool(row.get("events_random")) or float(
+                row.get("exposure_years") or 0) > 0
+            if feeder and evidence:
+                if row.get("lambda_per_year") is not None:
+                    rates[feeder] = float(row["lambda_per_year"])
+                if row.get("r_minutes") is not None and float(row["r_minutes"]) > 0:
+                    repairs[feeder] = float(row["r_minutes"])
+        for feeder, values in (state.get("lambda_overrides") or {}).items():
+            if not isinstance(values, dict):
+                continue
+            if values.get("lambda_per_year") is not None:
+                rates[str(feeder)] = float(values["lambda_per_year"])
+            if values.get("r_minutes") is not None:
+                repairs[str(feeder)] = float(values["r_minutes"])
+
+        sec_settings = dict(state.get("sectionalizer_settings") or sec_tab.settings() or {})
+        lambda_default = float(sec_settings.get("total_failure_rate_per_year", 30.0))
+        repair_default = float(sec_settings.get("repair_time_min", 50.0))
+        backup_source = sec_settings.get("backup_kw", 0.0)
+        if isinstance(backup_source, dict):
+            backup = {key: float(value) for key, value in backup_source.items()
+                      if value is not None and float(value) > 0}
+        else:
+            backup_value = float(backup_source or 0.0)
+            backup = ({key: backup_value for key in selected}
+                      if backup_value > 0 else {})
+        selected_rates, selected_repairs, reliability_source = {}, {}, {}
+        for feeder in selected:
+            rate = matching(rates, feeder)
+            repair = matching(repairs, feeder)
+            used_default = rate is None or repair is None
+            selected_rates[feeder] = float(lambda_default if rate is None else rate)
+            selected_repairs[feeder] = float(repair_default if repair is None else repair)
+            reliability_source[feeder] = (
+                "سوابق خاموشی + تنظیمات جایابی برای مقدار مفقود"
+                if used_default else "سوابق خاموشی/اصلاحات ورودی")
+        return {"load_model": load_model,
+                "failure_rates": selected_rates,
+                "repair_times_min": selected_repairs,
+                "transient_rates": transients,
+                "reliability_source": reliability_source,
+                "backup_kw": {key: value for key, value in backup.items()
+                              if any(same_feeder(key, feeder) for feeder in selected)}}
+
     def _run_level2(config_data: dict) -> None:
         project_db = state.get("db")
         if not project_db:
             QMessageBox.warning(win, "پروژه باز نیست",
                                 "ابتدا یک پروژهٔ SQLite را باز یا ایجاد کنید.")
             return
+        # Pull project sources automatically too; values typed in the Level-2
+        # grid have precedence, while missing λ/r and backup fields inherit
+        # the feeder-specific outage/settings data for the selected scope.
+        config_data = dict(config_data)
+        config_data["feeder_keys"] = list(study_feeder_keys() or [])
+        if not config_data.get("load_model") and state.get("load_model"):
+            config_data["load_model"] = dict(state["load_model"])
+        project_inputs = _level2_project_inputs()
+        reliability = dict(config_data.get("reliability", {}) or {})
+        sources = dict(project_inputs.get("reliability_source", {}) or {})
+        explicit_feeders = set()
+        for field in ("failure_rates", "repair_times_min", "transient_rates", "backup_kw"):
+            explicit = reliability.get(field, {}) or {}
+            merged = dict(project_inputs.get(field, {}) or {})
+            merged.update(explicit)
+            reliability[field] = merged
+            if field in {"failure_rates", "repair_times_min"}:
+                explicit_feeders.update(map(str, explicit))
+        for feeder in explicit_feeders:
+            sources[feeder] = "مقادیر λ/r جدول جایابی سطح ۲ (اولویت ورودی مستقیم)"
+        reliability["input_source_by_feeder"] = sources
+        config_data["reliability"] = reliability
         level2_tab.set_busy(True)
 
         def work():
@@ -3213,6 +3322,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
     level2_tab.on_run = _run_level2
     level2_tab.on_refresh = _refresh_level2_inputs
+    level2_tab.on_get_project_inputs = _level2_project_inputs
     tabs.addTab(import_tab, "Data Import")
     tabs.addTab(topo_tab, "Topology")
     tabs.addTab(plac_tab, "Placement")

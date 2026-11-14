@@ -85,3 +85,5 @@ def test_desktop_shell_builds_with_sectionalizer_tab(app, monkeypatch, tmp_path)
     assert type(level2).__name__ == "Level2PlacementTab"
     assert hasattr(level2, "show_result") and hasattr(level2, "set_busy")
     assert hasattr(level2, "settings_data") and hasattr(level2, "feeder_table")
+    assert hasattr(level2, "fill_load_button")
+    assert hasattr(level2, "fill_reliability_button")

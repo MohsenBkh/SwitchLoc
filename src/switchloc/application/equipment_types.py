@@ -9,7 +9,9 @@ is used.
 from __future__ import annotations
 
 import math
+import os
 import re
+import sys
 import unicodedata
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -17,7 +19,27 @@ from typing import Any
 
 from openpyxl import load_workbook
 
-DEFAULT_TYPES_CATALOG = Path(__file__).resolve().parents[3] / "data" / "catalog" / "types_override.xlsx"
+TYPES_CATALOG_ENV_VAR = "SWITCHLOC_TYPES_CATALOG"
+_TYPES_CATALOG_RELATIVE = Path("data") / "catalog" / "types_override.xlsx"
+
+
+def default_types_catalog_path() -> Path:
+    """Find the type workbook in dev, PyInstaller onefile, or packaged dist."""
+    override = os.environ.get(TYPES_CATALOG_ENV_VAR, "").strip()
+    if override:
+        return Path(override).expanduser()
+    candidates = []
+    executable = getattr(sys, "executable", None)
+    if executable:
+        candidates.append(Path(executable).resolve().parent / _TYPES_CATALOG_RELATIVE)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / _TYPES_CATALOG_RELATIVE)
+    candidates.append(Path(__file__).resolve().parents[3] / _TYPES_CATALOG_RELATIVE)
+    return next((path for path in candidates if path.is_file()), candidates[-1])
+
+
+DEFAULT_TYPES_CATALOG = default_types_catalog_path()
 
 
 def _norm(value: Any) -> str:

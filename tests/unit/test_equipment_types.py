@@ -1,7 +1,9 @@
+import sys
 from types import SimpleNamespace
 
 from switchloc.application.equipment_types import (
-    DEFAULT_TYPES_CATALOG, EquipmentTypeCatalog, resolution_report)
+    DEFAULT_TYPES_CATALOG, EquipmentTypeCatalog, default_types_catalog_path,
+    resolution_report)
 from switchloc.application.level2_placement_service import _apply_catalog_lines
 from switchloc.reliability.power_flow import PowerFlowSettings
 from switchloc.domain.enums import BranchKind, SwitchFamily
@@ -12,6 +14,17 @@ def test_bundled_catalog_has_required_sheets_and_rows():
     assert len(catalog.lines) >= 35
     assert len(catalog.transformers) == 60
     assert len(catalog.fuses) == 20
+
+
+def test_catalog_resolves_from_data_next_to_frozen_executable(tmp_path, monkeypatch):
+    executable_dir = tmp_path / "dist"
+    catalog = executable_dir / "data" / "catalog" / "types_override.xlsx"
+    catalog.parent.mkdir(parents=True)
+    catalog.write_bytes(b"catalog")
+    monkeypatch.setenv("SWITCHLOC_TYPES_CATALOG", "")
+    monkeypatch.setattr(sys, "executable", str(executable_dir / "SwitchLoc.exe"))
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path / "_MEI_TEMP"), raising=False)
+    assert default_types_catalog_path() == catalog
 
 
 def test_exact_bare_acsr_signature_selects_catalog_line_type():

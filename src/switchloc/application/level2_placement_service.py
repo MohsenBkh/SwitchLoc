@@ -33,6 +33,7 @@ class Level2AppSettings:
     load_model: dict
     reliability: dict
     equipment_types_path: str = str(DEFAULT_TYPES_CATALOG)
+    feeder_keys: tuple[str, ...] | None = None
     persist: bool = False
     user: str = "level2-placement"
 
@@ -61,33 +62,58 @@ class Level2PlacementService:
                 raise ValueError("پروژه هیچ دادهٔ ورودی ندارد.")
             net, issues = store.load_network(runs[-1]["id"])
             topo = TopologyService(TopologySettings(persist=False)).run(net, issues=issues)
+            all_traces = list(topo.traces)
+            if st.feeder_keys is None:
+                traces = all_traces
+            else:
+                requested = {str(key).strip() for key in st.feeder_keys if str(key).strip()}
+                unknown = [key for key in requested
+                           if not any(same_feeder(key, trace.feeder_key)
+                                      for trace in all_traces)]
+                if unknown:
+                    raise ValueError("فیدرهای انتخاب‌شده در پروژه پیدا نشدند: "
+                                     + ", ".join(sorted(unknown)))
+                traces = [trace for trace in all_traces
+                          if any(same_feeder(trace.feeder_key, key)
+                                 for key in requested)]
+                if not traces:
+                    raise ValueError("برای جایابی سطح ۲ هیچ فیدری در دامنهٔ مطالعه انتخاب نشده است.")
+            selected_nodes = {node for trace in traces for node in trace.nodes}
             load_data = dict(st.load_model or
                              store.get_kv("engineering_load_model_v1", {}) or {})
             if not load_data:
                 raise ValueError("مدل بار وجود ندارد؛ P/Q را برای همهٔ فیدرها تکمیل کنید.")
             lm_settings = LoadModelSettings.from_dict(load_data)
             load_result = build_node_loads(topo.graph, net, lm_settings)
-            node_kw = {n: float(v or 0.0) for n, v in load_result.node_kw.items()}
-            node_kvar = {n: float(v or 0.0) for n, v in load_result.node_kvar.items()}
+            node_kw = {n: float(v or 0.0) for n, v in load_result.node_kw.items()
+                       if n in selected_nodes}
+            node_kvar = {n: float(v or 0.0) for n, v in load_result.node_kvar.items()
+                         if n in selected_nodes}
             if not any(abs(v) > 1e-9 for v in node_kw.values()):
                 raise ValueError("مدل بار هیچ بار اکتیوی به گره‌ها تخصیص نداده است.")
             q_explicit = lm_settings.level == "scaled" or any(
-                getattr(ld, "q_kvar", None) is not None for ld in (net.loads or []))
+                getattr(ld, "node_id", None) in selected_nodes
+                and getattr(ld, "q_kvar", None) is not None
+                for ld in (net.loads or []))
             if not q_explicit:
                 pf = st.power_flow.assumed_power_factor
                 tan_phi = math.tan(math.acos(pf))
                 node_kvar = {n: abs(p) * tan_phi for n, p in node_kw.items()}
 
             rates, repairs, transients, rate_notes = _resolve_reliability_inputs(
-                st.reliability, store, topo.traces)
+                st.reliability, store, traces)
             flow_settings = PowerFlowSettings.from_dict(st.power_flow.as_dict())
             catalog = EquipmentTypeCatalog(st.equipment_types_path)
             _apply_catalog_lines(flow_settings, catalog, net.branches or [])
             transformer_kva = _transformer_kva_by_node(topo.graph, net)
-            budget = _resolve_budgets(st.level2.nc_budget_by_feeder, topo.traces)
+            budget = _resolve_budgets(st.level2.nc_budget_by_feeder, traces)
 
             unresolved: list[str] = []
             ties, tie_ambiguities = _candidate_ties(topo.ties)
+            selected_feeders = {str(trace.feeder_key) for trace in traces}
+            ties = [tie for tie in ties
+                    if any(same_feeder(tie.feeder_a, key) for key in selected_feeders)
+                    and any(same_feeder(tie.feeder_b, key) for key in selected_feeders)]
             unresolved.extend(tie_ambiguities)
             if st.level2.no_budget > len(ties):
                 raise ValueError(
@@ -99,7 +125,7 @@ class Level2PlacementService:
 
             # Baseline: actual imported normally-open states, before this plan.
             base_contexts = self._build_contexts(
-                topo.graph, net, topo.traces, node_kw, rates, repairs, transients,
+                topo.graph, net, traces, node_kw, rates, repairs, transients,
                 st.reliability, budget, st.level2, topo.zones.zone_of_node)
             baseline_eens = {}
             for switch_type, contexts in base_contexts.items():
@@ -112,7 +138,7 @@ class Level2PlacementService:
                     baseline_eens[switch_type][key] = _score_feeder_eens(
                         ctx, (), switch_type, st.reliability)
             baseline_flow, _ = self._evaluate_flow_state(
-                topo.graph, net, topo.traces, node_kw, node_kvar,
+                topo.graph, net, traces, node_kw, node_kvar,
                 transformer_kva, flow_settings)
 
             # State count is summed across all allowed NO states and switch types.
@@ -122,6 +148,9 @@ class Level2PlacementService:
                 state_net = _with_normally_open(net, no_selection)
                 trace_engine = TracingEngine(topo.graph, state_net)
                 state_traces = trace_engine.trace_all(IssueLog(), quiet=True)
+                state_traces = [trace for trace in state_traces
+                                if any(same_feeder(trace.feeder_key, key)
+                                       for key in selected_feeders)]
                 if not state_traces:
                     unresolved.append("حالت NO انتخاب‌شده فیدری برای ردیابی تولید نکرد.")
                     continue
@@ -232,8 +261,9 @@ class Level2PlacementService:
                         if prev_key is None or tie_key < prev_key:
                             best[switch_type] = plan.as_dict()
 
-            feeders = sorted({str(t.feeder_key) for t in topo.traces})
+            feeders = sorted({str(t.feeder_key) for t in traces})
             assumptions = [
+                f"دامنهٔ مطالعه فقط فیدرهای انتخاب‌شده است: {', '.join(feeders)}.",
                 "هدف: کمینه‌سازی EENS سالانه با جست‌وجوی شمارشی کامل روی کاندیدهای تعریف‌شده.",
                 "قیود پخش بار حالت ماندگار برای تمام فیدرهای ردیابی‌شده و هر حالت NO کاندید اعمال شد؛ طرح‌های ناقض ولتاژ، جریان، ظرفیت ترانس، شعاعی‌بودن یا دادهٔ ضروری رد شدند.",
                 "کلیدهای NC جدید در حالت عادی بسته‌اند؛ بنابراین محل NC به‌تنهایی پخش بار عادی را تغییر نمی‌دهد. حالت‌های NO از کاندیدهای موجود topology ساخته می‌شوند.",
@@ -245,6 +275,8 @@ class Level2PlacementService:
                 assumptions.append("فضای نصب NC به گره‌های دارای بار صریح (نقطه‌بار GIS/مدل بار) محدود شد.")
             if not st.reliability.get("backup_kw"):
                 assumptions.append("ظرفیت پشتیبان در مدل EENS نامحدود است، مگر اینکه backup_kw صریح ارائه شود.")
+            for feeder, source in (st.reliability.get("input_source_by_feeder", {}) or {}).items():
+                assumptions.append(f"منشأ λ/r فیدر {feeder}: {source}.")
             if rate_notes:
                 assumptions.extend(rate_notes)
             if not q_explicit:
@@ -252,7 +284,8 @@ class Level2PlacementService:
                     f"Q از pf={st.power_flow.assumed_power_factor:g} استنتاج شد؛ Q مستقل GIS/مدل بار موجود نبود.")
             status = "ok" if any(best.values()) else "no-feasible-plan"
             result = Level2StudyResult(
-                settings={"level2": st.level2.as_dict(),
+                settings={"feeder_keys": feeders,
+                          "level2": st.level2.as_dict(),
                           "power_flow": flow_settings.as_dict(),
                           "reliability": dict(st.reliability),
                           "load_model_level": lm_settings.level,
@@ -367,6 +400,8 @@ def level2_settings_from_data(data: dict) -> Level2AppSettings:
         load_model=dict(data.get("load_model", {}) or {}),
         reliability=dict(data.get("reliability", {}) or {}),
         equipment_types_path=str(data.get("equipment_types_catalog") or DEFAULT_TYPES_CATALOG),
+        feeder_keys=(tuple(map(str, data["feeder_keys"]))
+                     if data.get("feeder_keys") is not None else None),
         persist=bool(data.get("persist", False)),
         user=str(data.get("user") or "level2-placement"))
 

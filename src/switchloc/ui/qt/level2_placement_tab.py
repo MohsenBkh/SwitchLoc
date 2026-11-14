@@ -20,6 +20,7 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
             super().__init__(parent_)
             self.on_run = None
             self.on_refresh = None
+            self.on_get_project_inputs = None
             self._result = None
             self._feeders: list[str] = []
             self._types: list[str] = []
@@ -78,6 +79,17 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
             self.use_project_load.setChecked(True)
             self.use_project_load.toggled.connect(self._toggle_load_cells)
             feeders_layout.addWidget(self.use_project_load)
+            source_buttons = QHBoxLayout()
+            self.fill_load_button = QPushButton("برداشت P/Q از تنظیمات بار")
+            self.fill_load_button.clicked.connect(self._fill_load_from_project)
+            self.fill_reliability_button = QPushButton(
+                "تکمیل λ/r و پشتیبان از ورودی‌های پروژه")
+            self.fill_reliability_button.clicked.connect(
+                self._fill_reliability_from_project)
+            source_buttons.addWidget(self.fill_load_button)
+            source_buttons.addWidget(self.fill_reliability_button)
+            source_buttons.addStretch(1)
+            feeders_layout.addLayout(source_buttons)
             self.feeder_table = QTableWidget(0, 8)
             self.feeder_table.setHorizontalHeaderLabels([
                 "فیدر", "بودجه NC", "P بار (kW)", "Q بار (kvar)",
@@ -229,8 +241,14 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
             elif changed:
                 self.use_project_load.setChecked(bool(load_model))
             self._project_key = project_key
-            if not feeders:
-                self.status.setText("فیدری از پروژهٔ باز تشخیص داده نشد؛ ابتدا GIS را وارد و توپولوژی را بسازید.")
+            if changed:
+                if feeders:
+                    self.status.setText(
+                        f"دامنهٔ فعلی مطالعه: {len(feeders)} فیدر — "
+                        + ", ".join(feeders))
+                else:
+                    self.status.setText(
+                        "در دامنهٔ مطالعه فیدری نیست؛ انتخاب فیدرها را در بخش ورود داده بررسی کنید.")
 
         def _toggle_load_cells(self, use_project):
             for row in range(self.feeder_table.rowCount()):
@@ -249,6 +267,65 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
                     result[name.text()] = value.text().strip()
             return result
 
+        def _project_inputs(self):
+            if self.on_refresh is not None:
+                self.on_refresh()
+            if self.on_get_project_inputs is None:
+                raise ValueError("دادهٔ تنظیمات پروژه در دسترس نیست.")
+            return self.on_get_project_inputs()
+
+        def _fill_load_from_project(self):
+            try:
+                data = self._project_inputs()
+                model = data.get("load_model", {}) or {}
+                pqs = model.get("feeder_pq", {}) or {}
+                if model.get("level") == "scaled" and pqs:
+                    self.use_project_load.setChecked(False)
+                    for row in range(self.feeder_table.rowCount()):
+                        feeder = self.feeder_table.item(row, 0).text()
+                        values = pqs.get(feeder)
+                        if values:
+                            self.feeder_table.item(row, 2).setText(str(values.get("p_kw", "")))
+                            self.feeder_table.item(row, 3).setText(str(values.get("q_kvar", "")))
+                    self.status.setText("P/Q بار از تنظیمات بار پروژه به جدول فیدرهای منتخب منتقل شد.")
+                elif model:
+                    self.use_project_load.setChecked(True)
+                    self.status.setText(
+                        f"مدل بار پروژه ({model.get('level', '—')}) برای فیدرهای منتخب انتخاب شد.")
+                else:
+                    raise ValueError("در پروژه تنظیمات بار پیدا نشد؛ مدل بار را ابتدا در بخش مربوطه ثبت کنید.")
+            except (ValueError, TypeError) as exc:
+                QMessageBox.warning(self, "دادهٔ بار پروژه", str(exc))
+
+        def _fill_reliability_from_project(self):
+            try:
+                data = self._project_inputs()
+                maps = (data.get("failure_rates", {}),
+                        data.get("repair_times_min", {}),
+                        data.get("transient_rates", {}),
+                        data.get("backup_kw", {}))
+                copied = 0
+                for row in range(self.feeder_table.rowCount()):
+                    feeder = self.feeder_table.item(row, 0).text()
+                    for col, mapping in zip((4, 5, 6, 7), maps):
+                        value = mapping.get(feeder)
+                        if value is not None:
+                            self.feeder_table.item(row, col).setText(str(value))
+                            copied += 1
+                if not copied:
+                    raise ValueError(
+                        "برای فیدرهای منتخب λ/r یا ظرفیت پشتیبان در ورودی‌های پروژه پیدا نشد.")
+                fallback = [feeder for feeder, source in
+                            (data.get("reliability_source", {}) or {}).items()
+                            if "تنظیمات جایابی" in str(source)]
+                message = (f"{copied} مقدار قابلیت اطمینان/پشتیبان وارد شد.")
+                if fallback:
+                    message += (" برای فیدرهای " + ", ".join(fallback)
+                                + "، λ/r از تنظیمات عمومی جایابی پر شد؛ مقدارها را بازبینی کنید.")
+                self.status.setText(message)
+            except (ValueError, TypeError) as exc:
+                QMessageBox.warning(self, "داده‌های قابلیت اطمینان", str(exc))
+
         @staticmethod
         def _optional_number(text, label):
             text = str(text or "").strip()
@@ -263,6 +340,8 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
             return value
 
         def settings_data(self):
+            if not self._feeders:
+                raise ValueError("برای جایابی سطح ۲ در دامنهٔ مطالعه فیدری انتخاب نشده است.")
             feeders = {}
             pqs, rates, repairs, transients, backup = {}, {}, {}, {}, {}
             for row in range(self.feeder_table.rowCount()):
@@ -313,6 +392,7 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
             load_model = ({"level": "scaled", "feeder_pq": pqs}
                           if not self.use_project_load.isChecked() else {})
             return {
+                "feeder_keys": list(self._feeders),
                 "level2": {"nc_budget_by_feeder": feeders,
                            "no_budget": self.no_budget.value(),
                            "max_search_states": self.max_states.value(),
