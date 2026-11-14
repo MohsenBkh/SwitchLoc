@@ -79,6 +79,15 @@ class EquipmentTypeCatalog:
     def _type_name(row: dict) -> str:
         return str(row.get("loc_name(a:40)") or "").strip()
 
+    def line_ampacity_a(self, type_name: str) -> float | None:
+        """Read confirmed continuous current Ithr in kA and return amperes."""
+        rows = [row for row in self.lines if self._type_name(row) == type_name]
+        if len(rows) != 1:
+            return None
+        # The user confirmed Ithr(r) is continuous ampacity in kA.
+        value = _number(rows[0].get("Ithr(r)"))
+        return value * 1000.0 if value is not None and value > 0 else None
+
     def _line_name_candidate(self, branch) -> tuple[str | None, str]:
         kind = getattr(getattr(branch, "kind", None), "value", getattr(branch, "kind", ""))
         conductor = _norm(getattr(branch, "conductor", ""))
@@ -115,7 +124,31 @@ class EquipmentTypeCatalog:
             "installation": getattr(branch, "installation", ""),
             "kind": getattr(getattr(branch, "kind", None), "value", getattr(branch, "kind", "")),
         }
+        conductor_tokens = _norm(getattr(branch, "conductor", "")).split()
+        aliases = {"مینک": "mink", "سمور": "mink", "روباه": "fox",
+                   "خرگوش": "rabbit", "راسوی": "weasel", "هاینا": "hyena",
+                   "سگ": "dog", "وشق": "lynx"}
+        conductor_tokens = [aliases.get(token, token) for token in conductor_tokens]
+        conductor_name = " ".join(conductor_tokens)
+        explicit_rows = [r for r in self.lines
+                         if _norm(self._type_name(r))
+                         and _norm(self._type_name(r)) in conductor_name]
+        if not explicit_rows:
+            animal_tokens = {"mink", "fox", "rabbit", "weasel", "hyena", "dog", "lynx"}
+            identified = set(conductor_tokens) & animal_tokens
+            if identified:
+                explicit_rows = [r for r in self.lines
+                                 if set(_norm(self._type_name(r)).split()) & identified]
+        explicit_names = tuple(dict.fromkeys(self._type_name(r) for r in explicit_rows))
+        if len(explicit_names) > 1:
+            return TypeResolution(
+                branch_id, feeder, "line", "ambiguous", candidates=explicit_names,
+                gis_identity=identity,
+                reason="نام هادی GIS با چند تایپ کاتالوگ سازگار است؛ نوع دقیق‌تر لازم است.")
         wanted, reason = self._line_name_candidate(branch)
+        if len(explicit_names) == 1:
+            wanted = explicit_names[0]
+            reason = "نام تایپ صریح در فیلد هادی GIS با کاتالوگ منطبق شد."
         if not wanted:
             status = "unsupported" if "پشتیبانی" in reason else "unmatched"
             return TypeResolution(branch_id, feeder, "line", status,

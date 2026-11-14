@@ -2,6 +2,8 @@ from types import SimpleNamespace
 
 from switchloc.application.equipment_types import (
     DEFAULT_TYPES_CATALOG, EquipmentTypeCatalog, resolution_report)
+from switchloc.application.level2_placement_service import _apply_catalog_lines
+from switchloc.reliability.power_flow import PowerFlowSettings
 from switchloc.domain.enums import BranchKind, SwitchFamily
 
 
@@ -21,6 +23,28 @@ def test_exact_bare_acsr_signature_selects_catalog_line_type():
     result = catalog.resolve_branch(branch)
     assert result.status == "matched"
     assert result.selected_type == "35-Al_St"
+
+
+def test_explicit_catalog_conductor_type_mink_resolves_from_gis_name():
+    catalog = EquipmentTypeCatalog()
+    branch = SimpleNamespace(
+        id="b-mink", feeder_name="F1", kind=BranchKind.LINE_AERIAL,
+        conductor="ACSR-MINK", section_mm2=None, installation="سيم لخت")
+    result = catalog.resolve_branch(branch)
+    assert result.status == "matched"
+    assert result.selected_type == "ACSR-MINK"
+    assert catalog.line_ampacity_a(result.selected_type) == 6400.0
+
+
+def test_level2_uses_catalog_ithr_in_kiloamps_as_amps_by_default():
+    catalog = EquipmentTypeCatalog()
+    branch = SimpleNamespace(
+        id="b-mink", feeder_name="F1", kind=BranchKind.LINE_AERIAL,
+        conductor="ACSR-MINK", section_mm2=None, installation="سيم لخت")
+    settings = PowerFlowSettings(base_voltage_kv=20.0)
+    _apply_catalog_lines(settings, catalog, [branch])
+    assert settings.edge_overrides["b-mink"]["max_current_a"] == 6400.0
+    assert settings.edge_overrides["b-mink"]["r_ohm_per_km"] == 0.46
 
 
 def test_overhead_covered_acsr_is_not_assumed_to_be_bare_type():

@@ -3120,7 +3120,57 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                             else "__ALL__"))
         state["_map_dirty"] = False
 
-    def _run_level2(config_path: str) -> None:
+    def _refresh_level2_inputs() -> None:
+        net = state.get("net")
+        if net is None:
+            level2_tab.set_project_data([], project_key=state.get("db"))
+            return
+        topo = state.get("topo")
+        if topo is None:
+            try:
+                from ...validation.issues import IssueLog
+                topo = TopologyService(TopologySettings(persist=False)).run(
+                    net, issues=IssueLog())
+            except Exception as exc:
+                _log.warning("could not prepare feeder list for Level-2 form: %s", exc)
+                topo = None
+        feeders = ([str(item.feeder_key) for item in topo.traces]
+                   if topo is not None else
+                   sorted({str(x.feeder_name) for x in
+                           (net.branches or []) + (net.transformers or [])
+                           if str(x.feeder_name or "")}))
+        line_types = []
+        line_ampacities = {}
+        try:
+            from ...application.equipment_types import EquipmentTypeCatalog
+            catalog = EquipmentTypeCatalog()
+            line_types = sorted({resolution.selected_type
+                                 for branch in (net.branches or [])
+                                 for resolution in [catalog.resolve_branch(branch)]
+                                 if resolution.status == "matched"
+                                 and resolution.selected_type})
+            line_ampacities = {name: catalog.line_ampacity_a(name)
+                               for name in line_types
+                               if catalog.line_ampacity_a(name) is not None}
+        except (OSError, ValueError) as exc:
+            _log.warning("could not resolve Level-2 line types: %s", exc)
+        saved = {}
+        db_path = state.get("db")
+        if db_path:
+            try:
+                from ...persistence.store import ProjectStore
+                store = ProjectStore(str(db_path))
+                try:
+                    saved = store.get_kv("level2_placement_settings", {}) or {}
+                finally:
+                    store.close()
+            except Exception as exc:
+                _log.warning("could not read saved Level-2 settings: %s", exc)
+        level2_tab.set_project_data(
+            feeders, line_types, state.get("load_model") or {}, saved,
+            project_key=db_path, line_ampacities=line_ampacities)
+
+    def _run_level2(config_data: dict) -> None:
         project_db = state.get("db")
         if not project_db:
             QMessageBox.warning(win, "پروژه باز نیست",
@@ -3130,9 +3180,16 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
         def work():
             from ...application.level2_placement_service import (
-                Level2PlacementService, load_level2_config)
+                Level2PlacementService, level2_settings_from_data)
+            from ...persistence.store import ProjectStore
+            store = ProjectStore(str(project_db))
+            try:
+                store.set_kv("level2_placement_settings", config_data,
+                             user="level2-placement-ui")
+            finally:
+                store.close()
             return Level2PlacementService(
-                load_level2_config(config_path)).run(str(project_db))
+                level2_settings_from_data(config_data)).run(str(project_db))
 
         def done(result):
             level2_tab.set_busy(False)
@@ -3155,6 +3212,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                  on_error=failed, title="جایابی سطح دوم")
 
     level2_tab.on_run = _run_level2
+    level2_tab.on_refresh = _refresh_level2_inputs
     tabs.addTab(import_tab, "Data Import")
     tabs.addTab(topo_tab, "Topology")
     tabs.addTab(plac_tab, "Placement")

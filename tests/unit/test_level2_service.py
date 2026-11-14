@@ -1,11 +1,27 @@
 from switchloc.application.level2_placement_service import (
-    Level2AppSettings, Level2PlacementService)
+    Level2AppSettings, Level2PlacementService, level2_settings_from_data)
 from switchloc.domain.entities import StudyRunMeta
 from switchloc.placement.level2 import Level2Settings
 from switchloc.reliability.power_flow import PowerFlowSettings
 from switchloc.validation.issues import IssueLog
 
 from conftest import NetBuilder
+
+
+def test_level2_settings_can_be_built_from_direct_form_data():
+    settings = level2_settings_from_data({
+        "level2": {"nc_budget_by_feeder": {"F1": 1}, "no_budget": 0,
+                   "switch_types": ["recloser"]},
+        "power_flow": {"base_voltage_kv": 20.0,
+                       "type_ampacity_a": {"35-Al_St": 200.0}},
+        "load_model": {"level": "scaled",
+                       "feeder_pq": {"F1": {"p_kw": 40, "q_kvar": 12}}},
+        "reliability": {"failure_rates": {"F1": 2.0}},
+    })
+    assert settings.level2.nc_budget_by_feeder == {"F1": 1}
+    assert settings.power_flow.type_ampacity_a == {"35-Al_St": 200.0}
+    assert settings.load_model["feeder_pq"]["F1"]["p_kw"] == 40
+    assert settings.reliability["failure_rates"]["F1"] == 2.0
 
 
 def test_level2_service_runs_exact_all_type_search_with_load_flow(tmp_path):

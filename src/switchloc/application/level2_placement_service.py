@@ -239,6 +239,7 @@ class Level2PlacementService:
                 "کلیدهای NC جدید در حالت عادی بسته‌اند؛ بنابراین محل NC به‌تنهایی پخش بار عادی را تغییر نمی‌دهد. حالت‌های NO از کاندیدهای موجود topology ساخته می‌شوند.",
                 "مدل EENS/بازیابی همان موتور قابلیت اطمینان پروژه با پارامترهای صریح است؛ توالی کلیدزنی پس از هر خطا به‌صورت خودکار از GIS استنتاج نمی‌شود.",
                 "نتیجهٔ NO یک پیشنهاد جست‌وجویی است؛ پیش از تبدیل به تنظیم بهره‌برداری باید هویت کلید و مانور آن توسط شرکت تأیید شود.",
+                "R/X از تایپ یکتای types_override.xlsx گرفته شد؛ Ithr(r) با واحد kA و ضریب ۱۰۰۰ به آمپر تبدیل شد (تأیید کاربر). مقادیر type_ampacity_a ورودی بر مقدار کاتالوگ اولویت دارند.",
             ]
             if st.level2.candidate_mode == "load_points":
                 assumptions.append("فضای نصب NC به گره‌های دارای بار صریح (نقطه‌بار GIS/مدل بار) محدود شد.")
@@ -352,8 +353,13 @@ class Level2PlacementService:
 
 def load_level2_config(path: str | Path) -> Level2AppSettings:
     data = json.loads(Path(path).read_text(encoding="utf-8"))
+    return level2_settings_from_data(data)
+
+
+def level2_settings_from_data(data: dict) -> Level2AppSettings:
+    """Build service settings from JSON-loaded or directly-entered GUI data."""
     if not isinstance(data, dict):
-        raise ValueError("پیکربندی سطح ۲ باید JSON object باشد.")
+        raise ValueError("پیکربندی سطح ۲ باید یک شیء تنظیمات باشد.")
     level2 = Level2Settings(**dict(data.get("level2", {})))
     pflow = PowerFlowSettings.from_dict(data.get("power_flow", {}))
     return Level2AppSettings(
@@ -560,14 +566,21 @@ def _transformer_kva_by_node(graph, net):
 def _apply_catalog_lines(flow_settings, catalog, branches):
     for branch in branches:
         resolved = catalog.resolve_branch(branch)
-        if resolved.status != "matched" or resolved.selected_type not in (flow_settings.type_ampacity_a or {}):
+        if resolved.status != "matched":
             continue
         row = next(r for r in catalog.lines
                    if catalog._type_name(r) == resolved.selected_type)
+        # An explicit project/form override wins; otherwise Ithr is taken from
+        # the type workbook (unit kA, confirmed by the user) and converted to A.
+        ampacity = (flow_settings.type_ampacity_a or {}).get(resolved.selected_type)
+        if ampacity is None:
+            ampacity = catalog.line_ampacity_a(resolved.selected_type)
+        if ampacity is None:
+            continue
         flow_settings.edge_overrides[str(branch.id)] = {
             "r_ohm_per_km": float(row["rline(r)"]),
             "x_ohm_per_km": float(row["xline(r)"]),
-            "max_current_a": float(flow_settings.type_ampacity_a[resolved.selected_type]),
+            "max_current_a": float(ampacity),
         }
 
 
