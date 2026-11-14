@@ -33,17 +33,17 @@ def test_explicit_catalog_conductor_type_mink_resolves_from_gis_name():
     result = catalog.resolve_branch(branch)
     assert result.status == "matched"
     assert result.selected_type == "ACSR-MINK"
-    assert catalog.line_ampacity_a(result.selected_type) == 6400.0
+    assert catalog.line_ampacity_a(result.selected_type) == 291.0
 
 
-def test_level2_uses_catalog_ithr_in_kiloamps_as_amps_by_default():
+def test_level2_uses_catalog_sline_in_kiloamps_as_amps_by_default():
     catalog = EquipmentTypeCatalog()
     branch = SimpleNamespace(
         id="b-mink", feeder_name="F1", kind=BranchKind.LINE_AERIAL,
         conductor="ACSR-MINK", section_mm2=None, installation="سيم لخت")
     settings = PowerFlowSettings(base_voltage_kv=20.0)
     _apply_catalog_lines(settings, catalog, [branch])
-    assert settings.edge_overrides["b-mink"]["max_current_a"] == 6400.0
+    assert settings.edge_overrides["b-mink"]["max_current_a"] == 291.0
     assert settings.edge_overrides["b-mink"]["r_ohm_per_km"] == 0.46
 
 

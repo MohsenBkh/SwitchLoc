@@ -28,8 +28,9 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
             intro = QLabel(
                 "<b>جایابی سطح ۲ مبتنی بر EENS و پخش بار</b> — اطلاعات مطالعه را "
                 "مستقیماً در جدول‌ها وارد کنید. فیدرها و تایپ هادی از پروژه/GIS "
-                "خوانده می‌شوند؛ R/X و Ithr از کاتالوگ types_override.xlsx خوانده می‌شوند "
-                "و Ithr با تبدیل kA به A اعمال می‌شود. بار و قابلیت اطمینان را بررسی کنید؛ "
+                "خوانده می‌شوند؛ R/X و Sline از کاتالوگ types_override.xlsx خوانده می‌شوند "
+                "و Sline با تبدیل kA به A اعمال می‌شود (Ithr مربوط به اتصال کوتاه است). "
+                "بار و قابلیت اطمینان را بررسی کنید؛ "
                 "آمپاسیتی تایپ نیز در صورت نیاز قابل اصلاح است.")
             intro.setWordWrap(True)
             root.addWidget(intro)
@@ -102,7 +103,7 @@ def make_level2_placement_tab(parent=None):  # pragma: no cover - Qt UI
             flow.addRow("حد بارگیری ترانس (%):", self.transformer_limit)
             flow.addRow("ضریب توان برای Q ناموجود:", self.power_factor)
             self.ampacity_table = QTableWidget(0, 2)
-            self.ampacity_table.setHorizontalHeaderLabels(["تایپ هادی از GIS / کاتالوگ", "حد جریان Ithr (A؛ قابل اصلاح)"])
+            self.ampacity_table.setHorizontalHeaderLabels(["تایپ هادی از GIS / کاتالوگ", "جریان پیوسته Sline (A؛ قابل اصلاح)"])
             self.ampacity_table.horizontalHeader().setStretchLastSection(True)
             self.ampacity_table.setMinimumHeight(100)
             flow.addRow("آمپاسیتی هادی‌ها:", self.ampacity_table)

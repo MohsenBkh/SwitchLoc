@@ -80,12 +80,12 @@ class EquipmentTypeCatalog:
         return str(row.get("loc_name(a:40)") or "").strip()
 
     def line_ampacity_a(self, type_name: str) -> float | None:
-        """Read confirmed continuous current Ithr in kA and return amperes."""
+        """Read continuous current Sline in kA and return amperes."""
         rows = [row for row in self.lines if self._type_name(row) == type_name]
         if len(rows) != 1:
             return None
-        # The user confirmed Ithr(r) is continuous ampacity in kA.
-        value = _number(rows[0].get("Ithr(r)"))
+        # Sline(r) is the continuous current rating in kA; Ithr is short-circuit current.
+        value = _number(rows[0].get("sline(r)"))
         return value * 1000.0 if value is not None and value > 0 else None
 
     def _line_name_candidate(self, branch) -> tuple[str | None, str]:

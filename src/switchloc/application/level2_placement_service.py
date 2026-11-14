@@ -239,7 +239,7 @@ class Level2PlacementService:
                 "کلیدهای NC جدید در حالت عادی بسته‌اند؛ بنابراین محل NC به‌تنهایی پخش بار عادی را تغییر نمی‌دهد. حالت‌های NO از کاندیدهای موجود topology ساخته می‌شوند.",
                 "مدل EENS/بازیابی همان موتور قابلیت اطمینان پروژه با پارامترهای صریح است؛ توالی کلیدزنی پس از هر خطا به‌صورت خودکار از GIS استنتاج نمی‌شود.",
                 "نتیجهٔ NO یک پیشنهاد جست‌وجویی است؛ پیش از تبدیل به تنظیم بهره‌برداری باید هویت کلید و مانور آن توسط شرکت تأیید شود.",
-                "R/X از تایپ یکتای types_override.xlsx گرفته شد؛ Ithr(r) با واحد kA و ضریب ۱۰۰۰ به آمپر تبدیل شد (تأیید کاربر). مقادیر type_ampacity_a ورودی بر مقدار کاتالوگ اولویت دارند.",
+                "R/X از تایپ یکتای types_override.xlsx گرفته شد؛ Sline(r) با واحد kA و ضریب ۱۰۰۰ به آمپر تبدیل شد. Ithr حد جریان اتصال کوتاه است و در پخش بار استفاده نمی‌شود. مقادیر type_ampacity_a ورودی بر مقدار کاتالوگ اولویت دارند.",
             ]
             if st.level2.candidate_mode == "load_points":
                 assumptions.append("فضای نصب NC به گره‌های دارای بار صریح (نقطه‌بار GIS/مدل بار) محدود شد.")
@@ -570,8 +570,8 @@ def _apply_catalog_lines(flow_settings, catalog, branches):
             continue
         row = next(r for r in catalog.lines
                    if catalog._type_name(r) == resolved.selected_type)
-        # An explicit project/form override wins; otherwise Ithr is taken from
-        # the type workbook (unit kA, confirmed by the user) and converted to A.
+        # An explicit project/form override wins; otherwise Sline is taken from
+        # the type workbook (unit kA) and converted to A. Ithr is short-circuit current.
         ampacity = (flow_settings.type_ampacity_a or {}).get(resolved.selected_type)
         if ampacity is None:
             ampacity = catalog.line_ampacity_a(resolved.selected_type)
