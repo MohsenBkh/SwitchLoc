@@ -88,6 +88,12 @@ def _money(v) -> str:
 
 
 def build_report(m: StudyModel, map_note: str = "") -> ReportDoc:
+    # ---- نوع مطالعه تعیین‌کنندهٔ محتوای گزارش است (درخواست کاربر v1.15):
+    # اگر مطالعهٔ جایابی کلید/EENS انجام شده باشد، گزارش نهایی فقط همان
+    # مطالعه را مستند می‌کند و بخش‌های فاز ۴ (n-1، رتبه‌بندی، جدول ۱۷،
+    # اقتصاد) به گزارش اضافه نمی‌شوند.
+    if m.active_study == "eens":
+        return _build_eens_report(m, map_note)
     k = m.kpis()
     snap = m.placement.settings
     verdict_fa = "قبول (PASS)" if m.verdict() == "PASS" else "رد (FAIL)"
@@ -347,6 +353,11 @@ def build_report(m: StudyModel, map_note: str = "") -> ReportDoc:
 
     sections = [sec_sum, sec_method, sec_n1, sec_zones, sec_rank, sec_schemes,
                 sec_comp, sec_rec, sec_issues]
+    # شاخص‌های ارزیابی همهٔ فیدرها (λ، SAIDI/SAIFI، ENS…) بلافاصله پس از
+    # خلاصهٔ مدیریتی — درخواست کاربر: همهٔ شاخص‌ها در گزارش بیاید.
+    _ind_sec = _feeder_indices_section(m)
+    if _ind_sec is not None:
+        sections.insert(1, _ind_sec)
 
     # ---------------- پیوست الف: کاربرگ کلیدهای پیشنهادی -----------------
     prop = m.build_proposed()
@@ -399,6 +410,92 @@ def build_report(m: StudyModel, map_note: str = "") -> ReportDoc:
         meta=meta, kpis=kpis, sections=sections,
         footer=f"{APP_NAME} {__version__} — تولید خودکار؛ اعداد این گزارش "
                "با شناسه اجرای جایابی بالای گزارش بازتولیدپذیر است.")
+
+
+#: ستون‌های جدول «شاخص‌های ارزیابی فیدرها» — (کلید، سرستون، تعداد اعشار)
+FEEDER_INDEX_COLUMNS = (
+    ("km", "طول (km)", 2),
+    ("transformers", "ترانس", 0),
+    ("lambda_per_year", "λ (۱/سال)", 2),
+    ("lambda_reducible", "λ قابل کاهش", 2),
+    ("r_minutes", "r (دقیقه)", 1),
+    ("u_hours", "U=λr/60 (ساعت/سال)", 2),
+    ("saidi", "SAIDI (دقیقه/سال)", 1),
+    ("saifi", "SAIFI (قطع/سال)", 2),
+    ("caidi", "CAIDI (دقیقه)", 1),
+    ("asai", "ASAI (٪)", 4),
+    ("ens_per_year_kwh", "ENS (kWh/سال)", 0),
+    ("ens_before_kwh", "EENS پایه (kWh/سال)", 0),
+    ("score", "امتیاز (فرمول ۱)", 4),
+)
+
+
+def _fmt_cell(value, nd: int) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "بله" if value else "خیر"
+    if isinstance(value, (int, float)):
+        return f"{value:,.{nd}f}"
+    return str(value)
+
+
+def feeder_index_rows(m: StudyModel) -> tuple[list, list]:
+    """(سرستون‌ها، ردیف‌ها) برای جدول همهٔ شاخص‌های ارزیابی فیدرها."""
+    headers = ["فیدر"] + [c[1] for c in FEEDER_INDEX_COLUMNS]
+    rows = []
+    for r in m.feeder_table():
+        line = [r["feeder_key"]]
+        for key, _label, nd in FEEDER_INDEX_COLUMNS:
+            value = r.get(key)
+            if key == "asai" and value is not None:
+                value = float(value) * 100.0
+            line.append(_fmt_cell(value, nd))
+        rows.append(line)
+    return headers, rows
+
+
+def _feeder_indices_section(m: StudyModel) -> Section | None:
+    """بخش «شاخص‌های ارزیابی فیدرها» — وقتی داده‌ای وجود دارد."""
+    feeder_table = getattr(m, "feeder_table", None)   # مدل‌های سبک/قدیمی
+    if feeder_table is None:
+        return None
+    rows = feeder_table()
+    if not rows:
+        return None
+    headers, table_rows = feeder_index_rows(m)
+    ind = m.feeder_indices or {}
+    intro = [
+        "این جدول همهٔ شاخص‌های ارزیابی‌شدهٔ هر فیدر را از همان اجراهای "
+        "ثبت‌شدهٔ پروژه گرد می‌آورد: ردیابی (طول/ترانس)، ماتریس λ/r فاز ۳ "
+        "(λ، r، U)، شاخص‌های پیوستگی SAIDI/SAIFI/CAIDI/ASAI و انرژی "
+        "توزیع‌نشده (ENS) و EENS پایه. علامت «—» یعنی برای آن فیدر دادهٔ "
+        "واقعی موجود نیست (صفر گزارش نمی‌شود).",
+    ]
+    if ind.get("has_result"):
+        intro.append(
+            f"شاخص‌های پیوستگی سامانه: SAIFI = {_fmt(ind.get('saifi'), 2)} "
+            f"قطع/مشکل در سال، SAIDI = {_fmt(ind.get('saidi'), 1)} دقیقه در "
+            f"سال، CAIDI = {_fmt(ind.get('caidi'), 1)} دقیقه و ASAI = "
+            f"{_fmt((ind.get('asai') or 0) * 100, 4)}٪ "
+            f"(جمع {('وزنی بر بار فیدرها' if ind.get('aggregation') == 'load-weighted' else 'میانگین سادهٔ فیدرها')}، "
+            f"مبنای سهم مشترکین: {ind.get('load_basis') or '—'}، واحد انرژی: "
+            f"{str(ind.get('energy_unit') or '—').upper()}).")
+    tables = [Table("شاخص‌های ارزیابی فیدرها", headers, table_rows)]
+    energy_rows = [f for f in ind.get("feeders", []) if f.get("energy_records")]
+    if energy_rows:
+        unit = str(ind.get("energy_unit") or "—").upper()
+        intro.append("مجموع انرژی ثبت‌شده با ENS سالانه متفاوت است: ENS برابر مجموع انرژی تبدیل‌شده به kWh تقسیم بر سال مواجهه است. واحد خودکار صرفاً تخمین است و باید با منبع کنترل شود.")
+        tables.append(Table("تطبیق انرژی خام با ENS سالانه", ["فیدر", "مجموع خام", "واحد فرض‌شده", "مواجهه (سال)", "ENS (kWh/سال)"],
+                            [[f.get("feeder_key"), _fmt(f.get("energy_raw_total"), 4), unit, _fmt(f.get("exposure_years"), 4), _fmt(f.get("ens_kwh_per_year"), 2)] for f in energy_rows]))
+    after = []
+    notes = [str(n) for n in (ind.get("notes") or [])]
+    if notes:
+        after.append("محدودیت‌های محاسبهٔ شاخص‌های پیوستگی:")
+        after.extend(f"• {n}" for n in notes)
+    return Section(id="feeder_indices",
+                   title="۱-ب. شاخص‌های ارزیابی فیدرها (λ، SAIDI/SAIFI، ENS)",
+                   intro=intro, tables=tables, after=after)
 
 
 def _total_load(m: StudyModel) -> float:
@@ -620,3 +717,56 @@ def _build_calculations_section(m: StudyModel) -> Section:
             "Equation) و به همین شکل در قالب PDF نیز به‌صورت متن "
             "استاندارد آمده‌اند.",
         ])
+
+
+# ---------------------------------------------------------------------------
+# گزارش نهایی مطالعهٔ EENS — فقط همان مطالعه (بدون آیتم اضافی)
+# ---------------------------------------------------------------------------
+def _build_eens_report(m: StudyModel, map_note: str = "") -> ReportDoc:
+    """گزارش Word/PDF بر اساس مطالعهٔ جایابی کلید ذخیره‌شده در پروژه."""
+    from .eens_report import build_eens_sections
+
+    prof, sections = build_eens_sections(m.eens_study, map_note=map_note)
+    from ..reliability.load_model import LEVEL_FA
+    meta = [
+        ("نام پروژه", m.name),
+        ("تاریخ گزارش", datetime.now().strftime("%Y-%m-%d")),
+        ("نوع مطالعه", prof["scope_fa"]),
+        ("نوع محاسبهٔ EENS", prof["method_fa"]),
+        ("نوع کلید", prof["switch_type_fa"]),
+        ("مدل بار", LEVEL_FA.get(str(prof["level"]), prof["level_fa"])),
+        ("فیدرهای مطالعه", "، ".join(prof["studied_feeders"]) or "—"),
+        ("نرم‌افزار / نسخه", f"{APP_NAME} {__version__}"),
+        ("پایگاه داده پروژه", m.db_path or "—"),
+        ("سیستم مختصات تحلیل", m.crs_label),
+    ]
+    kpis = [
+        ("تعداد فیدر مطالعه‌شده", str(len(prof["studied_feeders"]))),
+        ("EENS پایه (MWh/سال)", f"{prof['baseline_mwh']:,.3f}"),
+        ("EENS پس از جایابی (MWh/سال)", f"{prof['best_mwh']:,.3f}"),
+        ("کاهش EENS (٪)", f"{prof['improvement']:.2f}"),
+        ("کلیدهای پیشنهادی", str(prof["switches"])),
+    ]
+    summary = Section(
+        id="eens_summary", title="۱. خلاصهٔ مدیریتی",
+        intro=[
+            f"این گزارش یک مطالعهٔ **{prof['scope_fa']}** از «جایابی "
+            f"بهینهٔ کلید و کاهش EENS» با روش **{prof['method_fa']}** و "
+            f"نوع کلید **{prof['switch_type_fa']}** است.",
+            f"EENS سالانه از {prof['baseline_mwh']:,.3f} به "
+            f"{prof['best_mwh']:,.3f} مگاوات‌ساعت کاهش می‌یابد "
+            f"(**{prof['improvement']:.2f}٪**) و برای این کاهش "
+            f"{prof['switches']} کلید پیشنهاد می‌شود. اعداد این گزارش "
+            "همان خروجی ذخیره‌شدهٔ موتور است و بازمحاسبه نشده‌اند.",
+        ],
+        tables=[Table("شاخص‌های کلیدی", ["شاخص", "مقدار"],
+                      [[a, b] for a, b in kpis])])
+    return ReportDoc(
+        title="گزارش مطالعهٔ جایابی بهینهٔ کلید و کاهش EENS",
+        subtitle=f"روش سطح اول TAV122-02/00 — نوع مطالعه: {prof['scope_fa']} · "
+                 f"EENS: {prof['method_fa']} · کلید: {prof['switch_type_fa']}",
+        meta=meta, kpis=kpis,
+        sections=[summary] + ([_ind_sec] if (_ind_sec := _feeder_indices_section(m)) else [])
+        + sections,
+        footer=f"{APP_NAME} {__version__} — گزارش خودکار از خروجی موتور "
+               "جایابی کلید (بازتولیدپذیر با شناسهٔ اجرا).")

@@ -30,11 +30,17 @@ from .map_style import (FEEDER_COLORS, MapStyle, UNKNOWN_COLOR)  # noqa: F401
 
 
 def _feeder_selected(feeder: str | None, selection) -> bool:
+    """آیا این فیدر در انتخاب فعلی است؟ (نگارش کوتاه/آراسته یکی است)
+
+    انتخاب ممکن است از نسخه‌های قبل با کلید کوتاه («F1») ذخیره شده باشد؛
+    مقایسهٔ دقیق آن را رد می‌کرد و نقشه هیچ فیدری نشان نمی‌داد.
+    """
+    from ..topology.tracing import same_feeder
     if selection is None:
         return True
     if isinstance(selection, (set, frozenset, list, tuple)):
-        return feeder in selection
-    return feeder == selection
+        return any(same_feeder(feeder or "", str(k)) for k in selection)
+    return same_feeder(feeder or "", str(selection))
 
 
 def feeder_palette(traces: list[FeederTrace],
@@ -120,6 +126,11 @@ class NetworkMapRenderer:
         #: device categories actually drawn in the last render — the
         #: legend is built from it so it is complete AND accurate
         self._drawn: set[str] = set()
+        #: برچسب‌های «نام (تعداد)» لایهٔ خاموشی که پس از نهایی‌شدن محدودهٔ
+        #: محورها رسم می‌شوند (تا جداسازی عمودی برچسب‌ها دقیق باشد)
+        self._pending_outage_labels: list = []
+        #: افسانهٔ توزیع رنگی: [(color, label, edges)]
+        self._heat_legend: list = []
 
     # ------------------------------------------------------------------
     def render(self, path: str, title: str = "",
@@ -130,7 +141,9 @@ class NetworkMapRenderer:
                manual_nodes=None, highlight_point=None,
                zone_load_kw: dict | None = None, selected_zone: str | None = None,
                hidden_switch_ids=None, zone_up_mwh: dict | None = None,
-               zone_outage_hours: dict | None = None) -> str:
+               zone_outage_hours: dict | None = None,
+               outage_points=None, sectionalizer_nodes=None,
+               hidden_outage_ids=None) -> str:
         """Render to a PNG file (headless Agg) and return the path."""
         fig = plt.figure(figsize=figsize, constrained_layout=True)
         try:
@@ -144,7 +157,10 @@ class NetworkMapRenderer:
                              selected_zone=selected_zone,
                              hidden_switch_ids=hidden_switch_ids,
                              zone_up_mwh=zone_up_mwh,
-                             zone_outage_hours=zone_outage_hours)
+                             zone_outage_hours=zone_outage_hours,
+                             outage_points=outage_points,
+                             sectionalizer_nodes=sectionalizer_nodes,
+                             hidden_outage_ids=hidden_outage_ids)
             fig.savefig(path, dpi=dpi)
         finally:
             plt.close(fig)
@@ -179,7 +195,9 @@ class NetworkMapRenderer:
                     selected_zone: str | None = None,
                     hidden_switch_ids=None, zone_up_mwh: dict | None = None,
                     zone_outage_hours: dict | None = None,
-                    manual_tie_pairs=None, zone_label_positions=None) -> None:
+                    manual_tie_pairs=None, zone_label_positions=None,
+                    outage_points=None, sectionalizer_nodes=None,
+                    hidden_outage_ids=None) -> None:
         """Draw onto an existing Matplotlib figure (Qt canvas shares this).
 
         ``proposed_nodes``: node ids of Phase-4 proposed switch locations
@@ -192,6 +210,16 @@ class NetworkMapRenderer:
 
         ``style``: MapStyle override for THIS render (falls back to
         ``self.style``).
+
+        ``outage_points``: رخدادهای خاموشیِ دارای مختصات در CRS پروژه —
+        هر آیتم ``{"id", "x", "y", "label", "status", "feeder",
+        "zone_x", "zone_y", "zone_label"}``. نمایش با رنگ وضعیت و
+        (اختیاری) خط اتصال به مرکز زونِ متأثر؛ همهٔ پارامترهای نمایشی از
+        ``MapStyle`` می‌آیند تا در تب «خاموشی‌ها» قابل تنظیم باشند.
+
+        ``sectionalizer_nodes``: گره‌های پیشنهادی موتور بهینه‌سازی
+        سکشنالایزر (نماد × بنفش، قابل خاموش‌کردن با
+        ``style.show_opt_sectionalizers``).
 
         ``rotate``: منسوخ — چرخش ۹۰° حذف شد (بازخورد کاربر: منظور از
         landscape پر شدن «تمام فضای قاب» بود، نه چرخش تصویر). برای
@@ -207,14 +235,19 @@ class NetworkMapRenderer:
         if ax is None:
             ax = fig.add_subplot(111)
         segs, colors, widths = [], [], []
+        # Resolve the feeder selection once, not for every edge × feeder × trace.
+        selected_edges = None
+        if feeder_filter is not None:
+            selected_edges = set()
+            for trace in self.traces:
+                if _feeder_selected(trace.feeder_key, feeder_filter):
+                    selected_edges.update(trace.edges)
         for eid, e in self.graph.edges.items():
             a = self._c(self.graph.nodes[e.a].coord)
             b = self._c(self.graph.nodes[e.b].coord)
             if a is None or b is None:
                 continue
-            if feeder_filter is not None and not any(
-                    self._edge_in_feeder(eid, fk) for fk in
-                    (feeder_filter if isinstance(feeder_filter, (set, frozenset, list, tuple)) else [feeder_filter])):
+            if selected_edges is not None and eid not in selected_edges:
                 continue
             segs.append((a, b))
             colors.append(edge_colors.get(eid, st.unknown_color))
@@ -226,8 +259,11 @@ class NetworkMapRenderer:
                 capstyle="round", zorder=1))
 
         if show_devices:
+            # None = «تصمیم پیش‌فرض رندرر» (فیوزها پنهان)؛ مجموعهٔ صریح
+            # (حتی خالی) یعنی انتخاب کاربر/نقشهٔ تعاملی مقدم است.
             self._draw_devices(ax, feeder_filter,
-                               hidden_switch_ids=set(hidden_switch_ids or ()))
+                               hidden_switch_ids=(None if hidden_switch_ids is None
+                                                  else set(hidden_switch_ids)))
 
         # Highlight the complete selected zone on top of feeder lines. A
         # zone is a set of network edges, not a polygon; use the exact GIS
@@ -339,16 +375,162 @@ class NetworkMapRenderer:
                     linestyles="dashed", zorder=6, label="Manual inter-feeder tie"))
                 self._drawn.add("manual_tie")
 
+        # --- lایهٔ خاموشی‌های دارای مختصات (درخواست کاربر) --------------
+        if outage_points and st.show_outages:
+            # فهرست پنهان: پارامتر صریح، وگرنه همان انتخاب ذخیره‌شده در سبک
+            # پروژه (تا گزارش‌های headless هم همان چیزی را بدهند که نقشه)
+            hidden_out = {str(x) for x in
+                          (hidden_outage_ids if hidden_outage_ids is not None
+                           else (st.hidden_outage_ids or ()))}
+            by_status: dict[str, list] = {}
+            links = []
+            visible: list[dict] = []
+            for pt in outage_points:
+                try:
+                    pid = str(pt.get("id", ""))
+                    if pid and pid in hidden_out:
+                        continue
+                    fk = str(pt.get("feeder", "") or "")
+                    if feeder_filter is not None and fk and not _feeder_selected(
+                            fk, feeder_filter):
+                        continue
+                    x, y = float(pt["x"]), float(pt["y"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                status = str(pt.get("status", "") or "pending")
+                by_status.setdefault(status, []).append((x, y, pt))
+                visible.append(pt)
+                zx, zy = pt.get("zone_x"), pt.get("zone_y")
+                if st.show_outage_links and zx is not None and zy is not None:
+                    try:
+                        links.append(((x, y), (float(zx), float(zy))))
+                    except (TypeError, ValueError):
+                        pass
+            if links:
+                ax.add_collection(LineCollection(
+                    links, colors=st.outage_link_color,
+                    linewidths=st.outage_link_width,
+                    alpha=st.outage_link_alpha, linestyles="dashed",
+                    zorder=8, label="Outage → zone link"))
+                self._drawn.add("outage_link")
+            status_color = {
+                "confirmed": st.outage_confirmed_color,
+                "rejected": st.outage_rejected_color,
+                "pending": st.outage_pending_color,
+            }
+            status_fa = {"confirmed": "تأیید مهندسی",
+                         "rejected": "رد رخداد", "pending": "در انتظار بررسی"}
+            for status in ("confirmed", "pending", "rejected", ""):
+                items = by_status.get(status)
+                if not items:
+                    continue
+                color = status_color.get(status, st.outage_color)
+                ax.scatter([p[0] for p in items], [p[1] for p in items],
+                           s=st.outage_size, marker=st.outage_marker,
+                           facecolors=color, edgecolors="white",
+                           linewidths=0.8, alpha=st.outage_alpha, zorder=11,
+                           label=f"Outage — {status_fa.get(status, status or 'بدون وضعیت')}")
+                self._drawn.add("outage")
+
+            # --- توزیع رنگی مسیر فیدرها بر اساس تکرار خاموشی ------------
+            if getattr(st, "outage_heat_enabled", False) and visible:
+                try:
+                    from ..application.outage_review import (
+                        assign_heat_level, outage_heat_counts)
+                    heat_points = [p for p in visible if feeder_filter is None
+                                   or (p.get("feeder") and _feeder_selected(
+                                       str(p["feeder"]), feeder_filter))]
+                    counts = outage_heat_counts(
+                        heat_points, self.graph,
+                        radius_m=float(getattr(st, "outage_heat_radius_m", 300.0)),
+                        edge_ids=selected_edges)
+                except Exception:                 # noqa: BLE001
+                    counts = {}
+                seg_by_color: dict[str, list] = {}
+                legend_by_color: dict[str, dict] = {}
+                for eid, n in counts.items():
+                    level = assign_heat_level(
+                        n, getattr(st, "outage_heat_levels", []) or [])
+                    if level is None:
+                        continue
+                    edge = self.graph.edges.get(eid)
+                    if edge is None:
+                        continue
+                    a = self.graph.nodes.get(edge.a)
+                    bb = self.graph.nodes.get(edge.b)
+                    if a is None or bb is None:
+                        continue
+                    if a.coord is None or bb.coord is None:
+                        continue
+                    color = str(level.get("color") or "#c62828")
+                    seg_by_color.setdefault(color, []).append(
+                        (self._c(a.coord), self._c(bb.coord)))
+                    legend_by_color.setdefault(color, {
+                        "label": str(level.get("label") or ""),
+                        "count": 0})
+                    legend_by_color[color]["count"] += 1
+                self._heat_legend = []
+                for color, segments in seg_by_color.items():
+                    ax.add_collection(LineCollection(
+                        segments, colors=color,
+                        linewidths=float(getattr(st, "outage_heat_width", 2.4)),
+                        alpha=float(getattr(st, "outage_heat_alpha", 0.95)),
+                        zorder=5.5))
+                    self._drawn.add("outage_heat")
+                for color, meta in legend_by_color.items():
+                    self._heat_legend.append(
+                        (color, meta["label"], meta["count"]))
+
+            # برچسب‌ها یک‌بار به‌ازای هر مکان («نام (تعداد)») و پس از
+            # نهایی‌شدن محدودهٔ محورها رسم می‌شوند تا روی هم نیفتند.
+            if st.show_outage_labels and visible:
+                from ..application.outage_review import outage_label_groups
+
+                self._pending_outage_labels = outage_label_groups(visible)
+            else:
+                self._pending_outage_labels = []
+
+        # --- سکشنالایزرهای پیشنهادی موتور EENS -------------------------
+        if sectionalizer_nodes and st.show_opt_sectionalizers:
+            sx, sy = [], []
+            switch_types = set()
+            for item in sectionalizer_nodes:
+                try:
+                    if isinstance(item, dict):
+                        x, y = float(item["x"]), float(item["y"])
+                        switch_types.add(str(item.get("switch_type") or ""))
+                    else:
+                        nd = self.graph.nodes.get(item)
+                        if nd is None or nd.coord is None:
+                            continue
+                        x, y = map(float, nd.coord)
+                except (KeyError, TypeError, ValueError):
+                    continue
+                sx.append(x)
+                sy.append(y)
+            if sx:
+                self._drawn.add("opt_sectionalizer")
+                names = {"recloser": "recloser", "sectionalizer": "sectionalizer", "disconnector": "disconnector"}
+                labels = sorted({names.get(t, "switch") for t in switch_types} or {"switch"})
+                self._opt_switch_label = "Proposed " + "/".join(labels) + " (EENS)"
+                ax.scatter(sx, sy, s=st.opt_sec_size, marker=st.opt_sec_marker,
+                           facecolors="none", edgecolors=st.opt_sec_color,
+                           linewidths=1.6, zorder=13,
+                           label=self._opt_switch_label)
+
         if highlight_point is not None:
             hx, hy = map(float, highlight_point)
             self._drawn.add("coordinate")
-            ax.scatter([hx], [hy], s=150, marker="X", color="#ff00aa",
+            ax.scatter([hx], [hy], s=st.coordinate_size, marker=st.coordinate_marker, color=st.coordinate_color,
                        edgecolors="white", linewidths=1.2, zorder=20,
                        label="Entered UTM coordinate")
 
         ax.autoscale(enable=True)
         ax.set_aspect("equal")
         ax.set_axis_off()
+        if self._pending_outage_labels:
+            self._draw_outage_labels(ax, st)
+            self._pending_outage_labels = []
         ax.set_title(title or "SwitchLoc — Network Map", fontsize=12,
                      loc="left")
         if st.show_legend:
@@ -362,6 +544,145 @@ class NetworkMapRenderer:
                 leg.remove()
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _data_per_point(ax, fontsize: float = 5.0) -> float:
+        """اندازهٔ یک «نقطهٔ تایپوگرافی» بر حسب واحد دادهٔ محور.
+
+        نقشه با ``aspect='equal'`` رسم می‌شود؛ در این حالت مقیاس هر دو
+        محور یکی است و مقدار درست، بزرگ‌ترین نسبتِ «واحد داده به نقطه»
+        (یعنی محور محدودکننده) است — برآورد محافظه‌کارانه که برچسب‌ها را
+        کمی بزرگ‌تر از واقعیت می‌بیند و از هم‌پوشانی جلوگیری می‌کند.
+        """
+        try:
+            (x0, x1), (y0, y1) = ax.get_xlim(), ax.get_ylim()
+            pos = ax.get_position()
+            fig_w, fig_h = ax.figure.get_size_inches()
+        except Exception:                          # noqa: BLE001
+            return 1.0
+        scales = []
+        if x1 > x0 and pos.width > 0:
+            scales.append((x1 - x0) / max(pos.width * fig_w * 72.0, 1.0))
+        if y1 > y0 and pos.height > 0:
+            scales.append((y1 - y0) / max(pos.height * fig_h * 72.0, 1.0))
+        return max(scales) if scales else 1.0
+
+    @staticmethod
+    def _label_offset_pt(k: int, step_pt: float) -> float:
+        """فاصلهٔ عمودی k-اُم (نقطه) برای برچسب‌های هم‌مکان: 0, +s, −s, +2s…"""
+        if k <= 0:
+            return 0.0
+        sign = 1.0 if k % 2 == 1 else -1.0
+        return sign * step_pt * ((k + 1) // 2)
+
+    _LABEL_DIRECTIONS = (
+        (1.0, 0.0, "left", "center"),      # راست نقطه
+        (1.0, 1.0, "left", "center"),      # راست-بالا
+        (1.0, -1.0, "left", "center"),     # راست-پایین
+        (-1.0, 0.0, "right", "center"),    # چپ نقطه
+        (-1.0, 1.0, "right", "center"),
+        (-1.0, -1.0, "right", "center"),
+        (0.0, 1.4, "center", "bottom"),    # بالا
+        (0.0, -1.4, "center", "top"),      # پایین
+    )
+
+    def _draw_outage_labels(self, ax, st) -> None:
+        """برچسب خاموشی‌ها را **چسبیده به نقطهٔ خودشان** می‌چیند.
+
+        دو شکست قبلی و راه‌حل واحد:
+
+        * **روی‌هم‌افتادن** — نسخهٔ اول همهٔ برچسب‌ها را در یک ستون عمودی
+          می‌گذاشت؛ با چند نقطهٔ نزدیک، متن‌ها هم‌پوشان می‌شدند.
+        * **پراکندگی غیرواقعی** (تصویر ارسالی کاربر) — نسخهٔ دوم نردبان
+          عمودی بی‌کران (۲۴ پله) داشت و برچسب را صدها متر از نقطه دور
+          می‌کرد.
+
+        راه‌حل: برای هر برچسب فقط **۸ جهتِ چسبیده به نقطه** در
+        ``outage_label_max_levels`` حلقهٔ کوچک (پیش‌فرض ۳) آزمایش می‌شود؛
+        اولین جای بدون هم‌پوشانی انتخاب می‌شود، وگرنه کم‌ترین هم‌پوشانی.
+        هر جابه‌جایی (غیر از «راست نقطه») یک **خط راهنمای نازک** به نقطه
+        می‌گیرد تا انتساب برچسب به نقطه گم نشود. برچسب‌های پرتکرار اول
+        جای می‌گیرند.
+        """
+        groups = list(self._pending_outage_labels or [])
+        if not groups:
+            return
+        try:
+            fontsize = float(st.outage_label_size or 5.0)
+        except (TypeError, ValueError):
+            fontsize = 5.0
+        per_pt = self._data_per_point(ax, fontsize)
+        step_pt = max(fontsize * 1.35, 6.0)
+        base_pt = float(getattr(st, "outage_label_offset_pt", 4.0))
+        rings = max(0, int(getattr(st, "outage_label_max_levels", 3)))
+        show_leader = bool(getattr(st, "outage_label_leader", True))
+        try:
+            leader_alpha = min(0.85, float(st.outage_label_alpha
+                                           if st.outage_label_alpha is not None
+                                           else 1.0))
+        except (TypeError, ValueError):
+            leader_alpha = 0.85
+
+        groups = sorted(groups, key=lambda g: -int(g.get("count") or 0))
+        placed: list[tuple[float, float, float, float]] = []
+
+        def _overlaps(box) -> int:
+            return sum(1 for b in placed
+                       if box[0] < b[2] and box[2] > b[0] and
+                       box[1] < b[3] and box[3] > b[1])
+
+        for g in groups:
+            text = str(g.get("text") or "")
+            if not text:
+                continue
+            try:
+                gx, gy = float(g["x"]), float(g["y"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            count = int(g.get("count") or 0)
+            text_w = max(0.58 * fontsize * per_pt * len(text), per_pt * 2.0)
+            text_h = 1.45 * fontsize * per_pt
+            best = None            # (hits, dx_pt, dy_pt, ha, va, box)
+            for ring in range(rings + 1):
+                radius = base_pt + ring * step_pt
+                for ux, uy, ha, va in self._LABEL_DIRECTIONS:
+                    dx_pt, dy_pt = ux * radius, uy * radius
+                    # کادر برچسب حول نقطهٔ لنگر (با توجه به ha/va)
+                    left = gx + dx_pt * per_pt
+                    left -= (text_w if ha == "right" else
+                             0.0 if ha == "left" else text_w / 2.0)
+                    mid_y = gy + dy_pt * per_pt
+                    bottom = mid_y - (0.0 if va == "bottom" else
+                                      text_h if va == "top" else text_h / 2.0)
+                    box = (left, bottom, left + text_w, bottom + text_h)
+                    hits = _overlaps(box)
+                    if hits == 0:
+                        best = (0, dx_pt, dy_pt, ha, va, box)
+                        break
+                    if best is None or hits < best[0]:
+                        best = (hits, dx_pt, dy_pt, ha, va, box)
+                if best is not None and best[0] == 0:
+                    break
+            if best is None:
+                continue
+            _hits, dx_pt, dy_pt, ha, va, box = best
+            placed.append(box)
+            displaced = abs(dx_pt) > 0.1 or abs(dy_pt) > 0.1
+            arrow = None
+            if show_leader and displaced:
+                arrow = dict(arrowstyle="-", color=st.outage_label_color,
+                             lw=0.45, alpha=leader_alpha,
+                             shrinkA=0.5, shrinkB=3.0)
+            ax.annotate(
+                text, (gx, gy),
+                xytext=(dx_pt, dy_pt), textcoords="offset points",
+                fontsize=fontsize, color=st.outage_label_color,
+                alpha=st.outage_label_alpha, zorder=12,
+                ha=ha, va=va,
+                bbox=dict(boxstyle="round,pad=0.12", fc="white",
+                          ec="none", alpha=0.35 if count else 0.0),
+                arrowprops=arrow)
+
+    # ------------------------------------------------------------------
     def _c(self, coord):
         """Coordinate accessor — همه‌ی المان‌های ترسیم‌شده از اینجا رد
         می‌شوند. چرخش ۹۰° حذف شده است؛ مختصات پروژه عیناً استفاده
@@ -370,14 +691,20 @@ class NetworkMapRenderer:
 
     # ------------------------------------------------------------------
     def _edge_in_feeder(self, eid: str, feeder_key: str) -> bool:
+        from ..topology.tracing import same_feeder
         for t in self.traces:
-            if t.feeder_key == feeder_key and eid in t.edges:
+            if same_feeder(t.feeder_key, feeder_key) and eid in t.edges:
                 return True
         return False
 
     def _draw_devices(self, ax, feeder_filter,
                       hidden_switch_ids: set[str] | None = None) -> None:
         st = self.style
+        # فیوز کات‌اوت‌ها به‌صورت پیش‌فرض رسم نمی‌شوند (درخواست کاربر).
+        # اگر فراخوان فهرست صریح کلیدهای پنهان را بدهد (نقشهٔ تعاملی)،
+        # تصمیم او مقدم است و همین‌جا چیزی حذف نمی‌شود.
+        hide_fuses = (not getattr(st, "show_fuse_cutouts", False)
+                      and hidden_switch_ids is None)
         hidden_switch_ids = set(hidden_switch_ids or ())
         pts_src, pts_tf = [], []
         by_code: dict[tuple[str, bool], list[tuple[float, float]]] = {}
@@ -397,6 +724,8 @@ class NetworkMapRenderer:
                 if sw is None:
                     continue
                 code = switch_display_code(sw)
+                if hide_fuses and code == "FCT":
+                    continue
                 is_open = ((sw.normally_state or "").strip().upper() == "NO"
                            or sw.current_state == SwitchState.OUT_OF_SERVICE
                            or sid in self.tie_switch_ids)
@@ -409,13 +738,16 @@ class NetworkMapRenderer:
         for nid, nd in sorted(self.graph.nodes.items()):
             if nd.coord is None:
                 continue
+            if nd.kind == NodeKind.SOURCE:
+                # SOURCE objects remain distinct from attached trace junctions.
+                if _feeder_selected(getattr(nd, "feeder_hint", ""), feeder_filter):
+                    pts_src.append(self._c(nd.coord))
+                continue
             if feeder_filter is not None and not any(self._node_in_feeder(nid, fk) for fk in
                     (feeder_filter if isinstance(feeder_filter, (set, frozenset, list, tuple)) else [feeder_filter])):
                 continue
             c = self._c(nd.coord)
-            if nd.kind == NodeKind.SOURCE:
-                pts_src.append(c)
-            elif self.graph.transformer_ids_at.get(nid):
+            if self.graph.transformer_ids_at.get(nid):
                 pts_tf.append(c)
 
         terminal_x, terminal_y = [], []
@@ -433,6 +765,14 @@ class NetworkMapRenderer:
         for node, sids in self.graph.switch_ids_at.items():
             if not any(sid not in hidden_switch_ids for sid in sids):
                 continue
+            if hide_fuses:
+                # اگر تنها تجهیز این گره فیوز است و فیوزها پنهان‌اند،
+                # نشانگر عمومی ترمینال ترانس هم نباید رسم شود.
+                visible = [self.switches.get(sid) for sid in sids
+                           if sid not in hidden_switch_ids]
+                if visible and all(sw is not None and switch_display_code(sw) == "FCT"
+                                   for sw in visible):
+                    continue
             if not self.graph.transformer_ids_at.get(node):
                 continue
             gn = self.graph.nodes.get(node)
@@ -468,10 +808,9 @@ class NetworkMapRenderer:
                        label="MV/LV transformer")
 
     def _node_in_feeder(self, node: str, feeder_key: str) -> bool:
-        for t in self.traces:
-            if t.feeder_key == feeder_key and node in t.nodes:
-                return True
-        return False
+        from ..topology.tracing import same_feeder
+        return any(same_feeder(t.feeder_key, feeder_key) and node in t.nodes
+                   for t in self.traces)
 
     def _legend_handles(self, palette: dict[str, str],
                         feeder_filter,
@@ -532,8 +871,33 @@ class NetworkMapRenderer:
                                   markerfacecolor="none", linestyle="None",
                                   markersize=8,
                                   label="Transformer-terminal device (not a feeder zone cut)"))
+        if "outage" in drawn:
+            handles.append(Line2D([], [], color=st.outage_confirmed_color,
+                                  marker=st.outage_marker, linestyle="None",
+                                  markersize=8, label="Outage — تأیید مهندسی"))
+            handles.append(Line2D([], [], color=st.outage_pending_color,
+                                  marker=st.outage_marker, linestyle="None",
+                                  markersize=8, label="Outage — در انتظار بررسی"))
+            handles.append(Line2D([], [], color=st.outage_rejected_color,
+                                  marker=st.outage_marker, linestyle="None",
+                                  markersize=8, label="Outage — رد رخداد"))
+        if "outage_link" in drawn:
+            handles.append(Line2D([], [], color=st.outage_link_color,
+                                  lw=max(1.0, st.outage_link_width),
+                                  linestyle="dashed",
+                                  label="Outage → affected zone"))
+        for color, label, n_edges in (getattr(self, "_heat_legend", []) or []):
+            handles.append(Line2D([], [], color=color,
+                                  lw=max(1.5, st.outage_heat_width),
+                                  label=f"Outage density — {label} "
+                                        f"({n_edges} segments)"))
+        if "opt_sectionalizer" in drawn:
+            handles.append(Line2D([], [], color=st.opt_sec_color,
+                                  marker=st.opt_sec_marker, linestyle="None",
+                                  markersize=9, markerfacecolor="none",
+                                  label=getattr(self, "_opt_switch_label", "Proposed switch (EENS)")))
         if "coordinate" in drawn:
-            handles.append(Line2D([], [], color="#ff00aa", marker="X",
+            handles.append(Line2D([], [], color=st.coordinate_color, marker=st.coordinate_marker,
                                   linestyle="None", markersize=9,
                                   label="Entered UTM coordinate"))
         if manual:

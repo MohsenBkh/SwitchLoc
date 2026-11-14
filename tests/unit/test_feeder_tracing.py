@@ -35,7 +35,7 @@ def test_single_feeder_traces_whole_line():
     traces = eng.trace_all(IssueLog())
     assert len(traces) == 1
     tr = traces[0]
-    assert tr.feeder_key == "F1"
+    assert tr.feeder_key == "F1 - KHALKHAL"
     assert len(tr.edges) == 1
     assert len(tr.transformer_ids) == 1
     assert abs(tr.length_m - 100.0) < 1e-6
@@ -115,6 +115,7 @@ def test_fallback_seeds_from_breakers():
     issues = IssueLog()
     traces = TracingEngine(_graph(b), b.net,
                            TracingPolicy()).trace_all(issues)
+    # این سناریو نام خام «F1» دارد (بدون پسوند) → شناسه همان «F1» است
     assert traces and traces[0].feeder_key == "F1"
     assert issues.by_code("TOPO-FALLBACK-SEEDS")
 

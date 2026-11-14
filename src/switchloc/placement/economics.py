@@ -6,7 +6,10 @@ Energy model (level-1, رابطه ۸ algebra + the transfer extension of
 (subtree of the radial segment tree, i included) — upstream segments
 are restored by reclosing and never appear in the outage terms, exactly
 the ``U1(P1+P2+P3)`` pattern of رابطه ۸.  An automation tie at segment
-k back-feeds the subtree behind k within the backup feeder's spare
+k back-feeds the whole branch of the faulted subtree in which k sits —
+the child of the faulted segment containing k, i.e. everything between
+the isolation boundary of the faulted segment and the tie, plus every
+branch hanging off that path — within the backup feeder's spare
 capacity; restored zones only suffer the switching time ``s`` while
 non-transferable ones stay out for the repair time ``r``::
 
@@ -27,6 +30,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from ..level1.formulas import DEFAULT_RIAL_PER_KWH, ce_cn
+from ..level1.transfer import cut_node_links, islands_with_ties
 from ..topology.graph import NetworkGraph
 from ..topology.tracing import FeederTrace
 from .golden import _Tree
@@ -152,12 +156,19 @@ def ens_of_configuration(segs: SegTree, lam_per_year: float,
                          r_minutes: float, switching_minutes: float,
                          transfer_cap_by_seg: dict[str, float],
                          total_length_m: float | None = None,
+                         barrier_nodes: set[str] | None = None,
                          ) -> tuple[float, list[dict]]:
     """ENS [kWh/yr] of the feeder for one (cuts, ties) configuration.
 
-    ``transfer_cap_by_seg``: segment id → kW restorable BEHIND that
-    segment through an automation tie (inf when the backup capacity is
-    unknown — flagged by the caller).  Returns (ens, per-fault rows).
+    ``transfer_cap_by_seg``: segment id → kW restorable downstream of
+    that segment through an automation tie (inf when the backup
+    capacity is explicitly declared unlimited — flagged by the
+    caller).  For a fault in segment i the remaining segments form
+    islands (connected components through cut nodes that can conduct);
+    each island is restored up to min(island load, Σ Tie capacities in
+    that island).  Returns (ens, per-fault rows).  ``barrier_nodes``
+    are cut nodes at which no device can conduct (manual NO/out-of-
+    service only) and never link islands.  See ``level1/transfer.py``.
     """
     Ltot = total_length_m if total_length_m else sum(segs.seg_len.values())
     if Ltot <= 0:
@@ -169,21 +180,12 @@ def ens_of_configuration(segs: SegTree, lam_per_year: float,
         if lam_i <= 0:
             continue
         outage = _subtree_load(segs, sid)
-        restored, restored_set = 0.0, set()
-        for k in sorted(_subtree_segs(segs, sid),
-                        key=lambda s: -_depth(segs, s)):
-            cap = transfer_cap_by_seg.get(k, 0.0)
-            if cap <= 0 or k == sid:
-                continue                 # faulted segment stays isolated
-            behind_zones = [s for s in _subtree_segs(segs, k)
-                            if s not in restored_set]
-            behind = sum(segs.seg_load[s] for s in behind_zones)
-            take = behind if cap == float("inf") else min(behind, cap)
-            take = max(0.0, min(take, outage - restored))
-            if take <= 0:
-                continue
-            restored += take
-            restored_set.update(behind_zones)
+        members = [s for s in _subtree_segs(segs, sid) if s != sid]
+        member_load = {s: segs.seg_load.get(s, 0.0) for s in members}
+        tie_caps = {s: transfer_cap_by_seg.get(s, 0.0) for s in members}
+        links = cut_node_links(segs.node_seg, segs.node_seg_below,
+                               barrier_nodes)
+        restored = islands_with_ties(members, member_load, tie_caps, links)
         shed = outage - restored
         e_i = lam_i / 60.0 * (r_minutes * shed + switching_minutes * restored)
         ens += e_i
@@ -206,13 +208,6 @@ def _subtree_segs(segs: SegTree, sid: str) -> list[str]:
 def _subtree_load(segs: SegTree, sid: str) -> float:
     return sum(segs.seg_load[s] for s in _subtree_segs(segs, sid))
 
-
-def _depth(segs: SegTree, sid: str) -> int:
-    d = 0
-    while segs.parent.get(sid) is not None:
-        sid = segs.parent[sid]
-        d += 1
-    return d
 
 
 def existing_cut_nodes(zone_list) -> set[str]:

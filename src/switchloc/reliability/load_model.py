@@ -59,7 +59,7 @@ LEVEL_FA = {
 }
 
 #: پیش‌فرض ضریب بارگذاری (سیاست شرکت — قابل تنظیم و ثبت در settings_log)
-DEFAULT_LOADING_FACTOR = 0.7
+DEFAULT_LOADING_FACTOR = 1.0
 #: پیش‌فرض ضریب جایگزین (رفتار قبلی نرم‌افزار: kVA ≈ kW)
 DEFAULT_SUBSTITUTE_FACTOR = 1.0
 
@@ -138,9 +138,14 @@ class LoadModelResult:
 
 
 def feeder_key_of(name: str) -> str:
-    """کلید کوتاه فیدر (نظیر ردیابی) برای گروه‌بندی ترانس‌ها."""
-    from ..topology.tracing import feeder_key as fk
-    return fk(name)
+    """شناسهٔ فیدر (نام کامل نرمال‌شده) — همان شناسهٔ ردیابی و فهرست فیدرها.
+
+    قبلاً توکن کوتاه («F2») برگردانده می‌شد و دو فیدر هم‌شمارهٔ
+    «F2 - MESHKIN» و «F2 - HADIDMOBTAKERAN» کلید یکسانی می‌گرفتند؛ بار و
+    طرح مقیاسشان روی هم می‌افتاد.
+    """
+    from ..topology.tracing import feeder_id
+    return feeder_id(name)
 
 
 def scaling_plan(net: CanonicalNetwork,
@@ -165,11 +170,25 @@ def scaling_plan(net: CanonicalNetwork,
             lst.append(float(t.capacity_kva))
         else:
             n_no_cap[k] = n_no_cap.get(k, 0) + 1
+    from ..topology.tracing import feeder_id as _fid
+    # کلیدهای ورودی کاربر ممکن است نگارش کوتاه («F3») باشند؛ به شناسهٔ
+    # فیدر نگاشت می‌شوند تا بارِ ثبت‌شده بی‌صدا گم نشود (بدون ادغام در ابهام).
+    pq_by_id: dict = {}
+    for raw_key, value in dict(feeder_pq or {}).items():
+        key_id = _fid(raw_key) or str(raw_key).strip().upper()
+        cands = [k for k in caps_by_feeder if k == key_id]
+        if not cands:
+            from ..topology.tracing import same_feeder
+            hits = [k for k in caps_by_feeder if same_feeder(k, key_id)]
+            if len(hits) == 1:
+                key_id = hits[0]
+        pq_by_id[key_id] = value
+
     plan: dict = {}
     warnings: list = []
-    keys = set(caps_by_feeder) | set(dict(feeder_pq or {}))
+    keys = set(caps_by_feeder) | set(pq_by_id)
     for k in sorted(keys):
-        pq = dict(feeder_pq or {}).get(k) or {}
+        pq = dict(pq_by_id.get(k) or {})
         p = float(pq.get("p_kw", 0.0) or 0.0)
         q = float(pq.get("q_kvar", 0.0) or 0.0)
         s_rated = sum(caps_by_feeder.get(k, []))
@@ -181,7 +200,7 @@ def scaling_plan(net: CanonicalNetwork,
                    "sum_s_rated_kva": round(s_rated, 1),
                    "n_transformers": len(caps_by_feeder.get(k, [])),
                    "n_no_capacity": n_no_cap.get(k, 0)}
-        if k not in (feeder_pq or {}):
+        if k not in pq_by_id:
             warnings.append((
                 "LOAD-SCALING-FEEDER-NO-INPUT",
                 f"فیدر {k} در روش Load Scaling ورودی P/Q ندارد — بار تمام "
@@ -264,10 +283,27 @@ def build_node_loads(graph: NetworkGraph, net: CanonicalNetwork,
                                                            for ld in lds)))
         net_nodes = getattr(net, "nodes", None) or []
         feeder_of_node = {n.id: n.feeder_name for n in net_nodes}
+        # یک مبنای واحد برای «بار هر فیدر» (نیاز ۱۱): بار منتسب به ترانس‌ها
+        # را بر اساس کلید فیدرِ خود ترانس (همان مبنای scaling) جمع می‌زنیم —
+        # نه بر اساس برچسب فیدرِ گره (که در اغلب GISها خالی است و جدول را
+        # با اعداد بی‌معنی پر می‌کرد).
+        assigned_by_feeder: dict[str, float] = {}
+        for tid, kw in res.transformer_kw_by_id.items():
+            if not kw:
+                continue
+            t = transformer_by_id.get(str(tid)) or transformer_by_id.get(tid)
+            fk = feeder_key_of(t.feeder_name) if t is not None else ""
+            fk = fk or "(بدون برچسب)"
+            assigned_by_feeder[fk] = assigned_by_feeder.get(fk, 0.0) + kw
+        res.per_feeder_kw = {k: round(v, 4)
+                             for k, v in sorted(assigned_by_feeder.items())
+                             if v > 0.0}
+        # بارهای واقعی بدون ترانس — سطل برچسب گره (منشأ متفاوت، همان‌قدر صریح)
         for node, kw in res.node_kw.items():
-            if kw:
-                key = feeder_of_node.get(node, "(بدون فیدر)")
-                res.per_feeder_kw[key] = res.per_feeder_kw.get(key, 0.0) + kw
+            if kw and node not in graph.transformer_ids_at:
+                key = feeder_of_node.get(node, "") or "(بدون برچسب)"
+                res.per_feeder_kw[key] = round(
+                    res.per_feeder_kw.get(key, 0.0) + kw, 4)
         fed_with_input = sum(1 for v in plan.values()
                              if v["p_kw"] or v["q_kvar"])
         input_kw = sum(v["p_kw"] for v in plan.values())
@@ -294,9 +330,14 @@ def build_node_loads(graph: NetworkGraph, net: CanonicalNetwork,
             "reconciled": abs(input_kw - assigned_transformer_kw
                                - unassigned_transformer_kw) <= max(0.5, input_kw * 1e-6),
         }
+        real_feeder_keys = {k for k in plan if k != "(بدون برچسب)"}
         res.coverage = {"nodes_total": len(graph.transformer_ids_at),
-                        "feeders_total": len(plan),
+                        "feeders_total": len(real_feeder_keys),
                         "feeders_with_input": fed_with_input,
+                        "no_capacity_transformers": sum(
+                            v.get("n_no_capacity", 0)
+                            for v in plan.values()),
+                        "unlabeled_plan_bucket": "(بدون برچسب)" in plan,
                         "sum_p_kw": round(input_kw, 1),
                         "transformers_assigned_to_graph": len(
                             graph_transformer_ids & set(transformer_by_id)),

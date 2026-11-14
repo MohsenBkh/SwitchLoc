@@ -135,6 +135,10 @@ class NetworkGraph:
         self.transformer_ids_at: dict[str, list[str]] = defaultdict(list)
         self.load_ids_at: dict[str, list[str]] = defaultdict(list)
         self.source_of: dict[str, str] = {}      # attached node → feeder name
+        #: گره اتصال → همهٔ فیدرهایی که منبعشان به آن رسیده است. یک شینهٔ
+        #: پست می‌تواند سرچند فیدر باشد؛ با نقشهٔ یک‌به‌یک، فیدرهای بعدی
+        #: بی‌صدا روی قبلی نوشته می‌شدند و از فهرست/توپولوژی می‌افتادند.
+        self.sources_at: dict[str, list[str]] = {}
         self.source_attach: dict[str, tuple] = {}  # src node → (junction, dist_m)
         self.stats: dict = {}
 
@@ -276,7 +280,23 @@ class NetworkGraph:
                     meta={"node_id": nd.id}))
                 continue
             junction, dist = hit
-            g.source_of[junction] = nd.feeder_name
+            g.source_of.setdefault(junction, nd.feeder_name)
+            names = g.sources_at.setdefault(junction, [])
+            if nd.feeder_name and nd.feeder_name not in names:
+                names.append(nd.feeder_name)
+                if len(names) > 1:
+                    issues.add(ValidationIssue(
+                        code="TOPO-SOURCE-SHARED", severity=SEVERITY_INFO,
+                        message_fa=f"{len(names)} فیدر منبع خود را روی یک گره "
+                                   "مشترک (شینهٔ پست) دارند: "
+                                   + "، ".join(names),
+                        layer="", record_id="", current_value="، ".join(names),
+                        suggestion_fa="اگر شینه‌ها در GIS تفکیک نشده‌اند، "
+                                      "همین وضعیت واقعی است؛ ردیابی هر فیدر "
+                                      "با دروازهٔ برچسب جدا می‌شود.",
+                        impact_fa="هر فیدر از همان گره جداگانه ردیابی می‌شود؛ "
+                                  "هیچ فیدری حذف نمی‌شود.",
+                        meta={"junction": junction, "feeders": list(names)}))
             g.source_attach[nd.id] = (junction, dist)
             if dist > 1e-6:
                 issues.add(ValidationIssue(
@@ -301,7 +321,8 @@ class NetworkGraph:
             "switches_attached": sum(len(v) for v in g.switch_ids_at.values()),
             "transformers_attached": sum(len(v) for v in g.transformer_ids_at.values()),
             "loads_attached": sum(len(v) for v in g.load_ids_at.values()),
-            "sources": len(g.source_of),
+            "sources": sum(len(v) for v in g.sources_at.values()),
+            "source_junctions": len(g.sources_at),
             "isolated_device_nodes": orphan_devices,
         }
         return g

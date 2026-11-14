@@ -192,6 +192,77 @@ def _cmd_placement(args) -> int:
     return 0 if res.verdict == "PASS" else 1
 
 
+def _cmd_sectionalizer(args) -> int:
+    """روش جایابی بهینهٔ کلید و کاهش EENS (ریکلوزر/سکشنالایزر/سکسیونر)."""
+    from switchloc.application.switch_placement_service import (
+        SwitchPlacementAppSettings, SwitchPlacementService)
+    from switchloc.reliability.switch_placement import SwitchPlacementSettings
+
+    # روش: --method مقدم است؛ --model فقط نام قدیمی همین گزینه است
+    method = str(getattr(args, "method", "") or "")
+    legacy_model = str(getattr(args, "model", "") or "")
+    if legacy_model and method in ("", "uniform"):
+        method = legacy_model
+    method = method or "uniform"
+    if method not in ("directional", "uniform", "manual"):
+        print(f"ERROR: روش نامعتبر: {method}")
+        return 2
+
+    # منبع λ: روش دستی ⇔ مقدار ورودی کاربر، روش‌های واقعی ⇔ ماتریس خاموشی
+    source = getattr(args, "lambda_source", None)
+    if source is None:
+        source = "configured" if method == "manual" else "outage"
+
+    engine = SwitchPlacementSettings(
+        switch_type=str(getattr(args, "switch_type", "sectionalizer")),
+        total_failure_rate_per_year=args.failure_rate,
+        repair_time_min=args.repair,
+        restoration_time_min=args.restoration,
+        manual_restoration_time_min=float(
+            getattr(args, "manual_restoration", 30.0)),
+        max_sectionalizers=args.max,
+        min_candidate_depth=args.min_depth,
+        max_downstream_load_ratio=args.max_ratio,
+        restoration_model=("directional" if method == "directional"
+                           else "uniform"),
+        use_existing_switches=not args.ignore_existing_switches,
+    )
+    rates = {}
+    for part in (args.lambda_override or "").split(","):
+        key, _, val = part.partition("=")
+        if key.strip() and val.strip():
+            rates[key.strip()] = float(val)
+    feeders = tuple(f.strip() for f in (args.feeders or "").split(",")
+                    if f.strip())
+    backup = float(getattr(args, "backup", 0.0) or 0.0)
+    backup_map = {k: backup for k in feeders} if backup > 0 else {}
+    svc = SwitchPlacementService(SwitchPlacementAppSettings(
+        user=args.user, persist=not args.no_persist, engine=engine,
+        method=method, failure_rate_source=source, failure_rates=rates,
+        backup_kw=backup_map,
+        feeder_keys=feeders, report_dir=args.report_dir))
+    try:
+        res = svc.run(args.db)
+    except Exception as exc:                            # noqa: BLE001
+        print(f"ERROR: {exc}")
+        return 2
+    for w in res.warnings:
+        print(f"WARNING: {w}")
+    print(res.markdown)
+    for f in res.study.feeders:
+        if not f.best or not f.best.selected:
+            continue
+        print(f"— {f.feeder_key}: نصب {len(f.best.selected)} کلید")
+        for c in f.best.selected:
+            print(f"    {c.label} | عمق {c.depth} | بار پایین‌دست "
+                  f"{c.downstream_load_kw:,.1f} kW "
+                  f"({c.downstream_ratio * 100:.1f}%) | "
+                  f"km {c.downstream_length_m / 1000.0:.2f} | zone {c.zone_id[:8]}")
+    if res.report_md:
+        print(f"\nreport → {res.report_md}")
+    return 0
+
+
 def _cmd_outages(args) -> int:
     """Phase 3 — outage ingestion/classification + λ/r matrix (step 2 / fig. 5)."""
     res = OutageService(OutageSettings(user=args.user)).run(
@@ -209,6 +280,132 @@ def _cmd_outages(args) -> int:
     if args.report_dir:
         print(f"\nreport → {args.report_dir}/phase3_outage_report.md")
     return 0 if res.verdict == "PASS" else 1
+
+
+def _cmd_places(args) -> int:
+    """پرس‌وجو/آمار بانک آفلاین مکان‌ها (غنی‌سازی نسخهٔ ۱.۱۳)."""
+    import json
+
+    from .application.outage_review import default_gazetteer_path
+    from .geography.places import PlaceGazetteer
+
+    path = args.db or default_gazetteer_path()
+    if not path:
+        print("ERROR: بانک آفلاین مکان‌ها پیدا نشد "
+              "(متغیر SWITCHLOC_GAZETTEER را تنظیم کنید).")
+        return 2
+    bank = PlaceGazetteer(path)
+    if args.stats or not args.query:
+        print(json.dumps(bank.stats(), ensure_ascii=False, indent=2))
+        print(f"file: {path}")
+        if not args.query:
+            return 0
+    for text in args.query:
+        print(f"\n— «{text}» —")
+        matches = bank.search(text, limit=max(1, args.limit))
+        if not matches:
+            print("   (هیچ مکانی پیدا نشد)")
+            continue
+        for m in matches:
+            p_ = m.place
+            extra = f" · {p_.county}" if p_.county else ""
+            print(f"   {p_.name:<22} {p_.place_type:<7} {m.confidence:<5} "
+                  f"{m.score:.2f}  {p_.lat:.4f},{p_.lon:.4f}{extra}")
+    return 0
+
+
+def _cmd_outage_ranking(args) -> int:
+    """جدول رتبه‌بندی مکان‌های خاموشی (درخواست کاربر — بند ۷).
+
+    رخدادهای دارای مختصات (از بازبینی ذخیره‌شده در همان دیتابیس پروژه) را
+    بر اساس تعداد تکرار خاموشی گروه‌بندی و رتبه‌بندی می‌کند. هیچ محاسبهٔ
+    شبکه‌ای انجام نمی‌شود؛ فقط دادهٔ موجود خوانده و مرتب می‌شود.
+    """
+    from .application.outage_review import (OutageReviewStore,
+                                            PlaceGazetteer,
+                                            default_gazetteer_path,
+                                            outage_map_points,
+                                            outage_place_ranking,
+                                            suggest_event_places)
+    from .gis.crs import transform_wgs84_to_project
+
+    store = ProjectStore(args.db)
+    try:
+        data = store.load_outages(getattr(args, "outage_run", None))
+    except ValueError as exc:
+        print(f"خطا: {exc}")
+        store.close()
+        return 1
+    records = data.get("events") or []
+    saved = OutageReviewStore(args.db).load()
+
+    # CRS پروژه از شبکهٔ ذخیره‌شده خوانده می‌شود (هیچ مقدار پیش‌فرض ثابتی)
+    crs = None
+    runs = store.runs()
+    if runs:
+        try:
+            net, _ = store.load_network(runs[-1]["id"])
+            for cd in (getattr(net, "crs_definitions", None) or []):
+                epsg = getattr(cd, "epsg", None)
+                if epsg:
+                    crs = f"EPSG:{int(epsg)}"
+                    break
+        except Exception as exc:                   # noqa: BLE001
+            print(f"هشدار: CRS پروژه خوانده نشد ({exc}).")
+
+    transform = None
+    if crs:
+        transform = lambda lat, lon: transform_wgs84_to_project(lat, lon, crs)
+
+    suggestions = {}
+    gaz_path = default_gazetteer_path()
+    if gaz_path:
+        try:
+            suggestions = {s.event_id: s for s in suggest_event_places(
+                records, PlaceGazetteer(gaz_path))}
+        except Exception as exc:                   # noqa: BLE001
+            print(f"هشدار: بانک مکان‌ها خوانده نشد ({exc}).")
+    else:
+        print("هشدار: بانک آفلاین مکان‌ها یافت نشد؛ فقط مختصات ثبت‌شده "
+              "در بازبینی استفاده می‌شود.")
+
+    points = outage_map_points(records, saved=saved,
+                               suggestions=suggestions, transform=transform)
+    all_rows = outage_place_ranking(points)
+    rows = all_rows[:args.limit] if args.limit and args.limit > 0 else all_rows
+    if not rows:
+        print("هیچ خاموشی دارای مختصات در این پروژه ثبت نشده است.")
+        print("ابتدا در تب نقشه، محل رخدادها را بازبینی/ثبت کنید.")
+        store.close()
+        return 1
+
+    total = sum(r["count"] for r in all_rows)
+    print(f"— رتبه‌بندی مکان‌های خاموشی — {len(all_rows)} مکان، "
+          f"{total} رخداد دارای مختصات، {len(points)} نقطه —")
+    if len(rows) < len(all_rows):
+        print(f"   (نمایش {len(rows)} مکان اول)")
+    print()
+    print("| رتبه | مکان | فیدر | تعداد | سهم (٪) | تأیید | در انتظار | رد |")
+    print("|---:|---|---|---:|---:|---:|---:|---:|")
+    for r in rows:
+        print(f"| {r['rank']} | {r['place']} | {r['feeder'] or '—'} | "
+              f"{r['count']} | {r['share_percent']:.2f} | {r['confirmed']} | "
+              f"{r['pending']} | {r['rejected']} |")
+
+    if args.csv:
+        import csv as _csv
+        with open(args.csv, "w", encoding="utf-8-sig", newline="") as fh:
+            wr = _csv.writer(fh)
+            wr.writerow(["rank", "place", "feeder", "count", "share_percent",
+                         "confirmed", "pending", "rejected", "zone_id", "x", "y"])
+            for r in rows:
+                wr.writerow([r["rank"], r["place"], r["feeder"], r["count"],
+                             f"{r['share_percent']:.4f}", r["confirmed"],
+                             r["pending"], r["rejected"], r["zone_id"] or "",
+                             f"{r['x']:.2f}", f"{r['y']:.2f}"])
+        print(f"\nCSV → {args.csv}")
+    store.close()
+    return 0
 
 
 def main(argv=None) -> int:
@@ -249,6 +446,54 @@ def main(argv=None) -> int:
                     help="Fuse cut-outs also bound zones (TOPO-POL-03)")
     pt.set_defaults(func=_cmd_topology)
 
+    psec = sub.add_parser(
+        "sectionalizer",
+        aliases=["switches"],
+        prog="switchloc switches",
+        help="روش جایابی بهینهٔ کلید (ریکلوزر/سکشنالایزر/سکسیونر) و کاهش EENS")
+    psec.add_argument("db", help="SQLite project (import output)")
+    psec.add_argument("--user", default="cli-user")
+    psec.add_argument("--max", type=int, default=3,
+                      help="حداکثر کلید پیشنهادی هر فیدر (پیش‌فرض ۳)")
+    psec.add_argument("--failure-rate", type=float, default=30.0,
+                      help="λ پیش‌فرض هر فیدر (خرابی/سال، پیش‌فرض ۳۰)")
+    psec.add_argument("--lambda-source", default=None,
+                      choices=("outage", "configured"),
+                      help="منبع λ: ماتریس λ/r واقعی خاموشی یا مقدار "
+                           "پیش‌فرض (پیش‌فرض: خودکار از روش — روش دستی → "
+                           "configured، روش‌های واقعی → outage)")
+    psec.add_argument("--lambda-override",
+                      help="λ صریح هر فیدر، مثال: 'F3=27,F5=57.3'")
+    psec.add_argument("--repair", type=float, default=50.0,
+                      help="زمان تعمیر قطعهٔ معیوب (دقیقه)")
+    psec.add_argument("--restoration", type=float, default=20.0,
+                      help="زمان بازیابی بار سالم (دقیقه)")
+    psec.add_argument("--min-depth", type=int, default=3,
+                      help="کمترین عمق کاندید از سر فیدر")
+    psec.add_argument("--max-ratio", type=float, default=0.80,
+                      help="سقف سهم بار پایین‌دست کاندید")
+    psec.add_argument("--switch-type", default="sectionalizer",
+                      choices=("recloser", "sectionalizer", "disconnector"),
+                      help="نوع کلید مورد جایابی")
+    psec.add_argument("--method", default="uniform",
+                      choices=("directional", "uniform", "manual"),
+                      help="روش EENS: دایرکشنال/یکنواخت (λ و r واقعی) یا دستی")
+    psec.add_argument("--backup", type=float, default=0.0,
+                      help="ظرفیت پشتیبان هر فیدر (kW)؛ ۰ = نامحدود")
+    psec.add_argument("--manual-restoration", type=float, default=30.0,
+                      help="زمان بازیابی دستی برای سکسیونر (دقیقه)")
+    psec.add_argument("--model", default=None,
+                      choices=("uniform", "directional"),
+                      help="(منسوخ) هم‌ارز --method؛ اگر --method داده نشود "
+                           "از همین مقدار استفاده می‌شود")
+    psec.add_argument("--feeders", help="فیدرهای مطالعه، مثال: 'F3,F5'")
+    psec.add_argument("--ignore-existing-switches", action="store_true",
+                      help="کلیدهای موجود در حالت پایه لحاظ نشوند")
+    psec.add_argument("--report-dir", help="نوشتن گزارش MD/JSON در این پوشه")
+    psec.add_argument("--no-persist", action="store_true",
+                      help="نتیجه در پروژه ذخیره نشود")
+    psec.set_defaults(func=_cmd_sectionalizer)
+
     po = sub.add_parser("outages",
                         help="Phase 3 — outage ingestion / classification + λ/r matrix")
     po.add_argument("workbook", help="Excel workbook with the outage list (1405 list)")
@@ -257,6 +502,26 @@ def main(argv=None) -> int:
     po.add_argument("--out-db", help="Persist records and the λ/r matrix into this SQLite")
     po.add_argument("--report-dir", help="Write the MD/JSON report into this folder")
     po.set_defaults(func=_cmd_outages)
+
+    ppl = sub.add_parser(
+        "places", aliases=["place"],
+        help="جست‌وجو و آمار بانک آفلاین مکان‌های اردبیل (بدون شبکه)")
+    ppl.add_argument("query", nargs="*", help="متن نام مکان (چند مورد مجاز است)")
+    ppl.add_argument("--db", help="مسیر فایل بانک مکان (پیش‌فرض: بانک همراه برنامه)")
+    ppl.add_argument("--limit", type=int, default=5)
+    ppl.add_argument("--stats", action="store_true",
+                     help="نمایش آمار بانک (تعداد بر نوع/منبع/شهرستان)")
+    ppl.set_defaults(func=_cmd_places)
+
+    por = sub.add_parser(
+        "outage-ranking", aliases=["outage-rank"],
+        help="جدول رتبه‌بندی مکان‌های خاموشی (تعداد تکرار) از پروژه")
+    por.add_argument("db", help="SQLite project that holds the outage run")
+    por.add_argument("--outage-run", help="شناسهٔ اجرای خاموشی (پیش‌فرض: آخرین)")
+    por.add_argument("--limit", type=int, default=0,
+                     help="فقط N مکان اول (۰ = همه)")
+    por.add_argument("--csv", help="ذخیرهٔ جدول در این فایل CSV")
+    por.set_defaults(func=_cmd_outage_ranking)
 
     pp = sub.add_parser("placement",
                         help="Phase 4 — n-1 (tables 13-15), ranking "

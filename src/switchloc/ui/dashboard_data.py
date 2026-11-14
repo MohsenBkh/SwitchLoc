@@ -14,7 +14,7 @@ receives (same split as map_canvas.py).
 from __future__ import annotations
 
 from ..domain.entities import CanonicalNetwork
-from ..topology.tracing import feeder_key as _feeder_key
+from ..topology.tracing import feeder_id as _feeder_key
 
 
 def gis_transformer_map(net: CanonicalNetwork | None) -> dict:
@@ -271,6 +271,28 @@ def _index_by(rows: list[dict], key: str = "feeder_key") -> dict:
     return {r.get(key): r for r in rows if r.get(key)}
 
 
+def _same(name, other) -> bool:
+    """همان‌دانستن نگارش کوتاه/آراستهٔ فیدر («F3» با «F3 - KOSAR»)."""
+    from ..topology.tracing import same_feeder
+    return same_feeder(name, other)
+
+
+def _in_scope(name, selected) -> bool:
+    """آیا فیدر (با هر نگارشی) در دامنهٔ انتخابی است؟ ``None`` = همه."""
+    if selected is None:
+        return True
+    return any(_same(name, s) for s in selected)
+
+
+def _pick(index: dict, key: str) -> dict:
+    """ردیف متناظر با شناسهٔ فیدر؛ در نبود تطبیق دقیق، تطبیق یکتای
+    «کوتاه/آراسته» و وگرنه دیکشنری خالی."""
+    if key in index:
+        return index[key]
+    hits = [k for k in index if k and _same(k, key)]
+    return index[hits[0]] if len(hits) == 1 else {}
+
+
 def summarize_outage(outage, feeder_keys=None) -> dict:
     """Outage block of the dashboard (records, classes, years, λ/r).
 
@@ -285,7 +307,12 @@ def summarize_outage(outage, feeder_keys=None) -> dict:
     if selected is not None:
         rows = [r for r in rows if r.get("feeder_key") in selected]
     if outage is None:
-        return {"available": False, "lambda_r": []}
+        return {"available": False, "lambda_r": [], "service_indices": None}
+    if isinstance(outage, dict):
+        persisted_indices = (outage.get("summary") or {}).get("service_indices")
+    else:
+        idx = getattr(outage, "indices", None)
+        persisted_indices = idx.as_dict() if idx is not None else None
     if isinstance(outage, dict):                 # persisted-store payload
         summary = outage.get("summary") or {}
         records = outage.get("records") or []
@@ -316,6 +343,7 @@ def summarize_outage(outage, feeder_keys=None) -> dict:
             "class_summary": classes if scoped_records_known else {},
             "years": years if scoped_records_known else [],
             "lambda_r": rows,
+            "service_indices": persisted_indices,
         }
     # OutageResult object
     records = list(getattr(outage, "records", []) or [])
@@ -336,13 +364,35 @@ def summarize_outage(outage, feeder_keys=None) -> dict:
                           (getattr(outage, "levels", {}).get("class_summary", {}) or classes)),
         "years": sorted({r.year for r in records if getattr(r, "year", None)}),
         "lambda_r": rows,
+        "service_indices": persisted_indices,
     }
+
+
+def _indices_map(outage) -> dict:
+    """شاخص‌های پیوستگی هر فیدر (SAIDI/SAIFI/…) از OutageResult یا payload."""
+    payload = None
+    if isinstance(outage, dict):
+        payload = (outage.get("summary") or {}).get("service_indices") \
+            or outage.get("service_indices")
+    else:
+        idx = getattr(outage, "indices", None)
+        if idx is not None:
+            payload = idx.as_dict() if hasattr(idx, "as_dict") else None
+    if not payload:
+        return {}
+    out = {}
+    for row in payload.get("feeders") or []:
+        key = str(row.get("feeder_key") or "")
+        if key:
+            out[key] = row
+    return out
 
 
 def feeder_rows(traces, lam_rows: list[dict], snap: dict,
                 cap_map: dict | None = None,
                 plan_map: dict | None = None,
-                gis_tr: dict | None = None) -> list[dict]:
+                gis_tr: dict | None = None,
+                indices_map: dict | None = None) -> list[dict]:
     """One merged row per feeder — the heart of the dashboard.
 
     ``gis_tr``: ترانس‌ها بر اساس برچسب GIS (ترکیب رسمی فیدر) — ستون
@@ -358,13 +408,14 @@ def feeder_rows(traces, lam_rows: list[dict], snap: dict,
     rows = []
     for t in sorted(traces, key=lambda t: t.feeder_key):
         k = t.feeder_key
-        lam = lam_by.get(k, {})
-        ep = eptl_by.get(k, {})
-        rk = rank_by.get(k, {})
-        rec = rec_by.get(k, {})
-        cap = cap_map.get(k, {})
-        plan = plan_map.get(k, {})
-        g = (gis_tr or {}).get(k, {})
+        lam = _pick(lam_by, k)
+        ep = _pick(eptl_by, k)
+        rk = _pick(rank_by, k)
+        rec = _pick(rec_by, k)
+        cap = _pick(cap_map, k)
+        plan = _pick(plan_map, k)
+        g = _pick(gis_tr or {}, k)
+        ind = _pick(indices_map or {}, k) or {}
         rows.append({
             "feeder_key": k,
             "nodes": len(t.nodes),
@@ -388,6 +439,16 @@ def feeder_rows(traces, lam_rows: list[dict], snap: dict,
             "u_hours": float(lam.get("u_hours", 0.0) or 0),
             "exposure_days": lam.get("exposure_days"),
             "exposure_years": lam.get("exposure_years"),
+            # شاخص‌های پیوستگی (v1.17) — None یعنی «داده نداریم»، نه صفر
+            "saidi": (ind.get("saidi") if ind.get("events_counted") else None),
+            "saifi": (ind.get("saifi") if ind.get("events_counted") else None),
+            "caidi": (ind.get("caidi") if ind.get("events_counted") else None),
+            "asai": (ind.get("asai") if ind.get("events_counted") else None),
+            "ens_per_year_kwh": (ind.get("ens_kwh_per_year")
+                                 if ind.get("energy_records", ind.get("events_counted")) and ind.get("exposure_years") else None),
+            "worst_saidi": (ind.get("worst_saidi")
+                            if ind.get("events_counted") else None),
+            "service_events": ind.get("events_total"),
             "ep_percent": ep.get("ep_percent", rk.get("ep_percent")),
             "tl_percent": ep.get("tl_percent", rk.get("tl_percent")),
             "total_load_kw": ep.get("total_load_kw"),
@@ -442,42 +503,50 @@ def build_dashboard(net: CanonicalNetwork | None = None,
     else:
         selected = {str(k).strip() for k in scope if str(k).strip()}
         scope_label = ", ".join(sorted(selected)) or "no feeders selected"
-    traces = ([t for t in traces_all if t.feeder_key in selected]
+    traces = ([t for t in traces_all if _in_scope(t.feeder_key, selected)]
               if selected is not None else list(traces_all))
     active_keys = {t.feeder_key for t in traces}
     zones_payload = zone_rows(topo, net=net, placement=placement,
                               load_model=(snap.get("load_model") or {}))
     if selected is not None:
-        zones_payload = [z for z in zones_payload if z.get("feeder_key") in active_keys]
+        zones_payload = [z for z in zones_payload
+                         if _in_scope(z.get("feeder_key"), active_keys)]
     if selected is not None:
-        lam_rows = [r for r in lam_rows if r.get("feeder_key") in active_keys]
+        lam_rows = [r for r in lam_rows
+                    if _in_scope(r.get("feeder_key"), active_keys)]
         for key in ("table13_connections", "table14_eptl", "table15_rows",
                     "ranking", "recommendation"):
             if isinstance(snap.get(key), list):
                 if key == "table13_connections":
                     snap[key] = [r for r in snap[key]
-                                 if r.get("feeder_a") in active_keys
-                                 and r.get("feeder_b") in active_keys]
+                                 if _in_scope(r.get("feeder_a"), active_keys)
+                                 and _in_scope(r.get("feeder_b"), active_keys)]
                 else:
                     snap[key] = [r for r in snap[key]
-                                 if r.get("feeder_key") in active_keys]
+                                 if _in_scope(r.get("feeder_key"), active_keys)]
         if isinstance(snap.get("table18_comparison"), list):
             snap["table18_comparison"] = [r for r in snap["table18_comparison"]
-                if not r.get("feeders") or set(r.get("feeders") or []) <= active_keys]
+                if not r.get("feeders")
+                or all(_in_scope(f, active_keys) for f in r.get("feeders") or [])]
         if isinstance(snap.get("schemes"), list):
             snap["schemes"] = [r for r in snap["schemes"]
-                if set(r.get("feeders") or []) <= active_keys]
+                if all(_in_scope(f, active_keys) for f in r.get("feeders") or [])]
     cap_map = capacity_rows_map(capacity_rows)
     if selected is not None:
-        cap_map = {k: v for k, v in cap_map.items() if k in active_keys}
+        cap_map = {k: v for k, v in cap_map.items() if _in_scope(k, active_keys)}
     plan_map = plan_status_map(placement)
     if selected is not None:
-        plan_map = {k: v for k, v in plan_map.items() if k in active_keys}
+        plan_map = {k: v for k, v in plan_map.items() if _in_scope(k, active_keys)}
     gis_tr = gis_transformer_map(net)
     if selected is not None:
-        gis_tr = {k: v for k, v in gis_tr.items() if k in active_keys}
+        gis_tr = {k: v for k, v in gis_tr.items() if _in_scope(k, active_keys)}
+    indices_map = _indices_map(outage)
+    if selected is not None:
+        indices_map = {k: v for k, v in indices_map.items()
+                       if _in_scope(k, active_keys)}
     rows = feeder_rows(traces, lam_rows, snap, cap_map=cap_map,
-                       plan_map=plan_map, gis_tr=gis_tr)
+                       plan_map=plan_map, gis_tr=gis_tr,
+                       indices_map=indices_map)
     zone_load_by_feeder = {}
     for zr in zones_payload:
         fk = zr.get("feeder_key")
@@ -504,7 +573,7 @@ def build_dashboard(net: CanonicalNetwork | None = None,
         live_records = getattr(outage, "records", None)
         if live_records is not None:
             scoped_records = [r for r in (live_records or [])
-                              if getattr(r, "feeder_key", None) in selected]
+                              if _in_scope(getattr(r, "feeder_key", ""), selected)]
             settings = getattr(outage, "settings", {}) or {}
             cov_settings = settings.get("coverage", {}) if isinstance(settings, dict) else {}
             try:
@@ -544,8 +613,8 @@ def build_dashboard(net: CanonicalNetwork | None = None,
         graph_nodes = getattr(getattr(topo, "graph", None), "nodes", {})
         scoped_dead = {nid for nid in (getattr(conn_obj, "deenergized_nodes", set()) or set())
                        if nid in graph_nodes and
-                       (getattr(graph_nodes[nid], "feeder_hint", "") or "").strip().upper()
-                       in active_keys}
+                       _in_scope(getattr(graph_nodes[nid], "feeder_hint", ""),
+                                 active_keys)}
         conn["deenergized_nodes"] = len(scoped_dead)
     graph = getattr(topo, "graph", None) if topo is not None else None
     if selected is not None and graph is not None:

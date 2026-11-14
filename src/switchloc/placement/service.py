@@ -25,6 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..domain.entities import CanonicalNetwork
+from ..level1.transfer import barrier_cut_nodes
 from ..level1.n_minus_1 import (NMinusOneResult, NMinusOneSettings,
                                 run_n_minus_one)
 from ..level1.ranking import RankingResult, RankingSettings, rank_feeders
@@ -157,24 +158,44 @@ def node_load_map(graph: NetworkGraph, net: CanonicalNetwork) -> dict[str, float
 def _spare_map(result_n1: NMinusOneResult,
                rated_kw: dict | None,
                capacity_map: dict[str, FeederCapacity] | None = None,
+               peak_kw_of_feeder: dict[str, float] | None = None,
                ) -> dict[str, float]:
     """ظرفیت پشتیبان هر فیدر برای انتقال (kW).
 
-    اولویت: رزرو قابل استفاده مدل ظرفیت (نامی − پیک — نیاز ۹)؛ در نبود
-    آن، ظرفیت نامی قدیمی (A-10) و بدون آن، نامحدود با پرچم صریح.
+    اولویت: رزرو قابل استفاده مدل ظرفیت — **نامی − بار پیک**،
+    که بار پیک آن از *همان ورودی واحد مدل بار* (نیاز ۱۱؛ P هر فیدر)
+    گرفته می‌شود، نه یک عدد جدا. نامیِ پیش‌فرضِ نرم‌افزاری
+    (منشأ «default») به‌عنوان تأییدنشده تلقی و رد می‌شود. در نبود
+    آن، ظرفیت نامی قدیمی (A-10) با بار پیک همان مدل بار (در نبودش،
+    بار تخصیص‌شدهٔ زون‌ها). اگر هیچ‌کدام موجود نباشد، ظرفیت انتقال
+    صفر منظور می‌شود (سیاست محافظه‌کارانهٔ v1.9.1 — انتقال تأییدنشده
+    هرگز فرض بی‌نهایت نمی‌شود) و هشدار صریح ثبت می‌شود.
     """
+    peaks = dict(peak_kw_of_feeder or {})
+
+    def _peak_of(k: str, fallback: float) -> float:
+        p = peaks.get(k)
+        return fallback if p is None else float(p)
+
     if capacity_map:
         out = {}
         for k, tree in result_n1.trees.items():
             cap = capacity_map.get(k)
-            if cap is not None and cap.usable_reserve_kw is not None:
-                out[k] = cap.usable_reserve_kw
-            elif rated_kw and k in rated_kw:
-                out[k] = max(0.0, float(rated_kw[k]) - tree.total_load_kw)
+            if cap is not None:
+                nominal = cap.nominal_kw
+                peak = peaks.get(k, cap.peak_kw)
+                if (nominal is not None
+                        and cap.nominal_source != "default"
+                        and peak is not None):
+                    out[k] = max(0.0, float(nominal) - float(peak))
+                    continue
+            if rated_kw and k in rated_kw:
+                out[k] = max(0.0, float(rated_kw[k])
+                             - _peak_of(k, tree.total_load_kw))
         return out
     if not rated_kw:
         return {}
-    return {k: max(0.0, float(rated_kw[k]) - tree.total_load_kw)
+    return {k: max(0.0, float(rated_kw[k]) - _peak_of(k, tree.total_load_kw))
             for k, tree in result_n1.trees.items() if k in rated_kw}
 
 
@@ -206,6 +227,12 @@ class PlacementEngine:
 
         # ---- نیاز ۱۱: مدل بار سه‌سطحی با منشأ ردیابی‌پذیر -----------------
         lm = build_node_loads(graph, net, st.load_model)
+        # یک ورودی واحد برای «بار فیدر»: P واردشده در تب Load Model.
+        # همهٔ محاسبات وابسته به بار (رزرو/ظرفیت، انتقال، رابطه ۱۱)
+        # مجموع بحرانی) از همین مقدار استفاده می‌کنند.
+        peak_kw_of_feeder = {str(k): float(v.get("p_kw", 0.0) or 0.0)
+                             for k, v in (st.load_model.feeder_pq or {}).items()
+                             if float(v.get("p_kw", 0.0) or 0.0) > 0.0}
         node_load = lm.node_kw
         issues.extend((i.code, i.severity, i.message_fa)
                       for i in lm.issues)
@@ -267,6 +294,13 @@ class PlacementEngine:
         edge_set_of = {k: owned_edges(zones_by_feeder.get(k, []))
                        for k in keys}
 
+        # پیک ذخیره‌شده در جدول ظرفیت را با ورودی واحد مدل بار همگام
+        # می‌کنیم (فقط منشأ/نمایش؛ موتور خودش از peak_kw_of_feeder می‌خواند)
+        for k, cap in cap_map.items():
+            if k in peak_kw_of_feeder:
+                cap.peak_kw = peak_kw_of_feeder[k]
+                cap.peak_source = "load_model"
+
         # ---- گام‌های ۴-۵: جداول ۱۳/۱۴/۱۵ ----------------------------------
         # Convert the selected node-load model to transformer allocations
         # so N-1 zone aggregation uses the same kW basis as ENS/ranking.
@@ -295,6 +329,34 @@ class PlacementEngine:
             tid for feeder_zones in zones_by_feeder.values()
             for zone in feeder_zones for tid in zone.transformer_ids
         }
+        area_coverage: dict[str, dict] = {}
+        if peak_kw_of_feeder:
+            for fk in sorted(peak_kw_of_feeder):
+                in_kw = peak_kw_of_feeder[fk]
+                zoned_kw = sum(transformer_load_kw.get(tid, 0.0)
+                               for z in zones_by_feeder.get(fk, [])
+                               for tid in z.transformer_ids)
+                area_coverage[fk] = {
+                    "input_kw": round(in_kw, 1),
+                    "zoned_kw": round(zoned_kw, 1),
+                    "outside_kw": round(max(0.0, in_kw - zoned_kw), 1),
+                    "coverage_percent": (round(100.0 * zoned_kw / in_kw, 1)
+                                         if in_kw > 0 else None)}
+            low = [f"{fk}: {v['zoned_kw']:.0f} از {v['input_kw']:.0f} kW "
+                   f"({v['coverage_percent']:.0f}٪)"
+                   for fk, v in sorted(area_coverage.items())
+                   if v["coverage_percent"] is not None
+                   and v["coverage_percent"] < 99.0]
+            if low:
+                issues.append((
+                    "PLAC-AREA-COVERAGE", "Warning",
+                    "پوشش هستهٔ قطعی نسبت به بار ورودی فیدر — "
+                    + "؛ ".join(low)
+                    + ". مابقی بار روی ترانس‌های خارج از هستهٔ قطعی است "
+                      "و در زون/ENS/رتبه‌بندی لحاظ نمی‌شود؛ برای لحاظ کامل "
+                      "آن تأیید مهندسی نقاط NO (A-09) و اجرای "
+                      "area_mode=«traced» لازم است."))
+
         unzoned_transformer_ids = sorted(
             set(transformer_load_kw) - zone_transformer_ids)
         unzoned_transformer_kw = sum(
@@ -315,7 +377,8 @@ class PlacementEngine:
         # ---- گام ۶: رتبه‌بندی (فرمول ۱ + جدول ۱۶) --------------------------
         ranking = rank_feeders(n1, net, lam_matrix, settings=st.ranking,
                                 scope_feeder=scope_feeder,
-                                scope_feeders=scope_feeders)
+                                scope_feeders=scope_feeders,
+                                transformer_load_kw=transformer_load_kw)
         issues.extend(ranking.issues)
         if scope_feeder:
             issues.append((
@@ -361,11 +424,14 @@ class PlacementEngine:
         # ---- گام ۸: ENS قبل/بعد + جدول ۱۸ ----------------------------------
         eco = self._economics(graph, net, area_traces, n1, study_ties, schemes,
                               node_load, lam_of, r_of, cut_nodes_of,
-                              edge_set_of, cap_map)
+                              edge_set_of, cap_map, peak_kw_of_feeder)
         issues.extend(eco.issues)
 
         # ---- نیاز ۹ + ۱۰: کنترل ظرفیت، ارزیابی پذیرش و انتخاب بدون اجبار --
-        load_kw_of = {k: tree.total_load_kw for k, tree in n1.trees.items()}
+        # پیک هر فیدر از همان ورودی واحد مدل بار (نیاز ۱۱) — نه از زون‌های
+        # هستهٔ قطعی (که زیرمجموعه‌ای از بار است) و نه از تب ظرفیت.
+        load_kw_of = {k: peak_kw_of_feeder.get(k, tree.total_load_kw)
+                      for k, tree in n1.trees.items()}
         capacity_checks: dict[str, CapacityCheck] = {}
         decisions: dict[str, SchemeDecision] = {}
         for sc in schemes:
@@ -452,17 +518,19 @@ class PlacementEngine:
             capacity_map={k: v.as_dict() for k, v in cap_map.items()},
             load_model={"level": lm.level,
                         "coverage": lm.coverage,
-                        "scaling_plan": getattr(lm, "scaling_plan", {}) or {},
                         "per_feeder_kw": {
                             k: round(v, 1) for k, v in
-                            lm.per_feeder_kw.items()}})
+                            lm.per_feeder_kw.items()},
+                        "area_coverage": area_coverage,
+                        "scaling_plan": getattr(lm, "scaling_plan", {}) or {}})
 
     # ------------------------------------------------------------------
     def _economics(self, graph, net, traces, n1: NMinusOneResult,
                    ties, schemes: list[SwitchScheme], node_load,
                    lam_of: dict, r_of: dict, cut_nodes_of: dict,
                    edge_set_of: dict,
-                   cap_map: dict[str, FeederCapacity] | None = None
+                   cap_map: dict[str, FeederCapacity] | None = None,
+                   peak_kw_of_feeder: dict[str, float] | None = None,
                    ) -> EconomicsResult:
         st = self.settings
         eco = EconomicsResult(cost_model={
@@ -472,14 +540,25 @@ class PlacementEngine:
             "rial_per_kwh": st.cost.rial_per_kwh,
             "switching_minutes": st.cost.switching_minutes,
         })
-        spare = _spare_map(n1, st.placement.feeder_rated_kw, cap_map)
+        barriers = barrier_cut_nodes(graph, net, ties)
+        spare = _spare_map(n1, st.placement.feeder_rated_kw, cap_map,
+                           peak_kw_of_feeder)
         if not spare:
             eco.issues.append((
                 "PLAC-CAP-UNKNOWN", "Information",
-                "ظرفیت فیدرها تنظیم نشده؛ ظرفیت انتقال پشتیبان نامحدود فرض "
-                "و صراحتاً ثبت شد (A-10) — طرح‌های انتقالی در وضعیت «نیازمند "
-                "تأیید ظرفیت» می‌مانند و پیش از تصمیم نهایی باید ظرفیت‌ها "
-                "وارد شود (نیاز ۹)."))
+                "ظرفیت رزرو فیدرها تنظیم نشده؛ ظرفیت انتقال پشتیبان صفر "
+                "منظور شد (سیاست محافظه‌کارانهٔ v1.9.1 — انتقال تأییدنشده "
+                "هرگز فرض نمی‌شود). طرح‌های انتقالی تا ورود ظرفیت‌ها "
+                "«نیازمند تأیید ظرفیت» می‌مانند (نیاز ۹)."))
+        defaulted = sorted(k for k, c in (cap_map or {}).items()
+                           if c.nominal_source == "default")
+        if defaulted:
+            eco.issues.append((
+                "PLAC-DEFAULT-NOMINAL", "Warning",
+                "ظرفیت نامی فیدرهای «" + "، ".join(defaulted) + "» مقدار "
+                "پیش‌فرض نرم‌افزاری است و به‌عنوان ظرفیت تأییدشده پذیرفته "
+                "نمی‌شود؛ رزرو آن‌ها صفر منظور شد — ظرفیت نامی را از "
+                "تنظیمات وارد و اجرا را تکرار کنید."))
         trace_of = {t.feeder_key: t for t in traces}
         node_trees = {k: build_feeder_tree(graph, trace_of[k],
                                            edge_set_of.get(k, set()), node_load)
@@ -513,7 +592,8 @@ class PlacementEngine:
                 segs, lam_of.get(key, 0.0), r_of.get(key, 0.0),
                 st.cost.switching_minutes,
                 transfers_for(key, segs),
-                total_length_m=tree.sub_len.get(tree.order[0]))
+                total_length_m=tree.sub_len.get(tree.order[0]),
+                barrier_nodes=barriers)
             ens_before[key] = cap
         eco.ens_before_kwh = ens_before
 
@@ -546,7 +626,8 @@ class PlacementEngine:
                 val, _ = ens_of_configuration(
                     segs, lam_of.get(key, 0.0), r_of.get(key, 0.0),
                     st.cost.switching_minutes, tmap,
-                    total_length_m=tree.sub_len.get(tree.order[0]))
+                    total_length_m=tree.sub_len.get(tree.order[0]),
+                    barrier_nodes=barriers)
                 after[key] = val
             eco.ens_after_kwh[sc.id] = after
         eco.comparisons = compare_schemes(schemes, ens_before,

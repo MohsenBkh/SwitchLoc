@@ -80,6 +80,93 @@ def _auto_width(ws, widths: list | None = None) -> None:
         ws.column_dimensions[get_column_letter(j)].width = best
 
 
+def write_feeder_indices_sheet(wb, m: StudyModel) -> object:
+    """برگهٔ «شاخص‌های فیدرها» + نمودارهای بومی Excel (درخواست کاربر).
+
+    ستون‌ها از همان `FEEDER_INDEX_COLUMNS` گزارش می‌آیند تا Word/PDF و
+    Excel یک عدد نشان دهند. هیچ عددی ساخته نمی‌شود؛ مقدار نامعلوم خالی
+    می‌ماند («—») تا با صفر اشتباه نشود.
+    """
+    from .content import FEEDER_INDEX_COLUMNS
+
+    metrics = m.feeder_table()
+    ws = _sheet(wb, "شاخص‌های فیدرها")
+    row = _put_title(ws, 1, "شاخص‌های ارزیابی فیدرها — λ/r، SAIDI/SAIFI/"
+                           "CAIDI/ASAI، ENS/EENS، ردیابی و رتبه‌بندی")
+    ind = m.feeder_indices or {}
+    if ind.get("has_result"):
+        row = _put_table(ws, row, ["شاخص سامانه", "مقدار", "مبنا"], [
+            ["SAIFI (قطع/سال)", round(float(ind.get("saifi") or 0), 3),
+             ind.get("aggregation") or "—"],
+            ["SAIDI (دقیقه/سال)", round(float(ind.get("saidi") or 0), 2),
+             ind.get("aggregation") or "—"],
+            ["CAIDI (دقیقه)", round(float(ind.get("caidi") or 0), 2), "—"],
+            ["ASAI (٪)", round(100 * float(ind.get("asai") or 0), 4), "—"],
+            ["مبنای سهم مشترکین", ind.get("load_basis") or "—", "—"],
+            ["واحد انرژی توزیع‌نشده",
+             str(ind.get("energy_unit") or "—").upper(),
+             ind.get("energy_unit_source") or "—"],
+        ])
+    headers = ["فیدر"] + [c[1] for c in FEEDER_INDEX_COLUMNS]
+    body = []
+    for r in metrics:
+        line = [r["feeder_key"]]
+        for key, _label, nd in FEEDER_INDEX_COLUMNS:
+            v = r.get(key)
+            if key == "asai" and v is not None:
+                v = round(float(v) * 100.0, 4)
+            elif isinstance(v, float):
+                v = round(v, nd)
+            line.append(v)
+        body.append(line)
+    header_row = row
+    row = _put_table(ws, row, headers, body)
+    _auto_width(ws, [22] + [14] * (len(headers) - 1))
+
+    energy_rows = [f for f in ind.get("feeders", []) if f.get("energy_records")]
+    if energy_rows:
+        audit = _sheet(wb, "تطبیق انرژی")
+        ar = _put_title(audit, 1, "تطبیق انرژی ثبت‌شده با ENS سالانه")
+        _put_table(audit, ar, ["فیدر", "مجموع خام", "تعداد مقادیر", "واحد فرض‌شده", "مبنای واحد", "مواجهه (سال)", "ENS (kWh/سال)"],
+                   [[f.get("feeder_key"), f.get("energy_raw_total"), f.get("energy_records"),
+                     str(ind.get("energy_unit") or "—").upper(), ind.get("energy_unit_source") or "—",
+                     f.get("exposure_years"), f.get("ens_kwh_per_year")] for f in energy_rows])
+        _auto_width(audit, [25, 18, 18, 18, 18, 18, 22])
+
+    # نمودارهای Excel-native (قابل ویرایش در خود Excel)
+    try:
+        from openpyxl.chart import BarChart, Reference
+        col_of = {c[0]: i + 2 for i, c in enumerate(FEEDER_INDEX_COLUMNS)}
+        wanted = [k for k in ("lambda_per_year", "r_minutes", "u_hours",
+                              "saidi", "saifi", "caidi", "ens_per_year_kwh",
+                              "ens_before_kwh") if k in col_of]
+        anchor_row = header_row
+        for key in wanted:
+            if not body:
+                break
+            col = col_of[key]
+            chart = BarChart()
+            chart.type = "bar"
+            chart.style = 10
+            label = next(c[1] for c in FEEDER_INDEX_COLUMNS if c[0] == key)
+            chart.title = label
+            chart.y_axis.title = "مقدار"
+            chart.x_axis.title = "فیدر"
+            data = Reference(ws, min_col=col, min_row=header_row,
+                             max_row=header_row + len(body))
+            cats = Reference(ws, min_col=1, min_row=header_row + 1,
+                             max_row=header_row + len(body))
+            chart.add_data(data, titles_from_data=True)
+            chart.set_categories(cats)
+            chart.height = 7.5
+            chart.width = 15
+            ws.add_chart(chart, f"B{anchor_row + 20}")
+            anchor_row += 17
+    except Exception:                               # noqa: BLE001  pragma: no cover
+        pass
+    return ws
+
+
 def export_workbook(m: StudyModel, path: str) -> str:
     """Write the Phase-5 XLSX and return the path."""
     wb = Workbook()
@@ -223,6 +310,8 @@ def export_workbook(m: StudyModel, path: str) -> str:
                          round(r.lambda_reducible, 3), round(r.r_minutes, 2),
                          round(r.lambda_per_year * r.r_minutes / 60.0, 2),
                          round(r.load_priority_sum, 1)])
+    write_feeder_indices_sheet(wb, m)
+
     ws = _sheet(wb, "ماتریس λ-r")
     row = _put_title(ws, 1, "ماتریس λ/r فاز ۳ — مبنای معیارهای ۵ و ۶")
     row = _put_table(ws, row, ["فیدر", "λ تصادفی (بر سال)",
@@ -235,3 +324,21 @@ def export_workbook(m: StudyModel, path: str) -> str:
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out)
     return str(out)
+
+
+def export_dashboard_feeder_indices(dashboard: dict, path: str) -> str:
+    """Export the displayed feeder metrics even when placement has not run."""
+    from types import SimpleNamespace
+    rows = []
+    for source in dashboard.get("feeders") or []:
+        row = dict(source)
+        row["ens_before_kwh"] = source.get("ens_kwh")
+        rows.append(row)
+    indices = (dashboard.get("outage") or {}).get("service_indices") or {}
+    model = SimpleNamespace(feeder_table=lambda: rows, feeder_indices=indices)
+    wb = Workbook()
+    wb.remove(wb.active)
+    write_feeder_indices_sheet(wb, model)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    wb.save(path)
+    return str(path)

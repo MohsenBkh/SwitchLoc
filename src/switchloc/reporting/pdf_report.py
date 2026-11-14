@@ -49,7 +49,8 @@ def find_font(bold: bool = False) -> Path | None:
 
 
 def export_pdf(doc_content: ReportDoc, path: str,
-               map_png: str | None = None) -> str:
+               map_png: str | None = None,
+               charts_png: str | None = None) -> str:
     """Write the Persian PDF and return the path (raises PdfUnavailableError
     when the optional extras are not installed)."""
     try:
@@ -57,12 +58,13 @@ def export_pdf(doc_content: ReportDoc, path: str,
         from bidi.algorithm import get_display
         from reportlab.lib import colors
         from reportlab.lib.enums import TA_CENTER, TA_RIGHT
-        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.pagesizes import A4, landscape
         from reportlab.lib.styles import ParagraphStyle
         from reportlab.pdfbase import pdfmetrics
         from reportlab.pdfbase.ttfonts import TTFont
-        from reportlab.platypus import (Image, PageBreak, Paragraph,
-                                        SimpleDocTemplate, Spacer, Table,
+        from reportlab.platypus import (BaseDocTemplate, Frame, Image,
+                                        NextPageTemplate, PageBreak,
+                                        PageTemplate, Paragraph, Spacer, Table,
                                         TableStyle)
     except ImportError as exc:                       # pragma: no cover
         raise PdfUnavailableError(
@@ -82,11 +84,32 @@ def export_pdf(doc_content: ReportDoc, path: str,
     reshaper = arabic_reshaper.ArabicReshaper(
         configuration={"delete_harakat": False, "support_ligatures": True})
 
+    #: نویسه‌هایی که فونت وزیرمتن ندارد (یونانی/فلش/نمادها) — جایگزین خوانا
+    fallback = {"λ": "لامبدا", "Λ": "لامبدا", "Σ": "سیگما", "Δ": "دلتا",
+                "φ": "فی", "Φ": "فی",
+                "→": "->", "←": "<-", "↔": "<->", "▸": ">", "★": "*",
+                "₀": "0", "₁": "1", "₂": "2", "₃": "3", "₄": "4",
+                "₅": "5", "₆": "6", "₇": "7", "₈": "8", "₉": "9"}
+    #: نویسه‌های نامرئی که نباید جایگزین شوند (ZWNJ و جهت‌دهنده‌ها)
+    invisible = {"\u200c", "\u200d", "\u200e", "\u200f", "\ufeff"}
+    vazir = pdfmetrics.getFont("Vazir")
+    glyphs = getattr(getattr(vazir, "face", None), "charToGlyph", {}) or {}
+
+    def _missing(ch: str) -> bool:
+        """آیا فونت این نویسه را دارد؟ (وگرنه مربع خالی در PDF)"""
+        if ch in invisible or ch.isspace() or not glyphs:
+            return False
+        return ord(ch) not in glyphs
+
     def fa(text: str) -> str:
         """Logical Persian → shaped visual order for ReportLab."""
         if not text:
             return text
-        return get_display(reshaper.reshape(str(text)))
+        out = str(text)
+        if glyphs and any(_missing(ch) for ch in out):
+            out = "".join(fallback.get(ch, ch) if _missing(ch) else ch
+                          for ch in out)
+        return get_display(reshaper.reshape(out))
 
     S_TITLE = ParagraphStyle("t", fontName="Vazir-Bold", fontSize=17,
                              leading=26, alignment=TA_CENTER,
@@ -114,6 +137,12 @@ def export_pdf(doc_content: ReportDoc, path: str,
                           textColor=colors.white)
     S_TD = ParagraphStyle("td", fontName="Vazir", fontSize=8, leading=12,
                           alignment=TA_CENTER)
+    # جدول‌های پهن (شاخص‌های فیدرها: ۱۴ ستون) — فونت ریزتر روی صفحهٔ افقی
+    S_TH_W = ParagraphStyle("thw", fontName="Vazir-Bold", fontSize=6.5,
+                            leading=9.5, alignment=TA_CENTER,
+                            textColor=colors.white)
+    S_TD_W = ParagraphStyle("tdw", fontName="Vazir", fontSize=6.5, leading=9.5,
+                            alignment=TA_CENTER)
 
     NAVY = colors.HexColor("#1F4E79")
     HEAD_BG = colors.HexColor("#1F4E79")
@@ -157,14 +186,19 @@ def export_pdf(doc_content: ReportDoc, path: str,
             if not tb.rows:
                 story.append(Paragraph(fa("(بدون ردیف)"), S_BODY))
                 continue
-            data = [[Paragraph(fa(h), S_TH) for h in tb.headers]]
+            n = len(tb.headers)
+            wide = _is_wide_table(n)   # ۱۴ ستون شاخص‌ها در A4 عمودی جا نمی‌شود
+            th, td = (S_TH_W, S_TD_W) if wide else (S_TH, S_TD)
+            if wide:
+                story += [NextPageTemplate("landscape"), PageBreak()]
+            data = [[Paragraph(fa(h), th) for h in tb.headers]]
             for row in tb.rows:
                 data.append([Paragraph(
-                    fa(str(row[j]) if j < len(row) else ""), S_TD)
-                    for j in range(len(tb.headers))])
-            n = len(tb.headers)
+                    fa(str(row[j]) if j < len(row) else ""), td)
+                    for j in range(n)])
             # first logical column (rightmost visually) a bit wider
-            widths = _col_widths(n, tb.headers, tb.widths)
+            usable = (A4[1] - 72) if wide else (A4[0] - 72)
+            widths = _col_widths(n, tb.headers, tb.widths, usable)
             t = Table(data, colWidths=widths, repeatRows=1)
             t.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), HEAD_BG),
@@ -176,11 +210,19 @@ def export_pdf(doc_content: ReportDoc, path: str,
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
             ]))
             story += [t]
+            if wide:
+                story += [NextPageTemplate("portrait"), PageBreak()]
             if tb.note:
                 story.append(Paragraph(fa("یادداشت: " + tb.note), S_NOTE))
             story.append(Spacer(1, 6))
         for para in s.after:
             story.append(Paragraph(fa(para), S_BODY))
+
+    # ---------------- index charts ------------------------------------------
+    if charts_png and Path(charts_png).exists():
+        story += [Paragraph(fa("نمودار شاخص‌های ارزیابی فیدرها"), S_H1),
+                  Image(charts_png, width=17 * 28.35, height=9.6 * 28.35,
+                        kind="proportional")]
 
     # ---------------- map ---------------------------------------------------
     if map_png and Path(map_png).exists():
@@ -196,27 +238,56 @@ def export_pdf(doc_content: ReportDoc, path: str,
         canv.saveState()
         canv.setFont("Vazir", 7)
         canv.setFillColor(colors.HexColor("#808080"))
-        canv.drawCentredString(A4[0] / 2, 1.1 * 28.35,
+        width = canv._pagesize[0]                      # noqa: SLF001
+        canv.drawCentredString(width / 2, 1.1 * 28.35,
                                fa(doc_content.footer))
         canv.restoreState()
 
-    tpl = SimpleDocTemplate(
-        str(out), pagesize=A4,
-        leftMargin=36, rightMargin=36, topMargin=42, bottomMargin=44,
-        title=doc_content.title, author="SwitchLoc")
-    tpl.build(story, onFirstPage=_footer, onLaterPages=_footer)
+    # دو قالب صفحه: عمودی برای متن و جدول‌های باریک، افقی برای جدول‌های
+    # پهن (۱۴ ستون شاخص‌های فیدرها) تا سرستون‌ها در هم نریزند.
+    pw, ph = A4
+    lw, lh = landscape(A4)
+    tpl = BaseDocTemplate(str(out), pagesize=A4,
+                          title=doc_content.title, author="SwitchLoc")
+    tpl.addPageTemplates([
+        PageTemplate(id="portrait", pagesize=A4,
+                     frames=[Frame(36, 44, pw - 72, ph - 86, id="p")],
+                     onPage=_footer),
+        PageTemplate(id="landscape", pagesize=landscape(A4),
+                     frames=[Frame(36, 34, lw - 72, lh - 74, id="l")],
+                     onPage=_footer),
+    ])
+    tpl.build(story)
     return str(out)
 
 
-def _col_widths(n: int, headers: list, fractions: list | None = None) -> list:
-    """Usable width 523pt — explicit fractions when given, else distribute
-    by header length with sane caps."""
-    usable = 523.0
+def _is_wide_table(n_columns: int) -> bool:
+    """جدول‌های پهن (۹ ستون و بیشتر) باید روی صفحهٔ افقی بروند."""
+    return n_columns >= 9
+
+
+def _col_widths(n: int, headers: list, fractions: list | None = None,
+                usable: float = 523.0) -> list:
+    """Usable width (523pt portrait / 770pt landscape) — explicit fractions
+    when given, else distribute by header length with sane caps."""
+    usable = float(usable)
     if fractions and len(fractions) == n:
         k = usable / sum(fractions)
         return [f * k for f in fractions]
     if n == 2:
         return [190, usable - 190]
+    if n >= 9:
+        # ستون «فیدر» پهن‌تر (نام کامل فیدر) و بقیه بر اساس طول سرستون؛
+        # کمینهٔ ۴۰pt تا اعداد (۴۱۸.۳۷) دو خطی نشوند.
+        first = usable * 0.145
+        rest = usable - first
+        weights = [max(len(str(h)), 4) for h in headers[1:]]
+        total = sum(weights)
+        floor = 40.0            # جای عدد ۵ رقمی مثل «418.37» در فونت ۶.۵
+        if floor * len(weights) >= rest:            # خیلی پهن — بی‌کف
+            return [first] + [rest * w / total for w in weights]
+        extra = rest - floor * len(weights)
+        return [first] + [floor + extra * w / total for w in weights]
     weights = [max(len(str(h)), 3) for h in headers]
     total = sum(weights)
     raw = [usable * w / total for w in weights]

@@ -39,6 +39,7 @@ from __future__ import annotations
 import re
 from collections import defaultdict, deque
 from dataclasses import dataclass, field as dc_field
+from functools import lru_cache
 
 from ..domain.entities import CanonicalNetwork, SwitchDev
 from ..domain.enums import SwitchFamily, SwitchState
@@ -49,12 +50,94 @@ from .graph import NetworkGraph
 _PERSIAN_FIX = str.maketrans({"ي": "ی", "ك": "ک"})
 
 
+@lru_cache(maxsize=8192)
+def feeder_id(name: str) -> str:
+    """هویت کامل فیدر — نام نرمال‌شدهٔ کامل (بدون کوتاه‌سازی).
+
+    «F2 - MESHKIN» و «F2 - HADIDMOBTAKERAN» دو فیدر جدا هستند ولی هر دو
+    با :func:`feeder_key` به «F2» تبدیل می‌شدند و در فهرست فیدرها یکی
+    می‌شدند. این تابع نام کامل را نگه می‌دارد؛ یکی‌دانستن نگارش کوتاه و
+    آراسته (مثل «F1» با «F1 - MESHKIN») کار :func:`same_feeder` است.
+    """
+    s = (name or "").translate(_PERSIAN_FIX).strip().upper()
+    s = re.sub(r"\s+", " ", s)
+    # «F4- KOSAR» / «F4  -  KOSAR» → «F4 - KOSAR» (یک نگارش نمایشی)
+    return re.sub(r"\s*-\s*", " - ", s)
+
+
+@lru_cache(maxsize=16384)
+def same_feeder(a: str, b: str) -> bool:
+    """آیا دو برچسب به یک فیدر اشاره می‌کنند؟
+
+    * نگارش‌های نرمال‌شدهٔ یکسان → بله؛
+    * اگر هر دو فقط «توکن کوتاه» یکسانی دارند (F2 و F2) → بله؛
+    * اگر یکی از دو نام **تنها** همان توکن کوتاه باشد («F1» در برابر
+      «F1 - MESHKIN») → بله (زنجیرهٔ فالبک GIS در لایه‌های مختلف کوتاه و
+      آراسته را مخلوط می‌کند)؛
+    * «F2 - MESHKIN» در برابر «F2 - HADIDMOBTAKERAN» → **خیر** (دو فیدر).
+    """
+    na, nb = feeder_id(a), feeder_id(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    ka, kb = feeder_key(a), feeder_key(b)
+    if not ka or ka != kb:
+        return False
+    return na == ka or nb == kb
+
+
+def resolve_feeder(name: str, candidates) -> str:
+    """نگاشت یک نام/کلید بیرونی به شناسهٔ یکی از ``candidates``.
+
+    ترتیب: تطبیق دقیق (پس از نرمال‌سازی) → تطبیق :func:`same_feeder` وقتی
+    **یکتا** باشد. اگر چند کاندید تطبیق دهند (مثل «F2» وقتی هم «F2 - MESHKIN»
+    و هم «F2 - HADIDMOBTAKERAN» وجود دارد) یا هیچ‌کدام، همان نام نرمال‌شده
+    برگردانده می‌شود — بدون حدس و بدون ادغام دو فیدر متفاوت.
+    """
+    target = feeder_id(name)
+    if not target:
+        return ""
+    cands = [str(c) for c in (candidates or ()) if str(c)]
+    for c in cands:
+        if feeder_id(c) == target:
+            return feeder_id(c)
+    matches = [c for c in cands if same_feeder(c, name)]
+    if len(matches) == 1:
+        return feeder_id(matches[0])
+    return target
+
+
+def match_feeders(name: str, candidates) -> list[str]:
+    """همهٔ کاندیدهایی که با یک برچسب یکی‌اند (برای انتخاب‌های ذخیره‌شده).
+
+    مثل :func:`resolve_feeder` ولی **فهرست** برمی‌گرداند: اگر برچسب کوتاه
+    («F2») به دو فیدر بخورد، هر دو را می‌دهد (نمایش هر دو بهتر از نمایش
+    هیچ است)؛ اگر هیچ تطبیقی نبود، فهرست خالی.
+
+    برای فیلترهای نمایشی (لایهٔ فیدرهای نقشه، رنگ فیدر، دامنهٔ گزارش) که
+    مقادیر ذخیره‌شدهٔ نسخه‌های قبل با کلید کوتاه نوشته شده‌اند.
+    """
+    target = feeder_id(name)
+    if not target:
+        return []
+    cands = [str(c) for c in (candidates or ()) if str(c)]
+    exact = [c for c in cands if feeder_id(c) == target]
+    if exact:
+        return exact
+    return [c for c in cands if same_feeder(c, name)]
+
+
+@lru_cache(maxsize=8192)
 def feeder_key(name: str) -> str:
     """Canonical short feeder identity: leading token, RTL-normalized.
 
     «F1 - KHALKHAL», «f1», «F1» → «F1» — the GIS fallback chain mixes
     short and decorated names for the same feeder, so mismatch detection
     must compare identities, not decorations.
+
+    توجه: این «توکن کوتاه» برای مقایسه/نمایش کوتاه است، نه شناسهٔ یکتا؛
+    شناسهٔ فیدر :func:`feeder_id` است.
     """
     s = (name or "").translate(_PERSIAN_FIX).strip().upper()
     s = re.sub(r"\s+", " ", s)
@@ -80,7 +163,8 @@ class TracingPolicy:
 @dataclass
 class FeederTrace:
     feeder: str                          # full normalized name from the source
-    feeder_key: str                      # canonical short identity
+    #: شناسهٔ یکتای فیدر — نام کامل نرمال‌شده (نه توکن کوتاه «F2»)
+    feeder_key: str
     source_node: str
     nodes: set = dc_field(default_factory=set)
     edges: set = dc_field(default_factory=set)
@@ -136,12 +220,28 @@ class TracingEngine:
 
     # -- seeds -----------------------------------------------------------
     def seeds(self) -> list[tuple[str, str, str]]:
-        """[(feeder_name, feeder_key, junction_node)] sorted deterministically."""
-        out = []
-        for node, fname in sorted(self.graph.source_of.items()):
-            key = feeder_key(fname)
-            if key:
-                out.append((fname, key, node))
+        """[(feeder_name, feeder_id, junction_node)] — قطعی و بدون تکرار.
+
+        یک گره می‌تواند سرچند فیدر باشد (شینهٔ پست)؛ هر فیدر یک بذر
+        می‌گیرد. قبلاً نقشهٔ «گره → یک نام» فیدرهای بعدی را روی قبلی
+        بازنویسی می‌کرد و آن فیدرها از فهرست/توپولوژی کامل حذف می‌شدند.
+        """
+        pairs = []
+        sources_at = getattr(self.graph, "sources_at", None) or {}
+        if sources_at:
+            for node, names in sorted(sources_at.items()):
+                for fname in names:
+                    pairs.append((fname, node))
+        else:                                  # سازگاری با گراف قدیمی
+            for node, fname in sorted(self.graph.source_of.items()):
+                pairs.append((fname, node))
+        out, seen = [], set()
+        for fname, node in pairs:
+            fid = feeder_id(fname)
+            if not fid or (fid, node) in seen:
+                continue
+            seen.add((fid, node))
+            out.append((fname, fid, node))
         return out
 
     def fallback_seeds(self) -> list[tuple[str, str, str]]:
@@ -151,7 +251,7 @@ class TracingEngine:
             for sid in sids:
                 sw = self.switches.get(sid)
                 if sw is not None and sw.family == SwitchFamily.BREAKER:
-                    key = feeder_key(sw.feeder_name) or "?"
+                    key = feeder_id(sw.feeder_name) or "?"
                     by_feeder[key].append(node)
         out = []
         for key in sorted(by_feeder):
@@ -174,8 +274,8 @@ class TracingEngine:
                     continue
                 edge = self.graph.edges[eid]
                 if self.policy.hint_gated:            # TOPO-POL-05
-                    hk = feeder_key(edge.feeder_hint)
-                    if hk and hk != key:
+                    hint = edge.feeder_hint
+                    if hint and not same_feeder(hint, feeder_name):
                         tr.gated_blocked += 1         # label of another feeder
                         continue
                 tr.edges.add(eid)
@@ -238,12 +338,20 @@ class TracingEngine:
         # Only PASSABLE nodes count — two traces touching opposite sides of
         # an open/NO switch terminal are separated by that switch, not
         # interconnected (the node-level model shares the terminal).
+        # گره‌های منبعِ مشترک (شینهٔ پست) نقطهٔ اشتراک طبیعی فیدرهاست، نه
+        # اتصال بین‌فیدری؛ در شمارش هم‌پوشانی نمی‌آیند.
+        source_junctions = {j for j in (getattr(self.graph, "sources_at", {})
+                                        or {})}
         seen_by: dict[str, list[str]] = defaultdict(list)
         for tr in traces:
             for n in tr.nodes:
+                if n in source_junctions:
+                    continue
                 seen_by[n].append(tr.feeder_key)
         for tr in traces:
             for n in sorted(tr.nodes):
+                if n in source_junctions:
+                    continue
                 if not self.node_passable(n):
                     continue                    # separated by a device
                 others = [f for f in seen_by[n] if f != tr.feeder_key]
@@ -277,8 +385,8 @@ class TracingEngine:
         for tr in traces:
             for eid in tr.edges:
                 hint = self.graph.edges[eid].feeder_hint
-                hk = feeder_key(hint)
-                if hk and hk != tr.feeder_key:
+                hk = feeder_id(hint)
+                if hk and not same_feeder(hint, tr.feeder):
                     mismatch_count[(tr.feeder_key, hk)] += 1
         for (tk, hk), n in sorted(mismatch_count.items()):
             issues.add(ValidationIssue(
@@ -296,7 +404,7 @@ class TracingEngine:
         if untraced:
             by_hint: dict[str, int] = defaultdict(int)
             for eid in untraced:
-                by_hint[feeder_key(self.graph.edges[eid].feeder_hint)
+                by_hint[feeder_id(self.graph.edges[eid].feeder_hint)
                         or "بدون برچسب"] += 1
             issues.add(ValidationIssue(
                 code="TOPO-UNTRACED-AREA", severity=SEVERITY_WARNING,

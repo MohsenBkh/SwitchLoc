@@ -58,11 +58,39 @@ class StudyModel:
     crosscheck: dict = field(default_factory=dict)  # persisted-vs-fresh result
     #: (code, severity, message_fa) triples appended by the report layer
     extra_issues: list = field(default_factory=list)
+    #: مطالعهٔ جایابی کلید / EENS ذخیره‌شده در پروژه
+    #: (``project_kv['sectionalizer_study']``) — وقتی پر باشد، گزارش نهایی
+    #: فقط همان مطالعه را مستند می‌کند (درخواست کاربر v1.15).
+    eens_study: dict = field(default_factory=dict)
+    #: نوع مطالعهٔ فعال: auto | eens | placement
+    study_type: str = "auto"
     #: جایابی دستی مهندس (درخواست کاربر، مورد ۶) — لیست dict خروجی
     #: ManualEvaluation.as_dict(): feeder_key / switch_nodes / before /
     #: after / delta / ce_cn / verdict_fa — وقتی غیرخالی باشد بخش
     #: «جایابی دستی» به گزارش اضافه می‌شود.
     manual_evals: list = field(default_factory=list)
+    #: ماتریس λ/r ذخیره‌شده (فاز ۳) — ردیف‌های dict با feeder_key،
+    #: lambda_per_year، r_minutes، u_hours. منبع: پروژهٔ ذخیره‌شده یا UI.
+    outage_lambda: list = field(default_factory=list)
+    #: شاخص‌های پیوستگی (SAIDI/SAIFI/CAIDI/ASAI) — payload
+    #: ServiceIndices.as_dict() از آخرین اجرای تحلیل خاموشی.
+    feeder_indices: dict = field(default_factory=dict)
+
+    # ------------------------------------------------------------------
+    # study type
+    # ------------------------------------------------------------------
+    @property
+    def has_eens_study(self) -> bool:
+        """آیا مطالعهٔ EENS ذخیره‌شده‌ای برای گزارش وجود دارد؟"""
+        from .eens_report import is_eens_study
+        return is_eens_study(self.eens_study)
+
+    @property
+    def active_study(self) -> str:
+        """نوع مطالعهٔ گزارش: ``eens`` یا ``placement`` (دقیقاً یکی)."""
+        if self.study_type in ("eens", "placement"):
+            return self.study_type
+        return "eens" if self.has_eens_study else "placement"
 
     # ------------------------------------------------------------------
     # identity / metadata
@@ -220,6 +248,80 @@ class StudyModel:
 
     # ------------------------------------------------------------------
     # KPI summary (خلاصه مدیریتی)
+    # ------------------------------------------------------------------
+    # همهٔ شاخص‌های ارزیابی فیدرها (گزارش/اکسل/نمودار — درخواست کاربر)
+    # ------------------------------------------------------------------
+    def feeder_table(self) -> list[dict]:
+        """یک ردیف برای هر فیدر با همهٔ شاخص‌های ارزیابی‌شده.
+
+        منابع، همه از همان اجراهای ثبت‌شدهٔ پروژه (هیچ عددی ساخته نمی‌شود):
+          * ردیابی: طول (km)، تعداد ترانس، تعداد مشترک/بار
+          * ماتریس λ/r: λ، λ قابل کاهش، r، U
+          * شاخص‌های پیوستگی: SAIDI، SAIFI، CAIDI، ASAI (None = بدون داده)
+          * اقتصاد: ENS پایه و ENS پس از طرح‌های اصلی
+        """
+        lam_by = {}
+        for row in (self.outage_lambda or []):
+            get = (row.get if isinstance(row, dict)
+                   else lambda k, d=None, _r=row: getattr(_r, k, d))
+            key = str(get("feeder_key", "") or "")
+            if key:
+                lam_by[key] = get
+        ind_by = {}
+        for row in (self.feeder_indices or {}).get("feeders") or []:
+            key = str(row.get("feeder_key") or "")
+            if key:
+                ind_by[key] = row
+        econ = getattr(self.placement, "economics", None)
+        ens_before = getattr(econ, "ens_before_kwh", {}) or {}
+        rank_by = {}
+        for r in (getattr(getattr(self.placement, "ranking", None), "rows", [])
+                  or []):
+            key = getattr(r, "feeder_key", "") or ""
+            if key:
+                rank_by[key] = r
+
+        def _lookup(mapping: dict, key: str):
+            if key in mapping:
+                return mapping[key]
+            from ..topology.tracing import same_feeder
+            hits = [k for k in mapping if same_feeder(k, key)]
+            return mapping[hits[0]] if len(hits) == 1 else None
+
+        rows = []
+        for t in sorted(getattr(self.topo, "traces", []) or [],
+                        key=lambda x: x.feeder_key):
+            key = t.feeder_key
+            lam = _lookup(lam_by, key)
+            lam_get = (lam if lam is not None
+                       else (lambda k, d=None: d))
+            ind = _lookup(ind_by, key) or {}
+            rk = _lookup(rank_by, key)
+            counted = bool(ind.get("events_counted"))
+            rows.append({
+                "feeder_key": key,
+                "km": round(t.length_m / 1000.0, 2),
+                "transformers": len(t.transformer_ids),
+                "loads": len(t.load_ids),
+                "lambda_per_year": float(lam_get("lambda_per_year", 0.0) or 0.0),
+                "lambda_reducible": float(lam_get(
+                    "lambda_reducible_per_year", 0.0) or 0.0),
+                "r_minutes": float(lam_get("r_minutes", 0.0) or 0.0),
+                "u_hours": float(lam_get("u_hours", 0.0) or 0.0),
+                "saidi": (ind.get("saidi") if counted else None),
+                "saifi": (ind.get("saifi") if counted else None),
+                "caidi": (ind.get("caidi") if counted else None),
+                "asai": (ind.get("asai") if counted else None),
+                "ens_per_year_kwh": (ind.get("ens_kwh_per_year")
+                                     if ind.get("energy_records", counted) and ind.get("exposure_years") else None),
+                "events": ind.get("events_total"),
+                "ens_before_kwh": _lookup(ens_before, key),
+                "exposure_years": ind.get("exposure_years"),
+                "score": (getattr(rk, "score", None) if rk is not None else None),
+                "rank": (getattr(rk, "rank", None) if rk is not None else None),
+            })
+        return rows
+
     # ------------------------------------------------------------------
     def kpis(self) -> dict:
         rec = self.placement.recommendation

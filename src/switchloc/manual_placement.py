@@ -99,16 +99,25 @@ def nearest_node(graph: NetworkGraph, x: float, y: float,
 # ---------------------------------------------------------------------------
 def _ep_tl_of_segments(segs: SegTree, total_load_kw: float,
                        transfer_cap_by_seg: dict[str, float],
+                       barrier_nodes: set[str] | None = None,
                        ) -> tuple[float, float, str]:
     """(EP %, TL %, worst segment) — worst single fault in the tree.
 
-    A fault in segment i sheds its subtree (minus what the ties restore)
-    → shed_i / ΣP = EP contribution of that fault; the worst fault over
-    all segments defines EP; TL uses the restored share of the same
-    worst fault (جدول ۱۴ definition).
+    A fault in segment i sheds its subtree (minus what the ties
+    restore) → shed_i / ΣP = EP contribution of that fault; the worst
+    fault over all segments defines EP (جدول ۱۴).  TL is the maximum
+    over ALL single faults of the restorable share (the same
+    independent maximum the official kernel ``compute_ep_tl`` uses).
+    The islands restored by automation ties are the connected
+    components of the remaining segment tree (cut nodes link the
+    segments they separate) — the same model as جداول ۱۵/۱۴ and the
+    ENS accounting in ``placement/economics.py`` (see
+    ``level1/transfer.py``).
     """
     if total_load_kw <= 0:
         return 0.0, 0.0, ""
+    from .level1.transfer import cut_node_links, islands_with_ties
+
     def _subtree(s):
         out, stack = [], [s]
         while stack:
@@ -123,23 +132,18 @@ def _ep_tl_of_segments(segs: SegTree, total_load_kw: float,
         if lam_proxy <= 0:
             continue
         outage = sum(segs.seg_load[s] for s in _subtree(sid))
-        restored, restored_set = 0.0, set()
-        for k in sorted(_subtree(sid), key=lambda s: -len(_subtree(s))):
-            cap = transfer_cap_by_seg.get(k, 0.0)
-            if cap <= 0 or k == sid:
-                continue
-            behind = [s for s in _subtree(k) if s not in restored_set]
-            bload = sum(segs.seg_load[s] for s in behind)
-            take = bload if cap == float("inf") else min(bload, cap)
-            take = max(0.0, min(take, outage - restored))
-            if take <= 0:
-                continue
-            restored += take
-            restored_set.update(behind)
+        members = [s for s in _subtree(sid) if s != sid]
+        member_load = {s: segs.seg_load.get(s, 0.0) for s in members}
+        tie_caps = {s: transfer_cap_by_seg.get(s, 0.0) for s in members}
+        links = cut_node_links(segs.node_seg, segs.node_seg_below,
+                               barrier_nodes)
+        restored = islands_with_ties(members, member_load, tie_caps, links)
         ep_i = 100.0 * (outage - restored) / total_load_kw
         tl_i = 100.0 * restored / total_load_kw
         if ep_i > ep or (ep_i == ep and tl_i > tl):
-            ep, tl, worst = ep_i, tl_i, sid
+            ep, worst = ep_i, sid
+        if tl_i > tl:
+            tl = tl_i
     return ep, tl, worst
 
 
@@ -361,13 +365,16 @@ def evaluate_manual_placement(graph: NetworkGraph, net: CanonicalNetwork,
         ev.verdict_fa = "ارزیابی انجام نشد — ورودی مهندسی ناقص است؛ خروجی صفر تولید نشد."
         return ev
 
+    from .level1.transfer import barrier_cut_nodes
+    barriers = barrier_cut_nodes(graph, net, ties)
+
     def measure(cuts: set) -> dict:
         segs = build_seg_tree(graph, trace, tree, cuts, node_load, edge_set)
         tmap = transfers_for(segs)
         ens, _rows = ens_of_configuration(
             segs, lam, r_min, st.cost.switching_minutes, tmap,
-            total_length_m=total_len)
-        ep, tl, worst = _ep_tl_of_segments(segs, total_load, tmap)
+            total_length_m=total_len, barrier_nodes=barriers)
+        ep, tl, worst = _ep_tl_of_segments(segs, total_load, tmap, barriers)
         return {"ens_kwh": round(ens, 2),
                 "ep_percent": round(ep, 2), "tl_percent": round(tl, 2),
                 "worst_segment": worst,

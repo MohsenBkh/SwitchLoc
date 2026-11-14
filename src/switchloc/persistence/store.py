@@ -461,7 +461,7 @@ class ProjectStore:
         import json as _json
         if outage_run_id is None:
             row = self.conn.execute(
-                "SELECT id FROM outage_run ORDER BY created_at DESC LIMIT 1"
+                "SELECT id FROM outage_run ORDER BY created_at DESC, rowid DESC LIMIT 1"
             ).fetchone()
             if row is None:
                 raise ValueError("هیچ اجرای تحلیل خاموشی ذخیره نشده است.")

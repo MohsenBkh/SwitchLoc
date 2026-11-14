@@ -119,7 +119,8 @@ def _cell_fa(cell, text: str, bold: bool = False, size: float = 9) -> None:
 
 # ---------------------------------------------------------------------------
 def export_docx(doc_content: ReportDoc, path: str,
-                map_png: str | None = None) -> str:
+                map_png: str | None = None,
+                charts_png: str | None = None) -> str:
     """Write the Word report and return the path."""
     doc = Document()
     sec = doc.sections[0]
@@ -207,6 +208,17 @@ def export_docx(doc_content: ReportDoc, path: str,
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.add_run().add_picture(map_png, width=Cm(26.5))
+
+    # ---------------- index charts -----------------------------------------
+    if charts_png and Path(charts_png).exists():
+        _fa_para(doc, "نمودار شاخص‌های ارزیابی فیدرها", size=15, bold=True,
+                 align=WD_ALIGN_PARAGRAPH.RIGHT, color=_NAVY)
+        _fa_para(doc, "SAIDI، SAIFI، ENS، λ، r و U هر فیدر؛ همین اعداد در "
+                      "جدول «شاخص‌های ارزیابی فیدرها» و برگهٔ «شاخص‌های "
+                      "فیدرها» در فایل Excel آمده‌اند.", size=10)
+        cp = doc.add_paragraph()
+        cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cp.add_run().add_picture(charts_png, width=Cm(17.0))
 
     # ---------------- footer note -----------------------------------------
     _fa_para(doc, doc_content.footer, size=9,

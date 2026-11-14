@@ -16,12 +16,19 @@ Computes, on the REAL traced network of Phase 2:
     قابل انتقال) per feeder, via the audited kernel
     `level1.formulas.compute_ep_tl` (anchor V-02: 1800/2500 → 72٪/28٪).
 
-Transfer rule (level-1): a tie restores the subtree behind the zone
-where the automation tie attaches — and only within the backup feeder's
-spare capacity.  Per A-10 «فقط ظرفیت فیدرها ملاک است» no load flow is
-performed.  If the feeder rated capacity is unknown (not in the GIS),
-the capacity check is skipped and an explicit Information issue is
-registered instead of a silent assumption (بند ۱۹).
+Transfer rule (level-1): for a fault in zone i the downstream zones
+(minus zone i itself) form islands — connected components through
+shared boundary nodes; cut nodes whose devices cannot conduct (no NC /
+no automation tie / all NO-manual or out-of-service) separate the
+islands.  Each island is re-energized up to min(island load, Σ Tie
+capacities in the island) — رابطه (۸)/(۱۱), consistent with the
+segment-tree ENS model (``level1/transfer.py``).  Only automation-
+capable ties count, per the official note, and only within the backup
+feeder's spare capacity.  Per A-10 «فقط ظرفیت فیدرها ملاک است» no load
+flow is performed.  If the backup feeder's rated capacity is unknown
+(not in the GIS) the transfer is limited to 0 kW (the conservative
+v1.9.1 policy) and an explicit Information issue is registered instead
+of a silent assumption (بند ۱۹).
 
 Load model (open decision 4 of Phase 3, default policy): real loads are
 absent from the sample GIS → P per zone = Σ transformer capacity_kva
@@ -38,6 +45,7 @@ from ..level1.formulas import EPTLResult, ZoneFaultRow, compute_ep_tl
 from ..topology.graph import NetworkGraph
 from ..topology.tracing import FeederTrace
 from ..topology.zones import SwitchZone, ZoneResult
+from .transfer import barrier_cut_nodes, islands_with_ties, shared_node_links
 
 
 # ---------------------------------------------------------------------------
@@ -220,11 +228,12 @@ def transfer_capacity_kw(tree: ZoneTree, tie, spare_kw_of_feeder: dict[str, floa
                          settings: NMinusOneSettings) -> float:
     """kW this tie can back-feed into ``tree``'s feeder (0 = unusable).
 
-    Level-1 rule (A-10): only the backup feeder's capacity limits the
-    transfer.  Non-automation ties are ignored when
-    ``automation_only_transfer`` (the official جدول ۱۳ note).  When the
-    backup rated capacity is unknown the result is ``inf`` and the
-    caller must surface the data gap (no silent assumption).
+    Only the backup feeder's capacity limits the transfer.
+    Non-automation ties are ignored when ``automation_only_transfer``
+    (the official جدول ۱۳ note).  When the backup rated capacity is
+    unknown (absent from ``spare_kw_of_feeder``) the result is 0.0 —
+    the conservative v1.9.1 policy; the caller surfaces the data gap as
+    an issue instead of assuming an infinite/unlimited transfer.
     """
     if settings.automation_only_transfer and not tie.automation_capable:
         return 0.0
@@ -251,35 +260,31 @@ def spare_capacity_map(trees: dict[str, "ZoneTree"],
 # جدول ۱۵ + جدول ۱۴ for one feeder
 # ---------------------------------------------------------------------------
 def zone_fault_rows(tree: ZoneTree,
-                    tie_transfer_kw: dict[str, float]) -> list[ZoneFaultRow]:
+                    tie_transfer_kw: dict[str, float],
+                    barrier_nodes: set[str] | None = None) -> list[ZoneFaultRow]:
     """One جدول ۱۵ row per zone fault of the feeder.
 
-    tie_transfer_kw: zone id → kW restorable *behind* that zone through
-    an automation tie (already capacity-checked).  For a fault in zone i
-    every descendant zone behind a tie-equipped zone k (k ≠ i, k in
-    subtree(i), deepest first) is restored while its spare capacity and
-    the still-interrupted load last.  Nested ties never double-count:
-    once a subtree is restored, ancestor ties only carry the remainder.
+    tie_transfer_kw: zone id → kW restorable downstream of that zone
+    through an automation tie (already capacity-checked).  For a fault
+    in zone i every downstream zone connected to a backup tie without
+    crossing the isolated fault zone can be back-fed: the islands are
+    the connected components of the downstream zone-adjacency graph
+    (zones sharing a boundary node).  Each island is restored up to
+    min(island load, Σ Tie capacities in that island) — see
+    ``level1/transfer.py`` for the exact semantics.
     """
+    zone_nodes = {z.id: set(z.nodes) for z in tree.zones}
     rows: list[ZoneFaultRow] = []
     for z in tree.zones:
         subtree = tree.subtree_zones(z.id)
         outage_kw = tree.subtree_load_kw(z.id)
-        restored = 0.0
-        restored_zones: set[str] = set()
-        for k in sorted(subtree, key=lambda zz: -tree.zone_depth(zz)):
-            cap = tie_transfer_kw.get(k, 0.0)
-            if cap <= 0 or k == z.id:
-                continue                     # faulted zone stays isolated
-            behind_zones = [zz for zz in tree.subtree_zones(k)
-                            if zz not in restored_zones]
-            behind = sum(tree.load_kw.get(zz, 0.0) for zz in behind_zones)
-            take = behind if cap == float("inf") else min(behind, cap)
-            take = max(0.0, min(take, outage_kw - restored))
-            if take <= 0:
-                continue
-            restored += take
-            restored_zones.update(behind_zones)
+        members = [zz for zz in subtree if zz != z.id]
+        id_to_nodes = {zz: zone_nodes[zz] for zz in members}
+        member_load = {zz: tree.load_kw.get(zz, 0.0) for zz in members}
+        tie_caps = {zz: tie_transfer_kw.get(zz, 0.0) for zz in members}
+        restored = islands_with_ties(members, member_load, tie_caps,
+                                     shared_node_links(id_to_nodes,
+                                                       barrier_nodes))
         rows.append(ZoneFaultRow(zone=z.id, shed_kw=outage_kw - restored,
                                  restorable_kw=restored))
     return rows
@@ -287,9 +292,10 @@ def zone_fault_rows(tree: ZoneTree,
 
 def evaluate_feeder_n1(tree: ZoneTree,
                        tie_transfer_kw: dict[str, float],
+                       barrier_nodes: set[str] | None = None,
                        ) -> tuple[list[ZoneFaultRow], FeederEPTL]:
     """جدول ۱۵ rows + جدول ۱۴ EP/TL of one feeder (anchor V-02 kernel)."""
-    rows = zone_fault_rows(tree, tie_transfer_kw)
+    rows = zone_fault_rows(tree, tie_transfer_kw, barrier_nodes)
     ep = compute_ep_tl(rows, tree.total_load_kw)
     return rows, FeederEPTL(feeder_key=tree.feeder_key, ep=ep,
                             total_load_kw=tree.total_load_kw,
@@ -369,6 +375,9 @@ def run_n_minus_one(graph: NetworkGraph, net: CanonicalNetwork,
                 float("inf") if (prev == float("inf") or cap == float("inf"))
                 else prev + cap)
 
+    # گره‌های مانع (هیچ تجهیزی توان رد نمی‌کند) — جزیره‌ها آن‌جا جدا می‌شوند
+    barriers = barrier_cut_nodes(graph, net, ties)
+
     # ---- جداول ۱۵/۱۴ per feeder ------------------------------------------
     rows15: list[dict] = []
     eptl: list[FeederEPTL] = []
@@ -380,7 +389,7 @@ def run_n_minus_one(graph: NetworkGraph, net: CanonicalNetwork,
                 f"فیدر {key}: شاخص بار صفر است (بدون ترانس دارای ظرفیت)؛ "
                 "از EP/TL و رتبه‌بندی کنار گذاشته شد."))
             continue
-        rows, fe = evaluate_feeder_n1(tree, transfer.get(key, {}))
+        rows, fe = evaluate_feeder_n1(tree, transfer.get(key, {}), barriers)
         eptl.append(fe)
         zone_no_of = {z.id: z.zone_no for z in tree.zones}
         for r in rows:

@@ -157,7 +157,9 @@ class MapCanvasMixin:
                      manual_nodes=None, highlight_point=None,
                      zone_load_kw=None, selected_zone=None,
                      hidden_switch_ids=None, zone_up_mwh=None,
-                     zone_outage_hours=None, manual_tie_pairs=None) -> None:
+                     zone_outage_hours=None, manual_tie_pairs=None,
+                     outage_points=None, sectionalizer_nodes=None,
+                     hidden_outage_ids=None) -> None:
         del rotate                            # rotation removed (feedback)
         previous_renderer = self.map_renderer
         previous_highlight = getattr(self, "_last_highlight_point", None)
@@ -191,6 +193,9 @@ class MapCanvasMixin:
                              zone_up_mwh=zone_up_mwh,
                              zone_outage_hours=zone_outage_hours,
                              manual_tie_pairs=manual_tie_pairs,
+                             outage_points=outage_points,
+                             sectionalizer_nodes=sectionalizer_nodes,
+                             hidden_outage_ids=hidden_outage_ids,
                              zone_label_positions=self._zone_label_positions)
         if not self.fig.get_constrained_layout():
             # the interactive map must use the WHOLE widget: matplotlib's
@@ -643,13 +648,14 @@ def make_map_canvas(parent=None, osm_fetch=None):
     switch affects rendering only; the network graph, zone model and
     engineering calculations are never mutated.
     """
-    from PySide6.QtCore import Qt
+    from PySide6.QtCore import Qt, QTimer
     from PySide6.QtGui import QAction, QIcon, QStandardItem, QStandardItemModel
     from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox,
                                    QHBoxLayout, QLabel, QListWidget,
                                    QListWidgetItem, QPushButton, QSizePolicy,
                                    QVBoxLayout, QWidget, QToolButton, QMenu,
-                                   QTreeWidget, QTreeWidgetItem, QFileDialog)
+                                   QTreeWidget, QTreeWidgetItem, QFileDialog,
+                                   QSplitter, QMessageBox, QScrollArea)
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
     from matplotlib.figure import Figure
 
@@ -702,9 +708,19 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._selected_zone = None
             self._manual_tie_pairs = []
             self._hidden_switch_ids: set[str] = set()
+            # انتخاب صریح کاربر (برای اینکه پیش‌فرض «فیوزها پنهان» انتخاب
+            # دستی او را در بازسازی فهرست از بین نبرد)
+            self._switch_user_shown: set[str] = set()
+            self._switch_user_hidden: set[str] = set()
+            # لایهٔ خاموشی‌های دارای مختصات (درخواست کاربر)
+            self._outage_points: list = []
+            self._hidden_outage_ids: set[str] = set()
+            self._opt_sec_nodes: list = []
+            self.on_outages_changed = None
             self.on_style_request = None
             self.on_zone_selected = None
             self.on_feeders_changed = None
+            self.on_clear_study = None
             self._osm_img = None
             self._osm_extent = None
             self._osm_note = ""
@@ -713,6 +729,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.canvas.on_view_changed = self._set_zoom_label
             self.canvas.on_zone_pick = self._on_zone_picked
 
+            self.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
             root = QHBoxLayout(self)
             root.setContentsMargins(4, 4, 4, 4)
             root.setSpacing(6)
@@ -737,6 +754,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.switch_list.setToolTip(
                 "با برداشتن تیک، فقط نماد همان کلید از نقشه حذف می‌شود؛ "
                 "داده و محاسبات شبکه بدون تغییر باقی می‌ماند.")
+            self._switch_redraw_timer = QTimer(self)
+            self._switch_redraw_timer.setSingleShot(True)
+            self._switch_redraw_timer.timeout.connect(self._apply)
             self.switch_list.itemChanged.connect(self._switch_item_changed)
             sv.addWidget(self.switch_list, 1)
             self.switch_panel = switch_box
@@ -744,14 +764,65 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.btn_switch_panel.setText("Hide panel")
             self.btn_switch_panel.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             self.btn_switch_panel.clicked.connect(self._toggle_switch_panel)
-            root.addWidget(switch_box, 0)
+            left_col_holder = QWidget()
+            left_col = QVBoxLayout(left_col_holder)
+            left_col.setContentsMargins(0, 0, 0, 0)
+            left_col.setSpacing(4)
+            # پنل‌ها در یک QSplitter عمودی می‌آیند تا مرزشان قابل جابه‌جایی باشد
+            self.left_split = QSplitter(Qt.Orientation.Vertical)
+            self.left_split.setChildrenCollapsible(True)
+            self.left_split.addWidget(switch_box)
+
+            # --- لایهٔ خاموشی‌های دارای مختصات --------------------------
+            outage_box = QGroupBox("لایهٔ خاموشی‌ها — دارای مختصات")
+            outage_box.setMinimumWidth(220)
+            outage_box.setMaximumWidth(340)
+            ov = QVBoxLayout(outage_box)
+            self.chk_outages = QCheckBox("نمایش خاموشی‌ها روی نقشه")
+            self.chk_outages.setToolTip(
+                "روشن/خاموش کردن کل لایهٔ خاموشی‌های دارای مختصات؛ "
+                "هر رکورد هم به‌صورت جداگانه قابل روشن/خاموش است.")
+            self.chk_outages.toggled.connect(self._on_outages_master_toggle)
+            ov.addWidget(self.chk_outages)
+            self.outage_count = QLabel("0 خاموشی دارای مختصات")
+            ov.addWidget(self.outage_count)
+            obtn = QHBoxLayout()
+            self.btn_outage_all = QPushButton("نمایش همه")
+            self.btn_outage_none = QPushButton("پنهان کردن همه")
+            self.btn_outage_all.clicked.connect(lambda: self._set_all_outages(True))
+            self.btn_outage_none.clicked.connect(lambda: self._set_all_outages(False))
+            obtn.addWidget(self.btn_outage_all)
+            obtn.addWidget(self.btn_outage_none)
+            ov.addLayout(obtn)
+            self.btn_outage_rank = QPushButton("رتبه‌بندی مکان‌های خاموشی")
+            self.btn_outage_rank.setToolTip(
+                "جدول مکان‌های خاموشی بر اساس تعداد تکرار (درخواست کاربر)")
+            self.btn_outage_rank.clicked.connect(self.show_outage_ranking)
+            ov.addWidget(self.btn_outage_rank)
+            self.outage_list = QTreeWidget()
+            self.outage_list.setHeaderHidden(True)
+            self.outage_list.setToolTip(
+                "هر ردیف یک رخداد خاموشی است؛ برداشتن تیک فقط نمایش همان "
+                "رخداد را حذف می‌کند و در تنظیمات نقشه ذخیره می‌شود.")
+            self.outage_list.itemChanged.connect(self._outage_item_changed)
+            ov.addWidget(self.outage_list, 1)
+            self.left_split.addWidget(outage_box)
+            self.left_split.setSizes([320, 280])
+            left_col.addWidget(self.left_split, 1)
+            self.outage_panel = outage_box
+            self.layer_panel = left_col_holder
 
             map_pane = QWidget()
             lay = QVBoxLayout(map_pane)
             lay.setContentsMargins(0, 0, 0, 0)
             lay.setSpacing(0)
-            strip = QHBoxLayout()
-            strip.setContentsMargins(4, 4, 4, 4)
+            tools = QWidget()
+            tools.setObjectName("MapTools")
+            tools.setStyleSheet("QWidget#MapTools { background: #16324F; } "
+                                "QWidget#MapTools QLabel, QWidget#MapTools QCheckBox { color: #C8D6E5; }")
+            strip = QVBoxLayout(tools)
+            strip.setContentsMargins(8, 8, 8, 8)
+            strip.setSpacing(6)
             strip.addWidget(self.btn_switch_panel)
             strip.addWidget(QLabel("Feeder:"))
             self.feeder = QComboBox()
@@ -773,7 +844,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.feeder.view().pressed.connect(self._toggle_feeder_index)
             self.feeder.setMinimumWidth(150)
             self.feeder.setMaximumWidth(150)
-            strip.addWidget(self.feeder, stretch=0)
+            strip.addWidget(self.feeder)
             strip.addWidget(QLabel("Zone:"))
             self.zone_filter = QComboBox()
             self.zone_filter.setMinimumWidth(180)
@@ -783,9 +854,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
             strip.addWidget(self.zone_filter)
 
             from .icons import icon as _map_icon
-            self.btn_zoom_feeder = QPushButton()
+            self.btn_zoom_feeder = QPushButton("Zoom to feeder")
             self.btn_zoom_feeder.setIcon(_map_icon("crosshair", size=18))
-            self.btn_zoom_feeder.setFixedSize(34, 32)
+            self.btn_zoom_feeder.setMinimumHeight(32)
             self.btn_zoom_feeder.setToolTip("Zoom to feeder")
             self.btn_zoom_feeder.setEnabled(False)
             self.btn_zoom_feeder.clicked.connect(self._zoom_to_feeder)
@@ -800,16 +871,20 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.btn_style.setFixedWidth(120)
             self.btn_style.clicked.connect(self._on_style_clicked)
             strip.addWidget(self.btn_style)
+            self.btn_clear_study = QPushButton("پاک کردن مطالعهٔ EENS")
+            self.btn_clear_study.setToolTip("پاک کردن نتیجهٔ جایابی کلید و علامت‌های آن، با تأیید کاربر")
+            self.btn_clear_study.clicked.connect(
+                lambda: self.on_clear_study() if self.on_clear_study else None)
+            strip.addWidget(self.btn_clear_study)
 
             self.osm = QCheckBox("OSM background")
             self.osm.setFixedWidth(125)
             self.osm.toggled.connect(self._on_osm_toggle)
             strip.addWidget(self.osm)
-            strip.addStretch(1)
 
-            self.btn_region = QPushButton()
+            self.btn_region = QPushButton("Region zoom")
             self.btn_region.setIcon(_map_icon("search", size=18))
-            self.btn_region.setFixedSize(34, 32)
+            self.btn_region.setMinimumHeight(32)
             self.btn_region.setToolTip("Region zoom (magnifier)")
             self.btn_region.setCheckable(True)
             self.btn_region.setToolTip(
@@ -817,9 +892,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.btn_region.toggled.connect(self._on_region_toggle)
             strip.addWidget(self.btn_region)
 
-            self.btn_zoom_in = QPushButton()
-            self.btn_zoom_out = QPushButton()
-            self.btn_fit = QPushButton()
+            self.btn_zoom_in = QPushButton("Zoom in")
+            self.btn_zoom_out = QPushButton("Zoom out")
+            self.btn_fit = QPushButton("Fit view")
             self.btn_zoom_in.clicked.connect(
                 lambda: self.canvas._zoom_center(1.0 / WHEEL_STEP))
             self.btn_zoom_out.clicked.connect(
@@ -829,7 +904,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
                                 (self.btn_zoom_out, "zoom-out", "Zoom out"),
                                 (self.btn_fit, "maximize", "Fit view")):
                 b.setIcon(_map_icon(ico, size=18)); b.setToolTip(tip)
-                b.setFixedSize(34, 32); strip.addWidget(b)
+                b.setMinimumHeight(32); strip.addWidget(b)
             self.zoom_label = QLabel("Zoom: 0 % (1×)")
             self.zoom_label.setMinimumWidth(120)
             self.zoom_label.setAlignment(
@@ -845,23 +920,76 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.zone_info_label.setWordWrap(True)
             self.zone_info_label.setStyleSheet(
                 "padding:3px 6px; color:#37474f; background:#eceff1;")
-            lay.addLayout(strip)
-            lay.addWidget(self.hint_label)
-            lay.addWidget(self.zone_info_label)
+            strip.addWidget(self.hint_label)
+            strip.addWidget(self.zone_info_label)
+            strip.addStretch(1)
+            tool_scroll = QScrollArea()
+            tool_scroll.setWidgetResizable(True)
+            tool_scroll.setWidget(tools)
+            tool_scroll.setFixedWidth(205)
+            root.addWidget(tool_scroll, 0)
+            root.addWidget(left_col_holder, 0)
             lay.addWidget(self.canvas, 1)
             root.addWidget(map_pane, 1)
 
         def _toggle_switch_panel(self):
-            visible = self.switch_panel.isVisible()
-            self.switch_panel.setVisible(not visible)
+            visible = not self.layer_panel.isHidden()
+            self.layer_panel.setVisible(not visible)
             self.btn_switch_panel.setText("Show panel" if visible else "Hide panel")
+
+        def clear_project(self) -> None:
+            """Drop all project-owned render data and interactive selections."""
+            self._renderer = None
+            self._selected_feeders = None
+            self._selected_zone = None
+            self._proposed = self._manual = self._highlight = None
+            self._crs = ""
+            self._zone_load_kw = {}
+            self._zone_up_mwh = {}
+            self._zone_outage_hours = {}
+            self._manual_tie_pairs = []
+            self._opt_sec_nodes = []
+            self._outage_points = []
+            self._hidden_outage_ids = set()
+            self._hidden_switch_ids.clear()
+            self._switch_user_shown.clear()
+            self._switch_user_hidden.clear()
+            self._osm_img = self._osm_extent = None
+            self._osm_note = ""
+            self._osm_tried = False
+            self._feeder_model.blockSignals(True)
+            self._feeder_model.clear()
+            self._feeder_model.blockSignals(False)
+            self.switch_list.blockSignals(True)
+            self.switch_list.clear()
+            self.switch_list.blockSignals(False)
+            self.outage_list.blockSignals(True)
+            self.outage_list.clear()
+            self.outage_list.blockSignals(False)
+            self.zone_filter.blockSignals(True)
+            self.zone_filter.clear()
+            self.zone_filter.blockSignals(False)
+            self.btn_zoom_feeder.setEnabled(False)
+            self.switch_count.setText("")
+            self.zone_info_label.setText("برای مشاهده بار و محدوده، روی لیبل یک زون کلیک کنید.")
+            self._update_feeder_caption()
+            self._rebuild_outage_list()
+            self.canvas.map_renderer = None
+            self.canvas._home = None
+            self.canvas._pan = self.canvas._region = self.canvas._zone_drag = None
+            self.canvas.set_pick_mode(False)
+            self.canvas._zone_label_positions.clear()
+            self.canvas.fig.clf()
+            self.canvas.draw_idle()
 
         def show_network(self, renderer: NetworkMapRenderer,
                          title: str = "", proposed_nodes=None,
                          crs: str = "", manual_nodes=None,
                          highlight_point=None, feeder_filter=None,
                          zone_load_kw=None, zone_up_mwh=None,
-                         zone_outage_hours=None, manual_tie_pairs=None) -> None:
+                         zone_outage_hours=None, manual_tie_pairs=None,
+                         outage_points=None, sectionalizer_nodes=None,
+                         hidden_outage_ids=None) -> None:
             self._renderer = renderer
             if not self.zone_labels.isChecked():
                 self._selected_zone = None
@@ -875,22 +1003,49 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._zone_up_mwh = dict(zone_up_mwh or {})
             self._zone_outage_hours = dict(zone_outage_hours or {})
             self._manual_tie_pairs = list(manual_tie_pairs or [])
+            self._opt_sec_nodes = list(sectionalizer_nodes or [])
+            if outage_points is not None:
+                self.set_outage_points(outage_points)
+            if hidden_outage_ids is not None:
+                self._hidden_outage_ids = {str(x) for x in hidden_outage_ids}
+            self._sync_outage_checks()
             keys = sorted({t.feeder_key for t in
                            getattr(renderer, "traces", []) if t.feeder_key})
             selected_before = getattr(self, "_selected_feeders", None)
             self._feeder_model.blockSignals(True)
             self._feeder_model.clear()
+            from ...topology.tracing import match_feeders
+
+            def _resolve_selection(raw) -> set:
+                """انتخاب ذخیره‌شده/قبلی را به شناسه‌های فعلی نگاشت می‌کند.
+
+                نسخه‌های قبل فیدرها را با کلید کوتاه («F1») ذخیره می‌کردند؛
+                مقایسهٔ دقیق با شناسهٔ کامل («F1 - MESHKIN») مجموعهٔ خالی
+                می‌ساخت و نقشه هیچ فیدری (و هیچ تجهیزی) نشان نمی‌داد.
+                """
+                out = set()
+                for k in (raw or ()):
+                    out.update(match_feeders(str(k), keys))
+                return out
+
             if selected_before is None:
                 style_visible = getattr(getattr(renderer, "style", None),
                                         "visible_feeders", None)
                 if style_visible is not None:
-                    self._selected_feeders = set(style_visible).intersection(keys)
-                elif isinstance(feeder_filter, str) and feeder_filter in keys:
-                    self._selected_feeders = {feeder_filter}
+                    self._selected_feeders = _resolve_selection(style_visible)
+                    if style_visible and not self._selected_feeders:
+                        # انتخاب ذخیره‌شده به هیچ فیدر فعلی نمی‌خورد →
+                        # همه را نشان بده (نقشهٔ سفید راه‌حل نیست)
+                        self._selected_feeders = set(keys)
+                elif isinstance(feeder_filter, str) and feeder_filter:
+                    resolved = _resolve_selection([feeder_filter])
+                    self._selected_feeders = resolved or set(keys)
                 else:
                     self._selected_feeders = set(keys)
             else:
-                self._selected_feeders = set(selected_before).intersection(keys)
+                self._selected_feeders = _resolve_selection(selected_before)
+                if selected_before and not self._selected_feeders:
+                    self._selected_feeders = set(keys)
             if not keys:
                 # Keep the feeder selector usable before a network is loaded
                 # (and for a valid empty-graph renderer).  This is a display-
@@ -929,6 +1084,20 @@ def make_map_canvas(parent=None, osm_fetch=None):
                     switch_rows.append((sid, f"{fk} | {subtype} | {title_part}"))
             valid_ids = {sid for sid, _ in switch_rows}
             self._hidden_switch_ids.intersection_update(valid_ids)
+            self._switch_user_shown &= valid_ids
+            self._switch_user_hidden &= valid_ids
+            # پیش‌فرض: فیوز کات‌اوت‌ها نمایش داده نمی‌شوند (درخواست کاربر)؛
+            # انتخاب صریح کاربر (روشن‌کردن از همین فهرست) بر پیش‌فرض مقدم است.
+            style_now = getattr(renderer, "style", None)
+            fuses_default_off = not bool(getattr(style_now, "show_fuse_cutouts",
+                                                 False))
+            fuse_ids = {sid for (sid, label) in switch_rows
+                        if label.split(" | ")[1:2] == ["FCT"]} \
+                if fuses_default_off else set()
+            self._hidden_switch_ids = (
+                (self._hidden_switch_ids - self._switch_user_shown)
+                | (fuse_ids - self._switch_user_shown)
+                | self._switch_user_hidden)
             self.switch_list.blockSignals(True)
             self.switch_list.clear()
             groups = {}
@@ -1039,27 +1208,170 @@ def make_map_canvas(parent=None, osm_fetch=None):
                 hidden_switch_ids=self._hidden_switch_ids,
                 zone_up_mwh=self._zone_up_mwh,
                 zone_outage_hours=self._zone_outage_hours,
-                manual_tie_pairs=self._manual_tie_pairs)
+                manual_tie_pairs=self._manual_tie_pairs,
+                outage_points=self._outage_points,
+                sectionalizer_nodes=self._opt_sec_nodes,
+                hidden_outage_ids=self._hidden_outage_ids)
+
+        # ------------------------------------------------------------------
+        # لایهٔ خاموشی‌های دارای مختصات
+        # ------------------------------------------------------------------
+        def set_outage_points(self, points) -> None:
+            """رخدادهای دارای مختصات را در لایهٔ نقشه می‌گذارد.
+
+            ``points``: فهرست دیکشنری با کلیدهای
+            ``id``, ``x``, ``y``, ``label``, ``status``, ``feeder``,
+            ``zone_x``, ``zone_y`` (همه در CRS پروژه).  فهرست خالی
+            یعنی هیچ رخداد دارای مختصاتی وجود ندارد و پنل صریحاً همین
+            را می‌گوید.
+            """
+            self._outage_points = [dict(p) for p in (points or [])]
+            valid = {str(p.get("id", "")) for p in self._outage_points}
+            self._hidden_outage_ids.intersection_update(valid)
+            self._rebuild_outage_list()
+            self._apply()
+
+        def _rebuild_outage_list(self) -> None:
+            self.outage_list.blockSignals(True)
+            self.outage_list.clear()
+            groups = {}
+            for pt in self._outage_points:
+                fk = str(pt.get("feeder", "") or "بدون فیدر")
+                if fk not in groups:
+                    top = QTreeWidgetItem([fk])
+                    top.setFlags(top.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                                 | Qt.ItemFlag.ItemIsAutoTristate)
+                    top.setCheckState(0, Qt.CheckState.Checked)
+                    self.outage_list.addTopLevelItem(top)
+                    groups[fk] = top
+                pid = str(pt.get("id", ""))
+                status_fa = {"confirmed": "تأیید مهندسی",
+                             "rejected": "رد شده",
+                             "pending": "در انتظار"}.get(
+                                 str(pt.get("status", "")), "—")
+                item = QTreeWidgetItem([f"{pt.get('label', pid)} — {status_fa}"])
+                item.setData(0, Qt.ItemDataRole.UserRole, pid)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    0, Qt.CheckState.Unchecked if pid in self._hidden_outage_ids
+                    else Qt.CheckState.Checked)
+                groups[fk].addChild(item)
+            self.outage_list.expandAll()
+            self.outage_list.blockSignals(False)
+            total = len(self._outage_points)
+            self.outage_count.setText(
+                f"{total} خاموشی دارای مختصات | "
+                f"{total - len(self._hidden_outage_ids)} قابل نمایش")
+            visible = (self._renderer is not None
+                       and bool(getattr(self._renderer.style, "show_outages", True)))
+            self.chk_outages.blockSignals(True)
+            self.chk_outages.setChecked(visible)
+            self.chk_outages.blockSignals(False)
+
+        def _sync_outage_checks(self) -> None:
+            self._rebuild_outage_list()
+
+        def _outage_item_changed(self, item, column=0) -> None:
+            pid = item.data(0, Qt.ItemDataRole.UserRole)
+            if pid:
+                if item.checkState(0) == Qt.CheckState.Checked:
+                    self._hidden_outage_ids.discard(str(pid))
+                else:
+                    self._hidden_outage_ids.add(str(pid))
+            else:
+                # حالت «نیمه‌انتخاب» خودکارِ والد (AutoTristate) نباید به
+                # فرزندان تحمیل شود؛ وگرنه خاموش‌کردن یک رخداد کل فیدر را
+                # پنهان می‌کند.
+                state = item.checkState(0)
+                if state == Qt.CheckState.PartiallyChecked:
+                    return
+                for i in range(item.childCount()):
+                    item.child(i).setCheckState(0, state)
+            self._save_hidden_outages()
+            total = len(self._outage_points)
+            self.outage_count.setText(
+                f"{total} خاموشی دارای مختصات | "
+                f"{total - len(self._hidden_outage_ids)} قابل نمایش")
+            self._apply()
+
+        def _save_hidden_outages(self) -> None:
+            if self._renderer is not None and \
+                    self._renderer.style is not None:
+                self._renderer.style.hidden_outage_ids = \
+                    sorted(self._hidden_outage_ids)
+            if self.on_outages_changed is not None:
+                self.on_outages_changed()
+
+        def show_outage_ranking(self) -> None:
+            """جدول رتبه‌بندی مکان‌های خاموشی (درخواست کاربر — بند ۷)."""
+            from .outage_ranking_dialog import show_outage_ranking_dialog
+            points = [p for p in (self._outage_points or [])
+                      if str(p.get("id", "")) not in self._hidden_outage_ids]
+            if not points:
+                QMessageBox.information(
+                    self, "رتبه‌بندی مکان‌های خاموشی",
+                    "هیچ خاموشی دارای مختصات و قابل نمایشی وجود ندارد.")
+                return
+
+            def _focus(x: float, y: float, row: dict) -> None:
+                try:
+                    self.set_highlight_point((x, y))
+                except Exception:                   # noqa: BLE001
+                    pass
+
+            show_outage_ranking_dialog(self, points, on_focus=_focus)
+
+        def _on_outages_master_toggle(self, on: bool) -> None:
+            if self._renderer is not None and self._renderer.style is not None:
+                self._renderer.style.show_outages = bool(on)
+            self._save_hidden_outages()
+            self._apply()
+
+        def _set_all_outages(self, visible: bool) -> None:
+            self.outage_list.blockSignals(True)
+            hidden = set()
+            for i in range(self.outage_list.topLevelItemCount()):
+                parent = self.outage_list.topLevelItem(i)
+                parent.setCheckState(0, Qt.CheckState.Checked if visible
+                                     else Qt.CheckState.Unchecked)
+                for j in range(parent.childCount()):
+                    child = parent.child(j)
+                    child.setCheckState(0, Qt.CheckState.Checked if visible
+                                        else Qt.CheckState.Unchecked)
+                    if not visible:
+                        pid = child.data(0, Qt.ItemDataRole.UserRole)
+                        if pid:
+                            hidden.add(str(pid))
+            self._hidden_outage_ids = hidden
+            self.outage_list.blockSignals(False)
+            if not visible:
+                self.chk_outages.setChecked(True)   # پنهان‌کردن رکوردها، نه لایه
+            self._save_hidden_outages()
+            self._rebuild_outage_list()
+            self._apply()
 
         def _switch_item_changed(self, item, column=0) -> None:
             sid = item.data(0, Qt.ItemDataRole.UserRole)
             if sid:
                 if item.checkState(0) == Qt.CheckState.Checked:
                     self._hidden_switch_ids.discard(sid)
+                    self._switch_user_shown.add(sid)
+                    self._switch_user_hidden.discard(sid)
                 else:
                     self._hidden_switch_ids.add(sid)
+                    self._switch_user_hidden.add(sid)
+                    self._switch_user_shown.discard(sid)
             else:
-                # parent category: apply its state to all children
-                state = item.checkState(0)
-                for i in range(item.childCount()):
-                    child = item.child(i)
-                    child.setCheckState(0, state)
+                # Qt AutoTristate propagates parent changes to children.
+                # Each child updates the state; coalesce all redraws below.
+                return
             total = sum(self.switch_list.topLevelItem(i).childCount()
                         for i in range(self.switch_list.topLevelItemCount()))
             self.switch_count.setText(f"{total} کلید | {total-len(self._hidden_switch_ids)} قابل نمایش")
-            self._apply()
+            self._switch_redraw_timer.start(50)
 
         def _set_all_switches(self, visible: bool) -> None:
+            self._switch_redraw_timer.stop()
             self.switch_list.blockSignals(True)
             hidden = set()
             total = 0
@@ -1071,6 +1383,12 @@ def make_map_canvas(parent=None, osm_fetch=None):
                     child.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
                     if not visible: hidden.add(child.data(0, Qt.ItemDataRole.UserRole))
             self._hidden_switch_ids = hidden
+            self._switch_user_shown = set() if not visible else {
+                child.data(0, Qt.ItemDataRole.UserRole)
+                for i in range(self.switch_list.topLevelItemCount())
+                for child in (self.switch_list.topLevelItem(i).child(j)
+                              for j in range(self.switch_list.topLevelItem(i).childCount()))}
+            self._switch_user_hidden = set() if visible else set(hidden)
             self.switch_list.blockSignals(False)
             self.switch_count.setText(f"{total} کلید | {total-len(hidden)} قابل نمایش")
             self._apply()

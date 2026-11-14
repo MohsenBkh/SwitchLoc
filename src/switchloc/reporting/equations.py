@@ -197,3 +197,99 @@ ALL_EQUATIONS: list[tuple[str, str, str]] = [
      "ΔENS% = 100×(E2 − E1) / E2",
      "معیار پذیرش طرح (نیاز ۱۰)."),
 ]
+
+
+# ---------------------------------------------------------------------------
+# فرمول‌های مطالعهٔ جایابی کلید / EENS (v1.15) — همان‌هایی که موتور اجرا می‌کند
+# ---------------------------------------------------------------------------
+def eq_lambda_segment() -> str:
+    """λ_i = λ_feeder × L_i / ΣL"""
+    return omml(_sub(_r("λ"), _r("i")) + _r("=") + _sub(_r("λ"), _r("fid"))
+                + _r("×") + _frac(_sub(_r("L"), _r("i")), _r("ΣL")))
+
+
+def eq_eens_uniform() -> str:
+    """EENS = Σ_i (λ_i/60)·[ r·P_i + s·min(P_ok,i, C) + r·(P_ok,i − min(…)) ]"""
+    inner = (_frac(_sub(_r("λ"), _r("i")), _r("60")) + _r("·[")
+             + _r("r·") + _sub(_r("P"), _r("i")) + _r("+")
+             + _r("s·min(") + _sub(_r("P"), _r("ok,i")) + _r(",C)+")
+             + _r("r·(") + _sub(_r("P"), _r("ok,i")) + _r("−min(")
+             + _sub(_r("P"), _r("ok,i")) + _r(",C))]"))
+    return omml(_r("EENS=") + _r("Σ") + _sub(_r(""), _r("i")) + _r("(")
+                + inner + _r(")"))
+
+
+def eq_eens_directional() -> str:
+    """EENS = Σ_i (λ_i/60)·[ r·P_i + s·min(P_down,i, C) + r·(P_down,i − min(…)) ]"""
+    inner = (_frac(_sub(_r("λ"), _r("i")), _r("60")) + _r("·[")
+             + _r("r·") + _sub(_r("P"), _r("i")) + _r("+")
+             + _r("s·min(") + _sub(_r("P"), _r("down,i")) + _r(",C)+")
+             + _r("r·(") + _sub(_r("P"), _r("down,i")) + _r("−min(")
+             + _sub(_r("P"), _r("down,i")) + _r(",C))]"))
+    return omml(_r("EENS=") + _r("Σ") + _sub(_r(""), _r("i")) + _r("(")
+                + inner + _r(")"))
+
+
+def eq_restoration_clamp() -> str:
+    """s = min(t_restore, r)"""
+    return omml(_r("s=min(") + _sub(_r("t"), _r("restore")) + _r(",")
+                + _r("r)"))
+
+
+def eq_eens_transient() -> str:
+    """EENS_tr = Σ_i (λ_tr,i/60)·[(ΣP−P_prot)·t_tr + P_prot·(t_rec+(1−p)·t_tr)]"""
+    inner = (_frac(_sub(_r("λ"), _r("tr,i")), _r("60")) + _r("·[(")
+             + _r("ΣP−") + _sub(_r("P"), _r("prot")) + _r(")·")
+             + _sub(_r("t"), _r("tr")) + _r("+") + _sub(_r("P"), _r("prot"))
+             + _r("·(") + _sub(_r("t"), _r("rec")) + _r("+(1−p)·")
+             + _sub(_r("t"), _r("tr")) + _r(")]"))
+    return omml(_r("EENS") + _sub(_r(""), _r("tr")) + _r("=") + _r("Σ")
+                + _sub(_r(""), _r("i")) + _r("(") + inner + _r(")"))
+
+
+def eq_eens_gain() -> str:
+    """ΔEENS% = 100·(EENS_base − EENS_best)/EENS_base"""
+    return omml(_r("ΔEENS%=100×")
+                + _frac(_sub(_r("EENS"), _r("base")) + _r("−")
+                        + _sub(_r("EENS"), _r("best")),
+                        _sub(_r("EENS"), _r("base"))))
+
+
+def eq_outage_lambda_r() -> str:
+    """λ = N_random / سال‌های پوشش ;  r = Σ t_restore / N"""
+    return omml(_r("λ=") + _frac(_sub(_r("N"), _r("random")),
+                                 _sub(_r("Y"), _r("covered")))
+                + _r("  ,  r=") + _frac(_r("Σ") + _sub(_r("t"), _r("restore")),
+                                        _sub(_r("N"), _r("events"))))
+
+
+def _alleens():
+    return [
+        ("نرخ خرابی و زمان تعمیر از ماتریس خاموشی واقعی",
+         eq_outage_lambda_r(),
+         "λ = N_random / Y_covered ,  r = Σt_restore / N_events",
+         "منبع: ماتریس λ/r فاز ۳ (رخدادهای تصادفی همان فیدر)."),
+        ("توزیع λ بین قطعه‌ها متناسب طول",
+         eq_lambda_segment(), "λ_i = λ_fid × L_i / ΣL", ""),
+        ("زمان بازیابی بار سالم (clamp)",
+         eq_restoration_clamp(), "s = min(t_restore, r)",
+         "بار سالم هرگز دیرتر از پایان تعمیر برنمی‌گردد."),
+        ("EENS — مدل یکنواخت (هم‌ارز کد مرجع)",
+         eq_eens_uniform(),
+         "EENS = Σ_i (λ_i/60)·[ r·P_i + s·min(P_ok,i,C) + r·(P_ok,i − min(P_ok,i,C)) ]",
+         "P_ok,i = ΣP − P_i ؛ C = ظرفیت پشتیبان (نامحدود اگر وارد نشود)."),
+        ("EENS — مدل جهت‌دار (فقط پایین‌دست)",
+         eq_eens_directional(),
+         "EENS = Σ_i (λ_i/60)·[ r·P_i + s·min(P_down,i,C) + r·(P_down,i − min(P_down,i,C)) ]",
+         "بار بالادست قطعهٔ معیوب بی‌برق نمی‌شود."),
+        ("EENS خطاهای گذرا (ریکلوزر)",
+         eq_eens_transient(),
+         "EENS_tr = Σ_i (λ_tr,i/60)·[(ΣP−P_prot)·t_tr + P_prot·(t_rec+(1−p)·t_tr)]",
+         "t_rec زمان وصل مجدد و p احتمال موفقیت آن است."),
+        ("کاهش EENS نسبت به حالت پایه",
+         eq_eens_gain(), "ΔEENS% = 100·(EENS_base − EENS_best)/EENS_base", ""),
+    ]
+
+
+#: فرمول‌های مطالعهٔ EENS (عنوان، OMML، متن، یادداشت)
+EENS_EQUATIONS: list[tuple[str, str, str, str]] = _alleens()

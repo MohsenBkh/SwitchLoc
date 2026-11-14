@@ -48,6 +48,7 @@ FA: dict[str, str] = {
     "New project…": "پروژه جدید…",
     "Open project…": "بازکردن پروژه…",
     "Save project": "ذخیره پروژه",
+    "Close project": "بستن پروژه",
     "Save project as…": "ذخیره پروژه با نام جدید…",
     "Import GIS data…": "ورود داده GIS…",
     "Import outage list…": "ورود فهرست خاموشی…",

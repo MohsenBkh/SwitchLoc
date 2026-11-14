@@ -21,7 +21,7 @@ from ..domain.entities import CanonicalNetwork
 from ..domain.enums import SwitchState
 from ..validation.issues import IssueLog, ValidationIssue, SEVERITY_WARNING
 from ..topology.graph import NetworkGraph
-from ..topology.tracing import TracingPolicy, feeder_key
+from ..topology.tracing import TracingPolicy, feeder_id
 
 
 @dataclass
@@ -168,7 +168,7 @@ def evaluate(graph: NetworkGraph, net: CanonicalNetwork,
                 return False
         return True
 
-    seeds = sorted((n, feeder_key(f))
+    seeds = sorted((n, feeder_id(f))
                    for n, f in graph.source_of.items())
     visited_edges: set[str] = set()
     for start, fkey in seeds:

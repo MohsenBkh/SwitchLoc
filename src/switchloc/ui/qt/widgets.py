@@ -98,7 +98,7 @@ def make_explain_label(text: str, parent=None):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QPushButton,
                                    QTextBrowser, QVBoxLayout)
-    btn = QPushButton("ⓘ راهنما")
+    btn = QPushButton("راهنما")
     btn.setFixedHeight(28)
     btn.setMaximumWidth(104)
     btn.setToolTip("برای مشاهده توضیحات و راهنمای این بخش کلیک کنید")
@@ -155,9 +155,126 @@ def make_table_item(text: str, editable: bool = False):
     return it
 
 
-def enable_copy_paste(table, editable: bool = False) -> None:
+def _cell_text(table, i: int, j: int) -> str:
+    """Cell text — cell widgets first (their shown text), else the item."""
+    w = table.cellWidget(i, j)
+    if w is not None:
+        for attr in ("currentText", "text"):
+            fn = getattr(w, attr, None)
+            if callable(fn):
+                try:
+                    v = fn()
+                except Exception:                       # noqa: BLE001
+                    return ""
+                return "" if v is None else str(v)
+        return ""
+    it = table.item(i, j)
+    return it.text() if it is not None else ""
+
+
+def _selected_rows(table) -> list:
+    """Selection → row-wise TSV block.
+
+    Excel-like behaviour: the copy covers the *bounding rectangle* of the
+    selection (cells inside the rectangle that are not part of the
+    selection are emitted as empty cells). Cell-widget columns (e.g.
+    combo boxes) contribute their shown text.
+    """
+    rng = table.selectedRanges()
+    if not rng:
+        i, j = table.currentRow(), table.currentColumn()
+        if 0 <= i < table.rowCount() and 0 <= j < table.columnCount():
+            return [[_cell_text(table, i, j)]]
+        return []
+    r0, r1 = min(r.topRow() for r in rng), max(r.bottomRow() for r in rng)
+    c0, c1 = (min(r.leftColumn() for r in rng),
+              max(r.rightColumn() for r in rng))
+    covered = set()
+    for r in rng:
+        for i in range(r.topRow(), r.bottomRow() + 1):
+            for j in range(r.leftColumn(), r.rightColumn() + 1):
+                covered.add((i, j))
+    out = []
+    for i in range(r0, r1 + 1):
+        row = []
+        for j in range(c0, c1 + 1):
+            row.append(_cell_text(table, i, j) if (i, j) in covered else "")
+        out.append(row)
+    return out
+
+
+def _paste_into_cell(table, i: int, j: int, val: str) -> bool:
+    """Paste one cell: combo → closest match (text/data), editable item →
+    set text. Returns True when the cell accepted the value."""
+    from PySide6.QtCore import Qt
+    w = table.cellWidget(i, j)
+    if w is not None:
+        if hasattr(w, "findText") and callable(getattr(w, "findText")):
+            needle = str(val).strip()
+            idx = w.findText(needle)   # تطبیق دقیق Qt (حساس به حروف)
+            # — اگر پیدا نشد، حلقه‌های بعدی تطبیق بدون‌حساس به حروف و
+            # سپس تطبیق زیررشته‌ای را انجام می‌دهند
+            if idx < 0:
+                low = needle.casefold()
+                for k in range(w.count()):
+                    if w.itemText(k).strip().casefold() == low:
+                        idx = k
+                        break
+            if idx < 0 and low:
+                for k in range(w.count()):
+                    if low in w.itemText(k).strip().casefold():
+                        idx = k
+                        break
+            if idx < 0 and hasattr(w, "findData"):
+                idx = w.findData(needle)
+            if idx >= 0:
+                w.setCurrentIndex(idx)
+                return True
+            return False
+        line = getattr(w, "lineEdit", None)
+        if line is not None and callable(getattr(line, "setText", None)):
+            line.setText(str(val))
+            return True
+        return False
+    it = table.item(i, j)
+    if it is not None and bool(it.flags() & Qt.ItemFlag.ItemIsEditable):
+        it.setText(str(val))
+        return True
+    return False
+
+
+def _paste_rows(table, rows: list) -> tuple[int, int]:
+    """Paste TSV rows starting at the current cell (bounds-clipped).
+
+    Returns (pasted, skipped) cell counts so the caller can report
+    read-only/unmatched cells honestly."""
+    pasted = skipped = 0
+    if not rows:
+        return (0, 0)
+    i0 = max(0, table.currentRow())
+    j0 = max(0, table.currentColumn())
+    for di, row in enumerate(rows):
+        i = i0 + di
+        if i >= table.rowCount():
+            break
+        for dj, val in enumerate(row):
+            j = j0 + dj
+            if j >= table.columnCount():
+                break
+            if _paste_into_cell(table, i, j, val):
+                pasted += 1
+            else:
+                skipped += 1
+    return (pasted, skipped)
+
+
+def enable_copy_paste(table, editable: bool = False,
+                      on_paste=None) -> None:
     """Ctrl+C copies the selection as TSV; Ctrl+V pastes into editable
-    cells from the current cell — applied to ALL tables (user request)."""
+    cells from the current cell — applied to ALL tables (user request).
+
+    Cell-widget columns (combo boxes etc.) copy/paste their shown text.
+    When ``on_paste(pasted, skipped)`` is given it is called after a paste."""
     from PySide6.QtCore import QEvent, QObject
     from PySide6.QtGui import QGuiApplication, QKeySequence
 
@@ -175,55 +292,158 @@ def enable_copy_paste(table, editable: bool = False) -> None:
                     QGuiApplication.clipboard().setText(
                         rows_to_tsv(sel))
                 return True
+            if ev.matches(QKeySequence.StandardKey.SelectAll):
+                obj.selectAll()
+                return True
             if editable and ev.matches(QKeySequence.StandardKey.Paste):
                 txt = QGuiApplication.clipboard().text()
-                _paste_rows(obj, tsv_to_rows(txt))
+                pasted, skipped = _paste_rows(obj, tsv_to_rows(txt))
+                if callable(on_paste):
+                    on_paste(pasted, skipped)
                 return True
             return False
 
+    previous = getattr(table, "_sw_copy_filter", None)
+    if previous is not None:
+        table.removeEventFilter(previous)
     table._sw_copy_filter = _Filter(table)     # keep a reference alive
     table.installEventFilter(table._sw_copy_filter)
 
-
-def _selected_rows(table) -> list:
-    """Selected cells → row-wise values (a full row = one TSV row)."""
-    rng = table.selectedRanges()
-    if not rng:
-        if table.currentItem() is not None:
-            return [[table.currentItem().text()]]
-        return []
-    out = []
-    for r in rng:
-        for i in range(r.topRow(), r.bottomRow() + 1):
-            row = []
-            for j in range(r.leftColumn(), r.rightColumn() + 1):
-                it = table.item(i, j)
-                row.append(it.text() if it else "")
-            out.append(row)
-    return out
-
-
-def _paste_rows(table, rows: list) -> None:
-    """Paste TSV rows starting at the current cell (bounds-clipped)."""
-    if not rows:
-        return
     from PySide6.QtCore import Qt
-    editable_flag = Qt.ItemFlag.ItemIsEditable
-    i0 = max(0, table.currentRow())
-    j0 = max(0, table.currentColumn())
-    for di, row in enumerate(rows):
-        i = i0 + di
-        if i >= table.rowCount():
-            break
-        for dj, val in enumerate(row):
-            j = j0 + dj
-            if j >= table.columnCount():
-                break
-            it = table.item(i, j)
-            if it is None:
-                continue
-            if bool(it.flags() & editable_flag):
-                it.setText(str(val))
+    from PySide6.QtWidgets import QMenu
+    table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    if not getattr(table, "_sw_context_connected", False):
+        def context_menu(pos):
+            menu = QMenu(table)
+            copy = menu.addAction("کپی")
+            paste = menu.addAction("چسباندن")
+            paste.setEnabled(bool(table.property("sw_paste_enabled")))
+            menu.addSeparator()
+            select = menu.addAction("انتخاب همه")
+            chosen = menu.exec(table.viewport().mapToGlobal(pos))
+            if chosen is copy:
+                QGuiApplication.clipboard().setText(rows_to_tsv(_selected_rows(table)))
+            elif chosen is paste:
+                result = _paste_rows(table, tsv_to_rows(QGuiApplication.clipboard().text()))
+                callback = getattr(table, "_sw_paste_callback", None)
+                if callable(callback):
+                    callback(*result)
+            elif chosen is select:
+                table.selectAll()
+        table.customContextMenuRequested.connect(context_menu)
+        table._sw_context_connected = True
+    table.setProperty("sw_paste_enabled", editable)
+    table._sw_paste_callback = on_paste
+
+
+def _select_line(table, is_column: bool, idx: int,
+                 modifiers) -> None:
+    """Header click → select the whole column/row (Excel-like).
+
+    * plain click: select only that line
+    * Ctrl+click: toggle that line in the selection
+    * Shift+click: range from the last anchor (stored on the table)
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtCore import QItemSelection, QItemSelectionModel
+
+    control = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+    shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+    select = table.selectColumn if is_column else table.selectRow
+    anchor_attr = "_sw_col_anchor" if is_column else "_sw_row_anchor"
+    anchor = getattr(table, anchor_attr, idx)
+    model = table.selectionModel()
+
+    def _items_selected(line: int) -> bool:
+        if is_column:
+            idx_sel = QItemSelection(table.model().index(0, line),
+                                     table.model().index(table.rowCount() - 1,
+                                                         line))
+        else:
+            idx_sel = QItemSelection(table.model().index(line, 0),
+                                     table.model().index(line,
+                                                         table.columnCount() - 1))
+        try:
+            return all(model.isSelected(i) for i in idx_sel.indexes())
+        except Exception:                              # noqa: BLE001
+            return False
+
+    if shift:
+        lo, hi = sorted((anchor, idx))
+        table.clearSelection()
+        for n in range(lo, hi + 1):
+            select(n)
+        return
+    if control:
+        top_left = (table.model().index(0, idx) if is_column
+                    else table.model().index(idx, 0))
+        bot_right = (table.model().index(table.rowCount() - 1, idx)
+                     if is_column
+                     else table.model().index(idx, table.columnCount() - 1))
+        sel = QItemSelection(top_left, bot_right)
+        if _items_selected(idx):
+            model.select(sel, QItemSelectionModel.SelectionFlag.Deselect)
+        else:
+            model.select(sel, QItemSelectionModel.SelectionFlag.Select)
+        setattr(table, anchor_attr, idx)
+        return
+    table.clearSelection()
+    select(idx)
+    setattr(table, anchor_attr, idx)
+
+
+def make_excel_like(table, *, paste: bool = True,
+                    header_select: bool = True,
+                    on_paste=None) -> None:
+    """Make a review/result table behave like an Excel grid (user request):
+
+    * extended range selection (click, Shift=range, Ctrl=toggle)
+    * clicking a ROW or COLUMN header selects the entire line
+      (Shift extends from the anchor, Ctrl toggles)
+    * Ctrl+C / Ctrl+Ins copy the selection as TSV (Excel round-trip;
+      combo-box columns contribute their shown text)
+    * Ctrl+V / Shift+Ins paste TSV from the current cell
+      (combo cells match by text/data; read-only cells are skipped and
+      reported via ``on_paste(pasted, skipped)``)
+    * Ctrl+A select all; Ctrl+Space = select column; Shift+Space = row
+
+    Sorting is intentionally NOT enabled — callers rely on stable row
+    order (e.g. review dialogs whose rows map 1:1 to source records).
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeySequence, QShortcut
+    from PySide6.QtWidgets import (QAbstractItemView, QApplication)
+
+    table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+    table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    enable_copy_paste(table, editable=paste, on_paste=on_paste)
+
+    if header_select:
+        h = table.horizontalHeader()
+        v = table.verticalHeader()
+        h.setSectionsClickable(True)
+        v.setSectionsClickable(True)
+        h.sectionPressed.connect(
+            lambda idx: _select_line(table, True, idx,
+                                     QApplication.keyboardModifiers()))
+        v.sectionPressed.connect(
+            lambda idx: _select_line(table, False, idx,
+                                     QApplication.keyboardModifiers()))
+
+    def _space(is_column: bool):
+        idx = (table.currentColumn() if is_column else table.currentRow())
+        if idx >= 0:
+            select = (table.selectColumn if is_column else table.selectRow)
+            table.clearSelection()
+            select(idx)
+
+    col_sc = QShortcut(QKeySequence(
+        Qt.KeyboardModifier.ControlModifier | Qt.Key.Key_Space), table)
+    col_sc.activated.connect(lambda: _space(True))
+    row_sc = QShortcut(QKeySequence(
+        Qt.KeyboardModifier.ShiftModifier | Qt.Key.Key_Space), table)
+    row_sc.activated.connect(lambda: _space(False))
+    table._sw_space_shortcuts = (col_sc, row_sc)
 
 
 def fill_table(table, headers: list, rows: list,

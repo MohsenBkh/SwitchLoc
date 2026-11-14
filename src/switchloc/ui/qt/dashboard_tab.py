@@ -66,6 +66,36 @@ def draw_charts(fig, dash: dict) -> None:
                         wspace=0.25)
 
 
+def _build_chart_section():
+    """بخش نمودارها → (ویجت، {key: نمودار})؛ ایمپورت Qt تنبل است."""
+    from PySide6.QtWidgets import QGridLayout, QLabel, QVBoxLayout, QWidget
+    from .charts import BarChartWidget, CHART_METRICS
+
+    def build() -> tuple:
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+        head = QLabel("<b>نمودار شاخص‌های ارزیابی فیدرها</b> — SAIDI، SAIFI، "
+                      "CAIDI، ASAI، ENS/EENS، λ، r، U، بار، ظرفیت، طول و "
+                      "امتیاز رتبه‌بندی (هر میله یک فیدر)")
+        head.setWordWrap(True)
+        v.addWidget(head)
+        grid_holder = QWidget()
+        grid = QGridLayout(grid_holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(8)
+        charts = {}
+        for i, (key, title, unit, _scale) in enumerate(CHART_METRICS):
+            ch = BarChartWidget(title=title, unit=unit)
+            charts[key] = ch
+            grid.addWidget(ch, i // 2, i % 2)
+        v.addWidget(grid_holder)
+        return box, charts
+
+    return build
+
+
 def _fmt(v, spec: str = ":g") -> str:
     if v is None:
         return "—"
@@ -85,7 +115,7 @@ def make_dashboard_tab(parent=None):
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import (QAbstractItemView, QGridLayout,
                                    QHBoxLayout, QLabel, QScrollArea,
-                                   QTableWidget, QTableWidgetItem,
+                                   QTableWidget, QTableWidgetItem, QPushButton, QFileDialog, QMessageBox,
                                    QTabWidget, QVBoxLayout, QWidget)
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
     from matplotlib.figure import Figure
@@ -190,6 +220,11 @@ def make_dashboard_tab(parent=None):
             lay.setSpacing(6)
             lay.addLayout(grid)
             lay.addWidget(self.canvas)
+            self.chart_box, self.charts = _build_chart_section()()
+            lay.addWidget(self.chart_box)
+            self.btn_export_indices = QPushButton("خروجی اکسل شاخص‌های فیدرها…")
+            self.btn_export_indices.clicked.connect(self._export_indices)
+            lay.addWidget(self.btn_export_indices)
             lay.addWidget(QLabel("<b>Feeder matrix — trace, λ/r, EP/TL, "
                                  "ENS, rank, selected scheme</b>"))
             lay.addWidget(self.feeder_table, 2)
@@ -219,6 +254,8 @@ def make_dashboard_tab(parent=None):
         # -- public ------------------------------------------------------
         def show_dashboard(self, dash: dict) -> None:
             """Render one `build_dashboard()` payload."""
+            self._dashboard = dash
+            self.btn_export_indices.setEnabled(bool(dash.get("feeders")))
             k = dash.get("kpis", {})
             self.cards["feeders"].setText(str(k.get("feeders", 0)))
             self.cards["zones"].setText(str(k.get("zones", 0)))
@@ -235,13 +272,37 @@ def make_dashboard_tab(parent=None):
             draw_charts(self.fig, dash)
             self.canvas.draw_idle()
 
+            self._fill_charts(dash)
             self._fill_feeder_table(dash.get("feeders") or [])
             self._fill_recon_table(dash.get("reconciliation") or [])
             self._fill_zone_table(dash.get("zones") or [])
             self._fill_econ_table(dash.get("economics") or [])
             self._fill_notes(dash)
 
+        def _export_indices(self):
+            path, _ = QFileDialog.getSaveFileName(
+                self, "ذخیره شاخص‌های فیدرها", "feeder_indices.xlsx", "Excel (*.xlsx)")
+            if not path:
+                return
+            if not path.lower().endswith(".xlsx"):
+                path += ".xlsx"
+            try:
+                from ...reporting.workbook import export_dashboard_feeder_indices
+                export_dashboard_feeder_indices(self._dashboard, path)
+            except Exception as exc:
+                QMessageBox.warning(self, "خطا در خروجی اکسل", str(exc))
+
         # -- internals -----------------------------------------------------
+        def _fill_charts(self, dash: dict) -> None:
+            """همهٔ شاخص‌های ارزیابی فیدرها به‌صورت نمودار ستونی."""
+            charts = getattr(self, "charts", None)
+            if not charts:
+                return
+            from .charts import chart_items
+            rows = dash.get("feeders") or []
+            for key, chart in charts.items():
+                chart.set_data(chart_items(rows, key))
+
         def _fill_feeder_table(self, rows: list) -> None:
             from ..qt.widgets import fill_table
             headers = ["Feeder", "Nodes", "Edges", "km", "TR (مسیر تغذیه)",
@@ -386,6 +447,23 @@ def make_dashboard_tab(parent=None):
                     f"years {', '.join(map(str, o.get('years') or []))}.")
                 if cls:
                     lines.append(f"Classes — {cls}")
+                si = o.get("service_indices") or {}
+                if si.get("has_result"):
+                    per = "، ".join(
+                        f"{f['feeder_key']}: SAIFI {f['saifi']:.2f} / "
+                        f"SAIDI {f['saidi']:,.0f} دقیقه"
+                        for f in (si.get("feeders") or [])
+                        if f.get("events_counted"))
+                    lines.append(
+                        "<b>SAIDI/SAIFI (شاخص پیوستگی):</b> "
+                        f"نظام SAIFI <b>{si.get('saifi', 0):.2f}</b> قطع/سال · "
+                        f"SAIDI <b>{si.get('saidi', 0):,.0f}</b> دقیقه/سال · "
+                        f"CAIDI {si.get('caidi', 0):,.0f} دقیقه · "
+                        f"ASAI {100 * si.get('asai', 1):.4f}%"
+                        + (f"<br/>&nbsp;&nbsp;{per}" if per else "")
+                        + f" <span style='color:#666'>({si.get('aggregation')}"
+                        f"، مبنا {si.get('load_basis')}، انرژی "
+                        f"{str(si.get('energy_unit', '')).upper()})</span>")
             else:
                 lines.append("Outage data: not imported yet — import the "
                              "outage list or the per-feeder files (Data "
