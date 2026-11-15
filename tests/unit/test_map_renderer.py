@@ -158,3 +158,45 @@ def test_zone_callout_respects_user_moved_position():
     assert tuple(label.get_position()) == (250.0, 175.0)
     assert label.xy != label.get_position()  # leader points back to the zone
     plt.close(fig)
+
+
+def test_explicit_gis_feeder_hints_keep_colors_distinct_when_traces_overlap():
+    """یک fallback توپولوژی هم‌پوشان نباید رنگ GIS فیدرها را یکی کند."""
+    from types import SimpleNamespace
+
+    from switchloc.ui.map_renderer import edge_color_of, feeder_palette
+
+    traces = [
+        SimpleNamespace(feeder_key="F1 - SOUTH", edges={"line-1", "line-2"}),
+        SimpleNamespace(feeder_key="F2 - SOUTH", edges={"line-1", "line-2"}),
+    ]
+    graph = SimpleNamespace(
+        _traces=traces,
+        edges={
+            "line-1": SimpleNamespace(feeder_hint="F1 - SOUTH"),
+            "line-2": SimpleNamespace(feeder_hint="F2 - SOUTH"),
+        },
+    )
+    palette = feeder_palette(
+        traces, feeder_hints=(edge.feeder_hint for edge in graph.edges.values()))
+    colors = edge_color_of(graph, palette)
+
+    assert colors["line-1"] == palette["F1 - SOUTH"]
+    assert colors["line-2"] == palette["F2 - SOUTH"]
+    assert colors["line-1"] != colors["line-2"]
+
+
+def test_unseparated_gis_feeder_label_matches_normal_palette_key():
+    from types import SimpleNamespace
+
+    from switchloc.ui.map_renderer import edge_color_of, feeder_palette
+
+    traces = [SimpleNamespace(feeder_key="F8 - SOUTH", edges={"line"})]
+    graph = SimpleNamespace(
+        _traces=traces,
+        edges={"line": SimpleNamespace(feeder_hint="F8SOUTH")},
+    )
+    palette = feeder_palette(traces, feeder_hints=["F8SOUTH"])
+
+    assert list(palette) == ["F8 - SOUTH"]
+    assert edge_color_of(graph, palette)["line"] == palette["F8 - SOUTH"]
