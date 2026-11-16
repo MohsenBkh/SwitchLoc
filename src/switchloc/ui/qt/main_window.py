@@ -1066,7 +1066,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         except Exception as exc:                       # noqa: BLE001
             _log.warning("placement runs of %s not listed: %s", path, exc)
             _has_plc = False
-        btn_exports.setEnabled(_has_plc)
+        btn_exports.setEnabled(_has_plc or bool(state.get("sectionalizer_persisted")))
         s = net.summary()
         import_panel.setPlainText(
             f"Project     : {s.get('project', '')}\n"
@@ -2651,7 +2651,10 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 "No study available. Run placement first, or open a "
                 "project that already contains a placement run.")
             return
-        dlg = make_exports_dialog(win)
+        export_formats = ("xlsx", "docx", "pdf", "gis")
+        if state.get("sectionalizer") or state.get("sectionalizer_persisted"):
+            export_formats += ("eens_json",)
+        dlg = make_exports_dialog(win, formats=export_formats)
         if not dlg.exec():
             return
         formats = dlg.selected() or ("xlsx",)
@@ -2672,6 +2675,28 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         manual = list(state.get("manual_evals") or [])
 
         def work():
+            if formats == ("eens_json",):
+                from ...reporting.eens_report import export_eens_json
+                from ...reporting.service import ExportResult
+                live_eens = state.get("sectionalizer")
+                if live_eens is not None:
+                    payload = live_eens.as_dict()
+                    payload["markdown"] = live_eens.markdown
+                else:
+                    from ...application.switch_placement_service import KV_KEY
+                    from ...persistence.store import ProjectStore
+                    store = ProjectStore(str(db))
+                    try:
+                        payload = store.get_kv(KV_KEY) or {}
+                    finally:
+                        store.close()
+                path = str(Path(out_dir) / "sectionalizer_eens_report.json")
+                exported_path = export_eens_json(payload, path)
+                return ExportResult(
+                    paths={"eens_json": exported_path},
+                    crosscheck={"status": "skipped",
+                                "status_fa": "خروجی مستقل از اجرای تازهٔ جایابی"})
+
             from ...reporting.service import ExportSettings, ReportService
             # نوع مطالعه‌ای که کاربر واقعاً اجرا کرده است: اگر آخرین اجرا
             # «جایابی کلید/EENS» بوده، گزارش نهایی فقط همان مطالعه را
@@ -2973,6 +2998,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
         def done(res) -> None:
             state["sectionalizer"] = res
+            btn_exports.setEnabled(True)
             state["dirty"] = True
             state["sectionalizer_map_nodes"] = _sec_nodes_of(res.study)
             sec_tab.show_result(res)

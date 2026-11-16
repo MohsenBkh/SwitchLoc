@@ -71,6 +71,7 @@ class ExportResult:
         lines = ["خروجی‌های فاز ۵:"]
         label = {"xlsx": "کتاب کار Excel", "docx": "گزارش Word",
                  "pdf": "گزارش PDF", "gis": "خروجی GIS",
+                 "eens_json": "گزارش JSON جایابی EENS",
                  "map": "نقشه PNG"}
         for fmt, p in self.paths.items():
             if isinstance(p, list):
@@ -167,6 +168,16 @@ class ReportService:
                 issues.append(("PHASE5-PDF-SKIP", "Information", str(exc)))
         if "gis" in st.formats:
             paths["gis"] = export_gis(m, str(_out(st.out_dir, "gis")))
+        if "eens_json" in st.formats:
+            if m.has_eens_study:
+                from .eens_report import export_eens_json
+                paths["eens_json"] = export_eens_json(
+                    m.eens_study,
+                    str(_out(st.out_dir, "sectionalizer_eens_report.json")))
+            else:
+                issues.append(("PHASE5-EENS-JSON-SKIP", "Information",
+                               "گزارش JSON جایابی EENS ساخته نشد؛ مطالعهٔ "
+                               "ذخیره‌شده‌ای در پروژه وجود ندارد."))
 
         errors = [i for i in issues if i[1] == "Error"]
         return ExportResult(paths=paths, crosscheck=crosscheck,

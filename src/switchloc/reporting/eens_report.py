@@ -14,6 +14,9 @@
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from .content import Equation, Section, Table
 from .equations import EENS_EQUATIONS
 
@@ -103,6 +106,19 @@ def is_eens_study(study: dict | None) -> bool:
         return False
     st = study.get("study") if isinstance(study, dict) else None
     return bool(st and (st.get("feeders") or st.get("settings")))
+
+
+def export_eens_json(study: dict, path: str) -> str:
+    """ذخیرهٔ payload کامل EENS (از جمله Markdown و دادهٔ ساخت‌یافته) به JSON."""
+    payload = dict(study or {})
+    if not is_eens_study(payload):
+        raise ValueError("مطالعهٔ EENS معتبر برای خروجی JSON موجود نیست.")
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n",
+        encoding="utf-8")
+    return str(target)
 
 
 # ---------------------------------------------------------------------------

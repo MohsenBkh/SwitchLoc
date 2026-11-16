@@ -385,7 +385,7 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
     return dlg
 
 
-def make_exports_dialog(parent, formats=("xlsx", "docx", "pdf", "gis")):  # noqa
+def make_exports_dialog(parent, formats=("xlsx", "docx", "pdf", "gis", "eens_json")):  # noqa
     """Output-format selection dialog (نیاز ۱۲ — انتخاب فرمت خروجی)."""
     from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox,
                                    QHBoxLayout, QLabel, QVBoxLayout)
@@ -395,7 +395,8 @@ def make_exports_dialog(parent, formats=("xlsx", "docx", "pdf", "gis")):  # noqa
     labels = {"xlsx": "Excel study workbook (.xlsx)",
               "docx": "Word report (.docx)",
               "pdf": "PDF report (.pdf — needs optional extras)",
-              "gis": "GIS export (GeoJSON + CSV)"}
+              "gis": "GIS export (GeoJSON + CSV)",
+              "eens_json": "EENS full report (JSON)"}
     boxes = {}
     lay = QVBoxLayout(dlg)
     lay.addWidget(QLabel("خروجی‌های موردنیاز را انتخاب کنید:"))
