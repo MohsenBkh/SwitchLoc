@@ -32,6 +32,7 @@ from .model import StudyModel
 from .pdf_report import PdfUnavailableError, export_pdf
 from .workbook import export_workbook
 from ..logging_setup import get_logger
+from ..task_control import check_cancelled, report_progress
 
 _log = get_logger("reporting")
 
@@ -71,6 +72,7 @@ class ExportResult:
         lines = ["خروجی‌های فاز ۵:"]
         label = {"xlsx": "کتاب کار Excel", "docx": "گزارش Word",
                  "pdf": "گزارش PDF", "gis": "خروجی GIS",
+                 "eens_json": "گزارش JSON جایابی EENS",
                  "map": "نقشه PNG"}
         for fmt, p in self.paths.items():
             if isinstance(p, list):
@@ -91,14 +93,19 @@ class ReportService:
     def run(self, db_path: str | None = None, *, net=None, topo=None,
             placement=None, placement_run_id: str = "") -> ExportResult:
         st = self.settings
+        check_cancelled()
+        report_progress(0, "آماده‌سازی خروجی‌ها")
         issues: list = []
         crosscheck = {"status": "skipped", "status_fa": "— (اجرای در حافظه)"}
 
         if net is None or topo is None or placement is None:
             if not db_path:
                 raise ValueError("یا db_path بدهید یا (net, topo, placement).")
+            check_cancelled()
+            report_progress(10, "بازتولید و کنترل مطالعه")
             db_path, net, topo, placement, placement_run_id = \
                 self._rerun(db_path, issues)
+            check_cancelled()
         else:
             db_path = db_path or ""
 
@@ -130,7 +137,10 @@ class ReportService:
         map_png = None
         if st.make_map:
             try:
+                check_cancelled()
+                report_progress(55, "ترسیم نقشه گزارش")
                 map_png = self._render_map(m, st.out_dir)
+                check_cancelled()
                 if map_png:
                     paths["map"] = map_png
             except Exception as exc:
@@ -149,6 +159,8 @@ class ReportService:
             issues.append(("PHASE5-CHART-FAIL", "Warning",
                            f"ترسیم نمودار شاخص‌ها ناموفق بود: {exc}"))
 
+        report_progress(70, "ساخت فایل‌های گزارش")
+        check_cancelled()
         if "xlsx" in st.formats:
             paths["xlsx"] = export_workbook(
                 m, str(_out(st.out_dir, "SwitchLoc_study.xlsx")))
@@ -167,7 +179,19 @@ class ReportService:
                 issues.append(("PHASE5-PDF-SKIP", "Information", str(exc)))
         if "gis" in st.formats:
             paths["gis"] = export_gis(m, str(_out(st.out_dir, "gis")))
+        if "eens_json" in st.formats:
+            if m.has_eens_study:
+                from .eens_report import export_eens_json
+                paths["eens_json"] = export_eens_json(
+                    m.eens_study,
+                    str(_out(st.out_dir, "sectionalizer_eens_report.json")))
+            else:
+                issues.append(("PHASE5-EENS-JSON-SKIP", "Information",
+                               "گزارش JSON جایابی EENS ساخته نشد؛ مطالعهٔ "
+                               "ذخیره‌شده‌ای در پروژه وجود ندارد."))
 
+        check_cancelled()
+        report_progress(100, "گزارش‌ها آماده‌اند")
         errors = [i for i in issues if i[1] == "Error"]
         return ExportResult(paths=paths, crosscheck=crosscheck,
                             issues=issues,

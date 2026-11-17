@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Iterable
 
 from ..geography.places import PlaceGazetteer, PlaceMatch
+from ..task_control import check_cancelled
 
 #: نام متغیر محیطی برای مسیر جایگزین بانک آفلاین مکان‌ها
 GAZETTEER_ENV_VAR = "SWITCHLOC_GAZETTEER"
@@ -98,7 +99,9 @@ def suggest_event_places(records: Iterable, gazetteer: PlaceGazetteer,
         if text not in cache:
             cache[text] = gazetteer.search(text, limit=limit)
         return cache[text]
-    for rec in records:
+    for record_index, rec in enumerate(records):
+        if record_index % 32 == 0:
+            check_cancelled()
         # The outage workbook's «نام پست» is the primary location field
         # (often a village, farm, BTS site or other named place). Search it
         # first; notes/device are supplementary context, not substitutes.
@@ -171,9 +174,13 @@ def build_zone_geometries(graph, zones) -> dict[str, ZoneGeometry]:
     out: dict[str, ZoneGeometry] = {}
     if zones is None or graph is None:
         return out
-    for z in getattr(zones, "zones", None) or []:
+    for zone_index, z in enumerate(getattr(zones, "zones", None) or []):
+        if zone_index % 16 == 0:
+            check_cancelled()
         pts = []
-        for nid in getattr(z, "nodes", ()) or ():
+        for node_index, nid in enumerate(getattr(z, "nodes", ()) or ()):
+            if node_index % 128 == 0:
+                check_cancelled()
             node = getattr(graph, "nodes", {}).get(nid)
             coord = getattr(node, "coord", None) if node is not None else None
             if coord is not None:
@@ -242,7 +249,9 @@ def nearest_zone(geometries: dict[str, ZoneGeometry], point,
     if not pool:
         pool = list(geometries.values())          # جزیره/برچسب دیگر
     best, best_d = None, math.inf
-    for g in sorted(pool, key=lambda z: (z.feeder, z.zone_no, z.zone_id)):
+    for index, g in enumerate(sorted(pool, key=lambda z: (z.feeder, z.zone_no, z.zone_id))):
+        if index % 64 == 0:
+            check_cancelled()
         if g.bbox is None:
             continue
         lb = _bbox_lower_bound(g.bbox, point)
@@ -426,7 +435,9 @@ def plan_review_rows(records: Iterable, *,
     rows: list[ReviewRowPlan] = []
     pick_cache = {}
     options_cache = {}
-    for rec in records:
+    for record_index, rec in enumerate(records):
+        if record_index % 32 == 0:
+            check_cancelled()
         eid = str(getattr(rec, "id", "") or "")
         raw_feeder = str(getattr(rec, "feeder_key", "")
                          or getattr(rec, "feeder_raw", "") or "")
@@ -807,7 +818,9 @@ def outage_heat_counts(points: Iterable[dict], graph, *,
     radius = max(1.0, float(radius_m))
     bounds = (min(p[0] for p in pts), max(p[0] for p in pts),
               min(p[1] for p in pts), max(p[1] for p in pts))
-    for eid, edge in (getattr(graph, "edges", {}) or {}).items():
+    for edge_index, (eid, edge) in enumerate((getattr(graph, "edges", {}) or {}).items()):
+        if edge_index % 16 == 0:
+            check_cancelled()
         if edge_ids is not None and eid not in edge_ids:
             continue
         a = getattr(graph.nodes, "get", lambda *_: None)(edge.a)
@@ -821,8 +834,12 @@ def outage_heat_counts(points: Iterable[dict], graph, *,
                 max(ay, by) + radius < bounds[2] or \
                 min(ay, by) - radius > bounds[3]:
             continue
-        n = sum(1 for px, py in pts
-                if _point_segment_distance(px, py, ax, ay, bx, by) <= radius)
+        n = 0
+        for point_index, (px, py) in enumerate(pts):
+            if point_index % 128 == 0:
+                check_cancelled()
+            if _point_segment_distance(px, py, ax, ay, bx, by) <= radius:
+                n += 1
         if n:
             out[str(eid)] = int(n)
     return out

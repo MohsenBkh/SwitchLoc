@@ -43,6 +43,7 @@ from functools import lru_cache
 
 from ..domain.entities import CanonicalNetwork, SwitchDev
 from ..domain.enums import SwitchFamily, SwitchState
+from ..task_control import check_cancelled
 from ..validation.issues import (IssueLog, ValidationIssue, SEVERITY_ERROR,
                                  SEVERITY_INFO, SEVERITY_WARNING)
 from .graph import NetworkGraph
@@ -267,7 +268,11 @@ class TracingEngine:
             return tr
         tr.nodes.add(start)
         queue = deque([start]) if self.node_passable(start) else deque()
+        visited = 0
         while queue:
+            if visited % 64 == 0:
+                check_cancelled()
+            visited += 1
             node = queue.popleft()
             for nbr, eid in self.graph.neighbors(node):
                 if eid in tr.edges:

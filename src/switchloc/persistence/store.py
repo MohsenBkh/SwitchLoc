@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from functools import wraps
 from pathlib import Path
 
 from ..domain.entities import (Branch, CanonicalNetwork, CRSDefinition,
@@ -18,6 +19,7 @@ from ..domain.entities import (Branch, CanonicalNetwork, CRSDefinition,
 from ..domain.ids import stable_id
 from ..validation.issues import IssueLog, ValidationIssue
 from ..logging_setup import get_logger
+from ..task_control import check_cancelled
 from .schema import MIGRATIONS, SCHEMA_SQL, SCHEMA_VERSION
 
 _log = get_logger("persistence")
@@ -29,6 +31,27 @@ class SchemaTooNewError(RuntimeError):
 
 def _num(v):
     return None if v is None else float(v)
+
+
+def _checkpointed(rows):
+    """Yield rows while remaining cooperatively cancellable."""
+    for index, row in enumerate(rows):
+        if index % 128 == 0:
+            check_cancelled()
+        yield row
+
+
+def _atomic_write(method):
+    """Rollback partial persistence on errors, including a requested Stop."""
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        try:
+            with self.conn:
+                return method(self, *args, **kwargs)
+        except BaseException:
+            self.conn.rollback()
+            raise
+    return wrapped
 
 
 class ProjectStore:
@@ -101,6 +124,16 @@ class ProjectStore:
     # ------------------------------------------------------------------
     def save_network(self, net: CanonicalNetwork, issues: IssueLog,
                      run: StudyRunMeta) -> str:
+        """Persist a network atomically, rolling back if cancelled or failed."""
+        try:
+            with self.conn:
+                return self._save_network(net, issues, run)
+        except BaseException:
+            self.conn.rollback()
+            raise
+
+    def _save_network(self, net: CanonicalNetwork, issues: IssueLog,
+                      run: StudyRunMeta) -> str:
         run_id = run.algo_version + "-" + run.started_at.replace(":", "").replace("-", "")
         import uuid as _u
         run_id = _u.uuid5(_u.NAMESPACE_URL, run_id + "|" + net.project_name +
@@ -115,7 +148,7 @@ class ProjectStore:
              json.dumps(net.summary(), ensure_ascii=False, default=str)))
 
         # entities sorted by id → deterministic file bytes
-        for src in sorted(net.source_records, key=lambda s: s.record_ref + s.layer):
+        for src in _checkpointed(sorted(net.source_records, key=lambda s: s.record_ref + s.layer)):
             c.execute("INSERT OR IGNORE INTO source_record VALUES (?,?,?,?,?,?,?)",
                       (f"{run_id}:{src.layer}:{src.record_ref}", run_id,
                        src.file_path, src.file_sha256, src.layer, src.record_ref,
@@ -124,34 +157,34 @@ class ProjectStore:
                      f"{run_id}:{s.layer}:{s.record_ref}"
                      for s in net.source_records}
 
-        for ent in sorted(net.layer_mappings, key=lambda m: m.layer_name):
+        for ent in _checkpointed(sorted(net.layer_mappings, key=lambda m: m.layer_name)):
             c.execute("INSERT INTO layer_mapping (run_id, slot_key, file_path,"
                       " layer_name, field_map_json, enabled, confirmed_by,"
                       " confirmed_at) VALUES (?,?,?,?,?,?,?,?)",
                       (run_id, ent.slot_key, ent.file_path, ent.layer_name,
                        json.dumps(ent.field_map, ensure_ascii=False),
                        int(ent.enabled), ent.confirmed_by, ent.confirmed_at))
-        for d in sorted(net.crs_definitions, key=lambda d: d.layer):
+        for d in _checkpointed(sorted(net.crs_definitions, key=lambda d: d.layer)):
             c.execute("INSERT INTO crs_definition (run_id, layer, crs_original,"
                       " crs_analysis, epsg, transformed, transform_note)"
                       " VALUES (?,?,?,?,?,?,?)",
                       (run_id, d.layer, d.crs_original, d.crs_analysis,
                        d.epsg, int(d.transformed), d.transform_note))
 
-        for fd in sorted(net.feeders, key=lambda f: f.name):
+        for fd in _checkpointed(sorted(net.feeders, key=lambda f: f.name)):
             c.execute("INSERT OR IGNORE INTO feeder VALUES (?,?,?,?,?)",
                       (fd.id, run_id, fd.name, fd.raw_name, fd.substation_hint))
-        for st in sorted(net.substations, key=lambda s: s.name):
+        for st in _checkpointed(sorted(net.substations, key=lambda s: s.name)):
             c.execute("INSERT OR IGNORE INTO substation VALUES (?,?,?,?)",
                       (st.id, run_id, st.name, st.code))
-        for nd in sorted(net.nodes, key=lambda n: n.id):
+        for nd in _checkpointed(sorted(net.nodes, key=lambda n: n.id)):
             xo, yo = (nd.coord_original or (None, None))[:2] if nd.coord_original else (None, None)
             xs, ys = (nd.coord_snapped or (None, None))[:2] if nd.coord_snapped else (None, None)
             c.execute("INSERT OR IGNORE INTO node VALUES (?,?,?,?,?,?,?,?,?,?)",
                       (nd.id, run_id, nd.kind.value, _num(xo), _num(yo),
                        _num(xs), _num(ys), nd.feeder_name, nd.cluster_key,
                        int(nd.excluded_with_issue)))
-        for br in sorted(net.branches, key=lambda b: b.id):
+        for br in _checkpointed(sorted(net.branches, key=lambda b: b.id)):
             c.execute("INSERT OR REPLACE INTO branch VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (br.id, run_id, br.kind.value, br.node_a or "", br.node_b or "",
                        _num(br.length_registered_m), _num(br.length_geometric_m),
@@ -160,13 +193,13 @@ class ProjectStore:
                        int(br.excluded_with_issue),
                        src_id_of.get((br.source.layer, br.source.record_ref))
                        if br.source else None))
-            for seq, seg in enumerate(br.segments):
+            for seq, seg in enumerate(_checkpointed(br.segments)):
                 c.execute("INSERT INTO branch_segment (run_id, branch_id, seq,"
                           " ax, ay, bx, by, length_m, node_a, node_b)"
                           " VALUES (?,?,?,?,?,?,?,?,?,?)",
                           (run_id, br.id, seq, seg.a[0], seg.a[1],
                            seg.b[0], seg.b[1], seg.length_m, "", ""))
-        for sw in sorted(net.switches, key=lambda s: s.id):
+        for sw in _checkpointed(sorted(net.switches, key=lambda s: s.id)):
             c.execute("INSERT OR REPLACE INTO switch_dev VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (sw.id, run_id, sw.family.value, sw.node_id,
                        sw.switch_type_raw, sw.normally_state,
@@ -175,20 +208,20 @@ class ProjectStore:
                        sw.feeder_name, sw.layer,
                        src_id_of.get((sw.source.layer, sw.source.record_ref))
                        if sw.source else None))
-        for tr in sorted(net.transformers, key=lambda t: t.id):
+        for tr in _checkpointed(sorted(net.transformers, key=lambda t: t.id)):
             c.execute("INSERT OR REPLACE INTO transformer VALUES (?,?,?,?,?,?,?,?)",
                       (tr.id, run_id, tr.node_id, _num(tr.capacity_kva),
                        tr.kind_raw, tr.feeder_name, tr.local_name,
                        src_id_of.get((tr.source.layer, tr.source.record_ref))
                        if tr.source else None))
-        for ld in sorted(net.loads, key=lambda l: l.id):
+        for ld in _checkpointed(sorted(net.loads, key=lambda l: l.id)):
             c.execute("INSERT OR REPLACE INTO load_pt VALUES (?,?,?,?,?,?,?,?,?,?)",
                       (ld.id, run_id, ld.node_id, ld.transformer_id,
                        _num(ld.p_kw), _num(ld.q_kvar), ld.category,
                        _num(ld.priority_weight), ld.data_source,
                        src_id_of.get((ld.source.layer, ld.source.record_ref))
                        if ld.source else None))
-        for isu in issues.items():
+        for isu in _checkpointed(issues.items()):
             c.execute("INSERT OR REPLACE INTO validation_issue VALUES "
                       "(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                       (isu.meta.get("issue_id", ""), run_id, isu.code,
@@ -202,6 +235,7 @@ class ProjectStore:
     # ------------------------------------------------------------------
     def load_network(self, run_id: str | None = None):
         """Rebuild a CanonicalNetwork + issues from the newest/selected run."""
+        check_cancelled()
         cur = self.conn
         if run_id is None:
             row = cur.execute(
@@ -212,23 +246,23 @@ class ProjectStore:
                 raise ValueError("پروژه حاوی هیچ اجرایی نیست.")
         net = CanonicalNetwork()
         issues = IssueLog()
-        for (layer, ref, fp, sha, geo) in cur.execute(
+        for (layer, ref, fp, sha, geo) in _checkpointed(cur.execute(
                 "SELECT layer, record_ref, file_path, file_sha256, geometry_ref"
-                " FROM source_record WHERE run_id=?", (run_id,)):
+                " FROM source_record WHERE run_id=?", (run_id,))):
             net.source_records.append(SourceRecord(fp, sha, layer, ref, geo or ""))
-        for r in cur.execute("SELECT slot_key, file_path, layer_name,"
+        for r in _checkpointed(cur.execute("SELECT slot_key, file_path, layer_name,"
                              " field_map_json, enabled, confirmed_by, confirmed_at"
-                             " FROM layer_mapping WHERE run_id=?", (run_id,)):
+                             " FROM layer_mapping WHERE run_id=?", (run_id,))):
             net.layer_mappings.append(LayerMapping(
                 r[0], r[1], r[2], json.loads(r[3]), bool(r[4]), r[5], r[6]))
-        for r in cur.execute("SELECT layer, crs_original, crs_analysis, epsg,"
+        for r in _checkpointed(cur.execute("SELECT layer, crs_original, crs_analysis, epsg,"
                              " transformed, transform_note FROM crs_definition"
-                             " WHERE run_id=?", (run_id,)):
+                             " WHERE run_id=?", (run_id,))):
             net.crs_definitions.append(CRSDefinition(r[0], r[1], r[2], r[3],
                                                      bool(r[4]), r[5] or ""))
-        for r in cur.execute("SELECT id, kind, x_orig, y_orig, x_snap, y_snap,"
+        for r in _checkpointed(cur.execute("SELECT id, kind, x_orig, y_orig, x_snap, y_snap,"
                              " feeder_name, cluster_key, excluded_with_issue"
-                             " FROM node WHERE run_id=?", (run_id,)):
+                             " FROM node WHERE run_id=?", (run_id,))):
             co = (r[2], r[3]) if r[2] is not None else None
             cs = (r[4], r[5]) if r[4] is not None else None
             net.nodes.append(Node(kind=__import__("switchloc.domain.enums",
@@ -237,10 +271,10 @@ class ProjectStore:
                                   feeder_name=r[6] or "", cluster_key=r[7] or "",
                                   excluded_with_issue=bool(r[8])))
             net.nodes[-1].id = r[0]
-        for r in cur.execute("SELECT id, kind, node_a, node_b, length_registered_m,"
+        for r in _checkpointed(cur.execute("SELECT id, kind, node_a, node_b, length_registered_m,"
                              " length_geometric_m, feeder_name, conductor,"
                              " section_mm2, installation, excluded_with_issue"
-                             " FROM branch WHERE run_id=?", (run_id,)):
+                             " FROM branch WHERE run_id=?", (run_id,))):
             br = Branch(kind=__import__("switchloc.domain.enums",
                                         fromlist=["BranchKind"]).BranchKind(r[1]),
                         node_a=r[2], node_b=r[3], length_registered_m=r[4],
@@ -253,18 +287,20 @@ class ProjectStore:
         # branch segments are REQUIRED by the Phase-2 graph (edge splitting
         # at device vertices); loaded in deterministic (branch, seq) order.
         segs_by_branch: dict[str, list] = {}
-        for (bid, seq, ax, ay, bx, by, lm) in cur.execute(
+        for (bid, seq, ax, ay, bx, by, lm) in _checkpointed(cur.execute(
                 "SELECT branch_id, seq, ax, ay, bx, by, length_m"
                 " FROM branch_segment WHERE run_id=? ORDER BY branch_id, seq",
-                (run_id,)):
+                (run_id,))):
             segs_by_branch.setdefault(bid, []).append(
                 LineSegment(a=(ax, ay), b=(bx, by), length_m=lm or 0.0))
-        for br in net.branches:
+        for index, br in enumerate(net.branches):
+            if index % 128 == 0:
+                check_cancelled()
             br.segments = segs_by_branch.get(br.id, [])
-        for r in cur.execute("SELECT id, family, node_id, switch_type_raw,"
+        for r in _checkpointed(cur.execute("SELECT id, family, node_id, switch_type_raw,"
                              " normally_state, current_state, rating_a,"
                              " remote_controlled, local_name, feeder_name, layer"
-                             " FROM switch_dev WHERE run_id=?", (run_id,)):
+                             " FROM switch_dev WHERE run_id=?", (run_id,))):
             E = __import__("switchloc.domain.enums", fromlist=[
                 "SwitchFamily", "SwitchState", "YesNoUnknown"])
             sw = SwitchDev(family=E.SwitchFamily(r[1]), node_id=r[2],
@@ -275,35 +311,35 @@ class ProjectStore:
                            layer=r[10] or "")
             sw.id = r[0]
             net.switches.append(sw)
-        for r in cur.execute("SELECT id, node_id, capacity_kva, kind_raw,"
+        for r in _checkpointed(cur.execute("SELECT id, node_id, capacity_kva, kind_raw,"
                              " feeder_name, local_name FROM transformer"
-                             " WHERE run_id=?", (run_id,)):
+                             " WHERE run_id=?", (run_id,))):
             tr = Transformer(node_id=r[1], capacity_kva=r[2], kind_raw=r[3] or "",
                              feeder_name=r[4] or "", local_name=r[5] or "")
             tr.id = r[0]
             net.transformers.append(tr)
-        for r in cur.execute("SELECT id, node_id, transformer_id, p_kw, q_kvar,"
+        for r in _checkpointed(cur.execute("SELECT id, node_id, transformer_id, p_kw, q_kvar,"
                              " category, priority_weight, data_source"
-                             " FROM load_pt WHERE run_id=?", (run_id,)):
+                             " FROM load_pt WHERE run_id=?", (run_id,))):
             ld = LoadPt(node_id=r[1], transformer_id=r[2], p_kw=r[3], q_kvar=r[4],
                         category=r[5] or "", priority_weight=r[6],
                         data_source=r[7] or "unassigned")
             ld.id = r[0]
             net.loads.append(ld)
-        for r in cur.execute("SELECT id, name, raw_name, substation_hint"
-                             " FROM feeder WHERE run_id=?", (run_id,)):
+        for r in _checkpointed(cur.execute("SELECT id, name, raw_name, substation_hint"
+                             " FROM feeder WHERE run_id=?", (run_id,))):
             from ..domain.entities import Feeder
             fd = Feeder(name=r[1], raw_name=r[2] or "", substation_hint=r[3] or "")
             fd.id = r[0]
             net.feeders.append(fd)
-        for r in cur.execute("SELECT id, name, code FROM substation WHERE run_id=?",
-                             (run_id,)):
+        for r in _checkpointed(cur.execute("SELECT id, name, code FROM substation WHERE run_id=?",
+                             (run_id,))):
             net.substations.append(Substation(r[1], r[2] or ""))
-        for r in cur.execute("SELECT issue_id, code, severity, message_fa,"
+        for r in _checkpointed(cur.execute("SELECT issue_id, code, severity, message_fa,"
                              " source_file, layer, record_id, field,"
                              " current_value, suggestion_fa, impact_fa, status,"
                              " meta_json FROM validation_issue WHERE run_id=?",
-                             (run_id,)):
+                             (run_id,))):
             isu = ValidationIssue(
                 code=r[1], severity=r[2], message_fa=r[3],
                 source_file=r[4] or "", layer=r[5] or "", record_id=r[6] or "",
@@ -312,6 +348,7 @@ class ProjectStore:
                 meta=json.loads(r[12]) if r[12] else {})
             isu.meta["issue_id"] = r[0]
             issues.add(isu)
+        check_cancelled()
         return net, issues
 
     def runs(self) -> list[dict]:
@@ -326,6 +363,7 @@ class ProjectStore:
     # ------------------------------------------------------------------
     # Phase 2 — topology persistence
     # ------------------------------------------------------------------
+    @_atomic_write
     def save_topology(self, source_run_id: str, zones: list,
                       zone_of_edge: dict, zone_of_node: dict,
                       boundaries: list, traces: list, ties: list,
@@ -350,8 +388,8 @@ class ProjectStore:
                    verdict))
 
         boundary_of_switch = {b.switch_id: b for b in boundaries}
-        for z in sorted(zones, key=lambda z: (z.feeder, z.kind != "head",
-                                              z.zone_no)):
+        for z in _checkpointed(sorted(zones, key=lambda z: (z.feeder, z.kind != "head",
+                                                              z.zone_no))):
             bs = sorted(sid for sid, b in boundary_of_switch.items()
                         if z.id in b.zones)
             c.execute("INSERT OR REPLACE INTO topo_zone VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -359,23 +397,23 @@ class ProjectStore:
                        z.source_node, len(z.nodes), float(z.length_m),
                        len(z.transformer_ids), len(z.load_ids),
                        _json.dumps(bs, ensure_ascii=False)))
-            for nid in sorted(z.nodes):
+            for nid in _checkpointed(sorted(z.nodes)):
                 c.execute("INSERT OR REPLACE INTO topo_zone_node VALUES (?,?,?)",
                           (topo_run_id, z.id, nid))
-            for eid in sorted(z.edges):
+            for eid in _checkpointed(sorted(z.edges)):
                 br_id = eid.rsplit("#", 1)[0]
                 c.execute("INSERT OR REPLACE INTO topo_zone_edge VALUES (?,?,?,?)",
                           (topo_run_id, z.id, eid, br_id))
-        for b in sorted(boundaries, key=lambda b: b.switch_id):
+        for b in _checkpointed(sorted(boundaries, key=lambda b: b.switch_id)):
             c.execute("INSERT OR REPLACE INTO topo_boundary VALUES (?,?,?,?,?,?)",
                       (topo_run_id, b.switch_id, b.node, int(b.open_normal),
                        int(b.branchy),
                        _json.dumps(sorted(b.zones), ensure_ascii=False)))
-        for t in ties:
+        for t in _checkpointed(ties):
             c.execute("INSERT OR REPLACE INTO tie_connection VALUES (?,?,?,?,?,?,?)",
                       (t.id, source_run_id, t.feeder_a, t.feeder_b,
                        t.switch_id, int(t.automation_capable), t.status))
-        for sc in (scenarios or []):
+        for sc in _checkpointed(scenarios or []):
             c.execute("INSERT INTO scenario_log (topo_run_id, name, note,"
                       " actions_json, summary_json, created_at, user)"
                       " VALUES (?,?,?,?,?,?,?)",
@@ -398,6 +436,7 @@ class ProjectStore:
     # ------------------------------------------------------------------
     # Phase 3 — outage / reliability persistence
     # ------------------------------------------------------------------
+    @_atomic_write
     def save_outages(self, records: list, lam: list, settings: dict,
                      user: str, algo_version: str, summary: dict,
                      verdict: str, input_file: str = "",
@@ -422,7 +461,7 @@ class ProjectStore:
                    settings_json,
                    _json.dumps(summary, ensure_ascii=False, default=str),
                    verdict))
-        for r in sorted(records, key=lambda x: (x.sheet, x.row_ref)):
+        for r in _checkpointed(sorted(records, key=lambda x: (x.sheet, x.row_ref))):
             c.execute(
                 "INSERT OR REPLACE INTO outage_event VALUES "
                 "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -433,7 +472,7 @@ class ProjectStore:
                  r.cause_group or None, r.device_raw, r.energy_kwh,
                  r.trip_current_raw or None, r.notes or None,
                  r.outage_class, r.rule_id, r.review_status))
-        for f in lam:
+        for f in _checkpointed(lam):
             c.execute(
                 "INSERT OR REPLACE INTO outage_lambda_r VALUES "
                 "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -560,6 +599,7 @@ class ProjectStore:
     # ------------------------------------------------------------------
     # Phase 4 — placement & ranking
     # ------------------------------------------------------------------
+    @_atomic_write
     def save_placement(self, snapshot: dict, settings: dict, user: str,
                        algo_version: str, source_run_id: str | None = None,
                        topo_run_id: str | None = None,
@@ -593,7 +633,7 @@ class ProjectStore:
             (placement_run_id, created_at, user, algo_version, settings_json,
              summary_json, verdict, source_run_id, topo_run_id,
              outage_run_id))
-        for r in snapshot.get("ranking", []):
+        for r in _checkpointed(snapshot.get("ranking", [])):
             c.execute(
                 "INSERT OR REPLACE INTO placement_rank VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (placement_run_id, r["feeder_key"], r["rank"], r["score"],
@@ -601,13 +641,13 @@ class ProjectStore:
                  _json.dumps(r["weighted"]), r["ties_count"],
                  r["ep_percent"], r["tl_percent"], r["load_priority_sum"],
                  r["lambda_per_year"], r["lambda_reducible"], r["r_minutes"]))
-        for r in snapshot.get("table14_eptl", []):
+        for r in _checkpointed(snapshot.get("table14_eptl", [])):
             c.execute(
                 "INSERT OR REPLACE INTO placement_eptl VALUES (?,?,?,?,?,?,?)",
                 (placement_run_id, r["feeder_key"], r["ep_percent"],
                  r["tl_percent"], r["worst_zone"], r["total_load_kw"],
                  r["zone_count"]))
-        for s in snapshot.get("schemes", []):
+        for s in _checkpointed(snapshot.get("schemes", [])):
             c.execute(
                 "INSERT OR REPLACE INTO placement_scheme VALUES (?,?,?,?,?,?,?,?)",
                 (placement_run_id, s["id"], s["kind"],
@@ -616,7 +656,7 @@ class ProjectStore:
                  _json.dumps(s["relations"], ensure_ascii=False),
                  s["note"], _json.dumps(s.get("extra", {}),
                                         ensure_ascii=False, default=str)))
-        for r in snapshot.get("table18_comparison", []):
+        for r in _checkpointed(snapshot.get("table18_comparison", [])):
             c.execute(
                 "INSERT OR REPLACE INTO placement_compare VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                 (placement_run_id, r["scheme_id"], r["kind"],

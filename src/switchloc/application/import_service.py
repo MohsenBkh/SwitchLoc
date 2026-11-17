@@ -29,12 +29,14 @@ from ..validation.issues import (IssueLog, ValidationIssue, SEVERITY_ERROR,
                                  SEVERITY_INFO)
 from ..validation.qc import QcReport, run_qc
 from .. import APP_NAME, TAV_REFERENCE, __version__
+from ..task_control import check_cancelled, report_progress
 
 
 def sha256_of(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
+            check_cancelled()
             h.update(chunk)
     return h.hexdigest()
 
@@ -73,6 +75,8 @@ class ImportService:
     # ------------------------------------------------------------------
     def run(self, source, confirm_fn=None) -> ImportResult:
         st = self.settings
+        check_cancelled()
+        report_progress(0, "شروع ورود داده‌های GIS")
         issues = IssueLog()
         source = Path(source)
         if not source.exists():
@@ -81,10 +85,20 @@ class ImportService:
         # 1) input hashes (before) — GG-02
         files = sorted([p for p in (source.rglob("*") if source.is_dir()
                                     else [source]) if p.is_file()])
-        hashes = {str(p): sha256_of(p) for p in files}
+        hashes = {}
+        for index, path in enumerate(files):
+            if index % 16 == 0:
+                check_cancelled()
+            hashes[str(path)] = sha256_of(path)
+            if files:
+                report_progress(2 + 8 * (index + 1) / len(files),
+                               f"محاسبهٔ اثرانگشت فایل‌ها: {index + 1}/{len(files)}")
 
         # 2) discover across formats
+        check_cancelled()
         layers, reader_of = discover_all(source, issues)
+        check_cancelled()
+        report_progress(12, "لایه‌ها شناسایی شدند؛ آماده‌سازی خواندن")
         if not layers:
             issues.add(ValidationIssue(
                 code="GIS-NO-LAYERS", severity=SEVERITY_ERROR,
@@ -115,8 +129,12 @@ class ImportService:
         # 4) read every layer
         feats_by_layer: dict[str, list] = {}
         counts: dict[str, int] = {}
-        for li in layers:
+        for layer_index, li in enumerate(layers):
+            check_cancelled()
+            report_progress(15 + 35 * layer_index / max(1, len(layers)),
+                            f"خواندن لایهٔ {li.name}")
             feats = reader_of[li.name].read(li, issues)
+            check_cancelled()
             feats_by_layer[li.name] = feats
             counts[li.name] = li.feature_count if li.feature_count >= 0 else len(feats)
 
@@ -124,7 +142,10 @@ class ImportService:
         crs = CrsService(analysis_epsg=st.analysis_epsg)
         asm = CanonicalAssembler(issues, crs=crs, ctx=AssembleContext(
             snap_tol_m=st.snap_tol_m, orphan_radius_m=st.orphan_radius_m))
+        check_cancelled()
+        report_progress(52, "ساخت شبکهٔ مهندسی و اتصال هندسی")
         net = asm.assemble(layers, feats_by_layer, mapping)
+        check_cancelled()
         net.project_name = st.project_name
         for s in net.source_records:            # carry hashes into traceability
             for path in hashes:
@@ -139,8 +160,14 @@ class ImportService:
         rep = run_qc(net.summary(), issues, st.project_name, counts)
 
         # 7) re-hash (GG-02) — inputs must be untouched
-        after = {str(p): sha256_of(p) for p in files}
+        after = {}
+        for index, path in enumerate(files):
+            if index % 16 == 0:
+                check_cancelled()
+            after[str(path)] = sha256_of(path)
         unchanged = after == hashes
+        check_cancelled()
+        report_progress(90, "اعتبارسنجی ورودی و ذخیرهٔ پروژه")
         if not unchanged:
             issues.add(ValidationIssue(
                 code="GIS-INPUT-MODIFIED", severity=SEVERITY_ERROR,
@@ -151,6 +178,7 @@ class ImportService:
         # 8) persist
         run_id, db_path = None, None
         if st.out_db:
+            check_cancelled()
             store = ProjectStore(st.out_db)
             run_meta = StudyRunMeta(
                 project_name=st.project_name,
@@ -170,5 +198,6 @@ class ImportService:
             store.close()
             db_path = str(st.out_db)
 
+        report_progress(100, "ورود GIS کامل شد")
         return ImportResult(net, issues, rep, suggestions, mapping,
                             run_id, db_path, hashes, unchanged)

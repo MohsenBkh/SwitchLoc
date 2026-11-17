@@ -708,6 +708,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._selected_zone = None
             self._manual_tie_pairs = []
             self._hidden_switch_ids: set[str] = set()
+            self._switch_count_total = 0
             # انتخاب صریح کاربر (برای اینکه پیش‌فرض «فیوزها پنهان» انتخاب
             # دستی او را در بازسازی فهرست از بین نبرد)
             self._switch_user_shown: set[str] = set()
@@ -715,6 +716,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
             # لایهٔ خاموشی‌های دارای مختصات (درخواست کاربر)
             self._outage_points: list = []
             self._hidden_outage_ids: set[str] = set()
+            self._outage_visibility_explicit = False
             self._opt_sec_nodes: list = []
             self.on_outages_changed = None
             self.on_style_request = None
@@ -752,8 +754,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.switch_list = QTreeWidget()
             self.switch_list.setHeaderHidden(True)
             self.switch_list.setToolTip(
-                "با برداشتن تیک، فقط نماد همان کلید از نقشه حذف می‌شود؛ "
-                "داده و محاسبات شبکه بدون تغییر باقی می‌ماند.")
+                "ساختار: نوع کلید ← فیدر ← کلیدهای همان فیدر. با برداشتن "
+                "تیک یک کلید، فقط نماد آن از نقشه حذف می‌شود؛ داده و محاسبات "
+                "شبکه بدون تغییر می‌ماند.")
             self._switch_redraw_timer = QTimer(self)
             self._switch_redraw_timer.setSingleShot(True)
             self._switch_redraw_timer.timeout.connect(self._apply)
@@ -802,9 +805,13 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.outage_list = QTreeWidget()
             self.outage_list.setHeaderHidden(True)
             self.outage_list.setToolTip(
-                "هر ردیف یک رخداد خاموشی است؛ برداشتن تیک فقط نمایش همان "
-                "رخداد را حذف می‌کند و در تنظیمات نقشه ذخیره می‌شود.")
+                "ساختار: فیدر ← وضعیت بازبینی (تأیید مهندسی/در انتظار/ردشده) "
+                "← رخداد. برداشتن تیک فقط نمایش همان رخداد را حذف می‌کند و در "
+                "تنظیمات نقشه ذخیره می‌شود.")
             self.outage_list.itemChanged.connect(self._outage_item_changed)
+            self._outage_update_timer = QTimer(self)
+            self._outage_update_timer.setSingleShot(True)
+            self._outage_update_timer.timeout.connect(self._flush_outage_updates)
             ov.addWidget(self.outage_list, 1)
             self.left_split.addWidget(outage_box)
             self.left_split.setSizes([320, 280])
@@ -951,6 +958,8 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._opt_sec_nodes = []
             self._outage_points = []
             self._hidden_outage_ids = set()
+            self._outage_visibility_explicit = False
+            self._outage_update_timer.stop()
             self._hidden_switch_ids.clear()
             self._switch_user_shown.clear()
             self._switch_user_hidden.clear()
@@ -1004,10 +1013,11 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._zone_outage_hours = dict(zone_outage_hours or {})
             self._manual_tie_pairs = list(manual_tie_pairs or [])
             self._opt_sec_nodes = list(sectionalizer_nodes or [])
+            if hidden_outage_ids is not None:
+                self._outage_visibility_explicit = True
+                self._hidden_outage_ids = {str(x) for x in hidden_outage_ids}
             if outage_points is not None:
                 self.set_outage_points(outage_points)
-            if hidden_outage_ids is not None:
-                self._hidden_outage_ids = {str(x) for x in hidden_outage_ids}
             self._sync_outage_checks()
             keys = sorted({t.feeder_key for t in
                            getattr(renderer, "traces", []) if t.feeder_key})
@@ -1101,21 +1111,43 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.switch_list.blockSignals(True)
             self.switch_list.clear()
             groups = {}
+            feeder_groups = {}
+            # درخت نوع کلید → فیدر → تجهیز؛ ترتیب هر سه سطح قطعی و الفبایی است.
+            switch_rows.sort(key=lambda row: (
+                row[1].split(" | ", 2)[1], row[1].split(" | ", 2)[0],
+                row[1].split(" | ", 2)[2], row[0]))
             for sid, label in switch_rows:
-                parts = label.split(" | ", 2)
-                category = parts[1] if len(parts) > 1 else "نامشخص"
-                if category not in groups:
-                    parent_item = QTreeWidgetItem([category])
-                    parent_item.setFlags(parent_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate)
-                    parent_item.setCheckState(0, Qt.CheckState.Checked)
-                    self.switch_list.addTopLevelItem(parent_item)
-                    groups[category] = parent_item
-                item = QTreeWidgetItem([label])
+                feeder, category, title_part = (label.split(" | ", 2)
+                                                if " | " in label else
+                                                ("?", "نامشخص", label))
+                category_item = groups.get(category)
+                if category_item is None:
+                    category_item = QTreeWidgetItem([category])
+                    category_item.setFlags(
+                        category_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    category_item.setCheckState(0, Qt.CheckState.Checked)
+                    self.switch_list.addTopLevelItem(category_item)
+                    groups[category] = category_item
+                feeder_items = feeder_groups.setdefault(category, {})
+                feeder_item = feeder_items.get(feeder)
+                if feeder_item is None:
+                    feeder_item = QTreeWidgetItem([feeder])
+                    feeder_item.setFlags(
+                        feeder_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    feeder_item.setCheckState(0, Qt.CheckState.Checked)
+                    category_item.addChild(feeder_item)
+                    feeder_items[feeder] = feeder_item
+                item = QTreeWidgetItem([title_part])
                 item.setData(0, Qt.ItemDataRole.UserRole, sid)
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(0, Qt.CheckState.Unchecked if sid in self._hidden_switch_ids else Qt.CheckState.Checked)
-                groups[category].addChild(item)
-            self.switch_list.expandAll()
+                item.setCheckState(0, Qt.CheckState.Unchecked
+                                   if sid in self._hidden_switch_ids
+                                   else Qt.CheckState.Checked)
+                feeder_item.addChild(item)
+            self._switch_count_total = len(switch_rows)
+            self._sync_all_tree_groups(self.switch_list)
+            # QTreeWidgetItems are collapsed by default: large networks stay
+            # responsive until the user expands a category/feeder.
             self.switch_list.blockSignals(False)
             self.switch_count.setText(
                 f"{len(switch_rows)} کلید | {len(switch_rows)-len(self._hidden_switch_ids)} قابل نمایش")
@@ -1125,6 +1157,42 @@ def make_map_canvas(parent=None, osm_fetch=None):
                     self._selected_zone = None
             self._osm_tried = False
             self._apply()
+
+        def _sync_all_tree_groups(self, tree) -> None:
+            """Set group tri-state from children without Qt auto-propagation."""
+            tree.blockSignals(True)
+
+            def visit(item):
+                states = [visit(item.child(i)) for i in range(item.childCount())]
+                if states:
+                    if all(state == Qt.CheckState.Checked for state in states):
+                        state = Qt.CheckState.Checked
+                    elif all(state == Qt.CheckState.Unchecked for state in states):
+                        state = Qt.CheckState.Unchecked
+                    else:
+                        state = Qt.CheckState.PartiallyChecked
+                    item.setCheckState(0, state)
+                return item.checkState(0)
+
+            for i in range(tree.topLevelItemCount()):
+                visit(tree.topLevelItem(i))
+            tree.blockSignals(False)
+
+        def _sync_tree_ancestors(self, item, tree) -> None:
+            """Recompute only the path above a changed leaf/group."""
+            tree.blockSignals(True)
+            while item is not None:
+                states = [item.child(i).checkState(0)
+                          for i in range(item.childCount())]
+                if states:
+                    if all(state == Qt.CheckState.Checked for state in states):
+                        item.setCheckState(0, Qt.CheckState.Checked)
+                    elif all(state == Qt.CheckState.Unchecked for state in states):
+                        item.setCheckState(0, Qt.CheckState.Unchecked)
+                    else:
+                        item.setCheckState(0, Qt.CheckState.PartiallyChecked)
+                item = item.parent()
+            tree.blockSignals(False)
 
         def set_highlight_point(self, point) -> None:
             self._highlight = tuple(point) if point is not None else None
@@ -1228,35 +1296,65 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._outage_points = [dict(p) for p in (points or [])]
             valid = {str(p.get("id", "")) for p in self._outage_points}
             self._hidden_outage_ids.intersection_update(valid)
+            if not self._outage_visibility_explicit:
+                # پیش‌فرض نقشه فقط رخدادهای تأییدشدهٔ مهندسی را نشان می‌دهد.
+                self._hidden_outage_ids.update(
+                    str(p.get("id", "")) for p in self._outage_points
+                    if str(p.get("status", "pending") or "pending").lower()
+                    != "confirmed")
             self._rebuild_outage_list()
             self._apply()
 
         def _rebuild_outage_list(self) -> None:
             self.outage_list.blockSignals(True)
             self.outage_list.clear()
-            groups = {}
-            for pt in self._outage_points:
+            feeders = {}
+            status_groups = {}
+            status_order = {"confirmed": 0, "pending": 1, "rejected": 2}
+            status_fa = {"confirmed": "تأیید مهندسی",
+                         "pending": "در انتظار بررسی",
+                         "rejected": "ردشده"}
+            points = sorted(
+                self._outage_points,
+                key=lambda p: (str(p.get("feeder", "") or "بدون فیدر"),
+                               status_order.get(str(p.get("status", "pending")), 3),
+                               str(p.get("label", "")), str(p.get("id", ""))))
+            for pt in points:
                 fk = str(pt.get("feeder", "") or "بدون فیدر")
-                if fk not in groups:
-                    top = QTreeWidgetItem([fk])
-                    top.setFlags(top.flags() | Qt.ItemFlag.ItemIsUserCheckable
-                                 | Qt.ItemFlag.ItemIsAutoTristate)
-                    top.setCheckState(0, Qt.CheckState.Checked)
-                    self.outage_list.addTopLevelItem(top)
-                    groups[fk] = top
+                feeder_item = feeders.get(fk)
+                if feeder_item is None:
+                    feeder_item = QTreeWidgetItem([fk])
+                    feeder_item.setFlags(
+                        feeder_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    feeder_item.setCheckState(0, Qt.CheckState.Checked)
+                    self.outage_list.addTopLevelItem(feeder_item)
+                    feeders[fk] = feeder_item
+                status = str(pt.get("status", "pending") or "pending")
                 pid = str(pt.get("id", ""))
-                status_fa = {"confirmed": "تأیید مهندسی",
-                             "rejected": "رد شده",
-                             "pending": "در انتظار"}.get(
-                                 str(pt.get("status", "")), "—")
-                item = QTreeWidgetItem([f"{pt.get('label', pid)} — {status_fa}"])
+                status_key = (fk, status)
+                status_item = status_groups.get(status_key)
+                if status_item is None:
+                    status_item = QTreeWidgetItem(
+                        [status_fa.get(status, "وضعیت نامشخص")])
+                    status_item.setFlags(
+                        status_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    # Seed the parent's state from the first event so a
+                    # saved per-event visibility choice is not overwritten.
+                    status_item.setCheckState(
+                        0, Qt.CheckState.Unchecked
+                        if pid in self._hidden_outage_ids
+                        else Qt.CheckState.Checked)
+                    feeder_item.addChild(status_item)
+                    status_groups[status_key] = status_item
+                item = QTreeWidgetItem([str(pt.get("label", pid))])
                 item.setData(0, Qt.ItemDataRole.UserRole, pid)
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(
                     0, Qt.CheckState.Unchecked if pid in self._hidden_outage_ids
                     else Qt.CheckState.Checked)
-                groups[fk].addChild(item)
-            self.outage_list.expandAll()
+                status_item.addChild(item)
+            self._sync_all_tree_groups(self.outage_list)
+            # Keep status groups collapsed until the user requests details.
             self.outage_list.blockSignals(False)
             total = len(self._outage_points)
             self.outage_count.setText(
@@ -1279,28 +1377,48 @@ def make_map_canvas(parent=None, osm_fetch=None):
                 else:
                     self._hidden_outage_ids.add(str(pid))
             else:
-                # حالت «نیمه‌انتخاب» خودکارِ والد (AutoTristate) نباید به
-                # فرزندان تحمیل شود؛ وگرنه خاموش‌کردن یک رخداد کل فیدر را
-                # پنهان می‌کند.
+                # تغییر فیدر یا زیرگروه وضعیت، به رخدادهای برگ (leaf) اعمال شود.
                 state = item.checkState(0)
                 if state == Qt.CheckState.PartiallyChecked:
                     return
-                for i in range(item.childCount()):
-                    item.child(i).setCheckState(0, state)
+                self.outage_list.blockSignals(True)
+                def apply_to_leaves(parent):
+                    for i in range(parent.childCount()):
+                        child = parent.child(i)
+                        child_id = child.data(0, Qt.ItemDataRole.UserRole)
+                        if child_id:
+                            child.setCheckState(0, state)
+                            if state == Qt.CheckState.Checked:
+                                self._hidden_outage_ids.discard(str(child_id))
+                            else:
+                                self._hidden_outage_ids.add(str(child_id))
+                        else:
+                            child.setCheckState(0, state)
+                            apply_to_leaves(child)
+                apply_to_leaves(item)
+                self.outage_list.blockSignals(False)
+            self._sync_tree_ancestors(item.parent(), self.outage_list)
             self._save_hidden_outages()
             total = len(self._outage_points)
             self.outage_count.setText(
                 f"{total} خاموشی دارای مختصات | "
                 f"{total - len(self._hidden_outage_ids)} قابل نمایش")
-            self._apply()
 
         def _save_hidden_outages(self) -> None:
             if self._renderer is not None and \
                     self._renderer.style is not None:
                 self._renderer.style.hidden_outage_ids = \
                     sorted(self._hidden_outage_ids)
+            self._outage_visibility_explicit = True
+            # Auto-tristate changes may emit many itemChanged signals when a
+            # feeder/status is toggled. One queued update avoids repeated
+            # full Matplotlib redraws and synchronous SQLite writes.
+            self._outage_update_timer.start(0)
+
+        def _flush_outage_updates(self) -> None:
             if self.on_outages_changed is not None:
                 self.on_outages_changed()
+            self._apply()
 
         def show_outage_ranking(self) -> None:
             """جدول رتبه‌بندی مکان‌های خاموشی (درخواست کاربر — بند ۷)."""
@@ -1325,30 +1443,31 @@ def make_map_canvas(parent=None, osm_fetch=None):
             if self._renderer is not None and self._renderer.style is not None:
                 self._renderer.style.show_outages = bool(on)
             self._save_hidden_outages()
-            self._apply()
 
         def _set_all_outages(self, visible: bool) -> None:
             self.outage_list.blockSignals(True)
             hidden = set()
-            for i in range(self.outage_list.topLevelItemCount()):
-                parent = self.outage_list.topLevelItem(i)
-                parent.setCheckState(0, Qt.CheckState.Checked if visible
-                                     else Qt.CheckState.Unchecked)
+            target_state = (Qt.CheckState.Checked if visible
+                            else Qt.CheckState.Unchecked)
+            def set_tree(parent):
+                parent.setCheckState(0, target_state)
                 for j in range(parent.childCount()):
                     child = parent.child(j)
-                    child.setCheckState(0, Qt.CheckState.Checked if visible
-                                        else Qt.CheckState.Unchecked)
-                    if not visible:
-                        pid = child.data(0, Qt.ItemDataRole.UserRole)
-                        if pid:
+                    pid = child.data(0, Qt.ItemDataRole.UserRole)
+                    if pid:
+                        child.setCheckState(0, target_state)
+                        if not visible:
                             hidden.add(str(pid))
+                    else:
+                        set_tree(child)
+            for i in range(self.outage_list.topLevelItemCount()):
+                set_tree(self.outage_list.topLevelItem(i))
             self._hidden_outage_ids = hidden
             self.outage_list.blockSignals(False)
             if not visible:
                 self.chk_outages.setChecked(True)   # پنهان‌کردن رکوردها، نه لایه
             self._save_hidden_outages()
             self._rebuild_outage_list()
-            self._apply()
 
         def _switch_item_changed(self, item, column=0) -> None:
             sid = item.data(0, Qt.ItemDataRole.UserRole)
@@ -1362,36 +1481,64 @@ def make_map_canvas(parent=None, osm_fetch=None):
                     self._switch_user_hidden.add(sid)
                     self._switch_user_shown.discard(sid)
             else:
-                # Qt AutoTristate propagates parent changes to children.
-                # Each child updates the state; coalesce all redraws below.
-                return
-            total = sum(self.switch_list.topLevelItem(i).childCount()
-                        for i in range(self.switch_list.topLevelItemCount()))
-            self.switch_count.setText(f"{total} کلید | {total-len(self._hidden_switch_ids)} قابل نمایش")
+                state = item.checkState(0)
+                if state == Qt.CheckState.PartiallyChecked:
+                    return
+                self.switch_list.blockSignals(True)
+                def set_descendants(parent):
+                    for i in range(parent.childCount()):
+                        child = parent.child(i)
+                        child_id = child.data(0, Qt.ItemDataRole.UserRole)
+                        if child_id:
+                            child.setCheckState(0, state)
+                            if state == Qt.CheckState.Checked:
+                                self._hidden_switch_ids.discard(str(child_id))
+                                self._switch_user_shown.add(str(child_id))
+                                self._switch_user_hidden.discard(str(child_id))
+                            else:
+                                self._hidden_switch_ids.add(str(child_id))
+                                self._switch_user_hidden.add(str(child_id))
+                                self._switch_user_shown.discard(str(child_id))
+                        else:
+                            child.setCheckState(0, state)
+                            set_descendants(child)
+                set_descendants(item)
+                self.switch_list.blockSignals(False)
+            self._sync_tree_ancestors(item.parent(), self.switch_list)
+            total = self._switch_count_total
+            self.switch_count.setText(
+                f"{total} کلید | {total-len(self._hidden_switch_ids)} قابل نمایش")
             self._switch_redraw_timer.start(50)
 
         def _set_all_switches(self, visible: bool) -> None:
             self._switch_redraw_timer.stop()
             self.switch_list.blockSignals(True)
             hidden = set()
+            shown = set()
             total = 0
+            target_state = (Qt.CheckState.Checked if visible
+                            else Qt.CheckState.Unchecked)
+            def visit(parent):
+                nonlocal total
+                parent.setCheckState(0, target_state)
+                for j in range(parent.childCount()):
+                    child = parent.child(j)
+                    sid = child.data(0, Qt.ItemDataRole.UserRole)
+                    if sid:
+                        total += 1
+                        child.setCheckState(0, target_state)
+                        (shown if visible else hidden).add(str(sid))
+                    else:
+                        visit(child)
             for i in range(self.switch_list.topLevelItemCount()):
-                parent_item = self.switch_list.topLevelItem(i)
-                parent_item.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
-                for j in range(parent_item.childCount()):
-                    child = parent_item.child(j); total += 1
-                    child.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
-                    if not visible: hidden.add(child.data(0, Qt.ItemDataRole.UserRole))
+                visit(self.switch_list.topLevelItem(i))
             self._hidden_switch_ids = hidden
-            self._switch_user_shown = set() if not visible else {
-                child.data(0, Qt.ItemDataRole.UserRole)
-                for i in range(self.switch_list.topLevelItemCount())
-                for child in (self.switch_list.topLevelItem(i).child(j)
-                              for j in range(self.switch_list.topLevelItem(i).childCount()))}
+            self._switch_user_shown = shown
             self._switch_user_hidden = set() if visible else set(hidden)
             self.switch_list.blockSignals(False)
+            self._switch_count_total = total
             self.switch_count.setText(f"{total} کلید | {total-len(hidden)} قابل نمایش")
-            self._apply()
+            self._switch_redraw_timer.start(0)
 
         def _on_zone_picked(self, zone_id: str) -> None:
             if self._renderer is None or self._renderer.zones is None:
