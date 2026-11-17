@@ -474,15 +474,33 @@ def build_sections(tree: RadialTree, cut_nodes: Iterable[str]) -> list[Section]:
     cuts = [c for c in dict.fromkeys(cut_nodes) if c in tree.parent
             and c != tree.root]
     cut_set = set(cuts)
-    # One preorder pass replaces a parent-chain walk for every cut (which was
-    # particularly costly when optional fuse cut-outs created many sections).
+    # Only cut nodes are needed here. Using Euler intervals lets us find each
+    # cut's nearest cut-ancestor in O(k log k), instead of scanning every tree
+    # node for every candidate evaluation (O(N) × thousands of candidates).
     nearest_selected: dict[str, str | None] = {}
-    for index, node in enumerate(tree.order):
-        if index % 128 == 0:
-            check_cancelled()
-        parent = tree.parent.get(node)
-        nearest_selected[node] = (
-            parent if parent in cut_set else nearest_selected.get(parent))
+    if all(c in tree.tin and c in tree.tout for c in cuts):
+        stack: list[str] = []
+        ordered_cuts = sorted(cuts, key=lambda n: (tree.tin[n], n))
+        for index, node in enumerate(ordered_cuts):
+            if index % 64 == 0:
+                check_cancelled()
+            while stack and not (
+                    tree.tin[stack[-1]] <= tree.tin[node]
+                    and tree.tout[node] <= tree.tout[stack[-1]]):
+                stack.pop()
+            nearest_selected[node] = stack[-1] if stack else None
+            stack.append(node)
+    else:
+        # Compatibility for externally-built RadialTree fixtures without
+        # Euler intervals; this remains proportional to cut count/depth.
+        for index, node in enumerate(sorted(
+                cuts, key=lambda n: (tree.depth.get(n, 0), n))):
+            if index % 64 == 0:
+                check_cancelled()
+            parent = tree.parent.get(node)
+            while parent is not None and parent not in cut_set:
+                parent = tree.parent.get(parent)
+            nearest_selected[node] = parent
     top = [c for c in cuts if nearest_selected.get(c) is None]
 
     root_load = tree.total_load_kw - sum(tree.subtree_load_kw[c] for c in top)
@@ -610,16 +628,23 @@ def compute_transient_eens_kwh(tree: RadialTree, sections: Sequence[Section], *,
     protected_interruption = (float(reclose_time_min)
                               + (1.0 - p_ok) * float(transient_time_min))
     total = 0.0
-    for sec in sections:
+    governor_cache: dict[str, str | None] = {}
+    for section_index, sec in enumerate(sections):
+        if section_index % 64 == 0:
+            check_cancelled()
         share = float(sec.length_m) / total_len
-        gov = None
+        path = []
         cur = sec.cut_node
-        while cur is not None:
-            if cur in rec:
-                gov = cur
-                break
+        while (cur is not None and cur not in rec
+               and cur not in governor_cache):
+            if len(path) % 128 == 0:
+                check_cancelled()
+            path.append(cur)
             cur = tree.parent.get(cur)
-        protected = float(tree.subtree_load_kw.get(gov, 0.0)) if gov else 0.0
+        governor = cur if cur in rec else governor_cache.get(cur)
+        for node in path:
+            governor_cache[node] = governor
+        protected = float(tree.subtree_load_kw.get(governor, 0.0)) if governor else 0.0
         protected = min(protected, float(total_load_kw))
         interrupted = ((float(total_load_kw) - protected)
                        * float(transient_time_min)
@@ -1456,7 +1481,7 @@ class SwitchPlacementEngine:
         expected_evaluations = sum(candidate_count - step + 1
                                    for step in range(1, max_steps + 1))
         completed_evaluations = 0
-        last_progress = 28
+        progress_stride = max(1, expected_evaluations // 500)
         for step in range(1, int(st.max_sectionalizers) + 1):
             best_c, best_eens, best_sections = None, None, None
             available = [c for c in candidates if c.node not in selected_nodes]
@@ -1468,12 +1493,11 @@ class SwitchPlacementEngine:
                 completed_evaluations += 1
                 percent = (28 + 68 * completed_evaluations
                            / max(1, expected_evaluations))
-                if (percent >= last_progress + 1
+                if (completed_evaluations % progress_stride == 0
                         or completed_evaluations == expected_evaluations):
                     report(percent, f"گام {step}: ارزیابی کاندید "
                            f"{completed_evaluations:,} از "
                            f"{expected_evaluations:,}")
-                    last_progress = percent
                 if best_eens is None or eens < best_eens - 1e-12:
                     best_c, best_eens, best_sections = c, eens, sections
             if best_c is None:
