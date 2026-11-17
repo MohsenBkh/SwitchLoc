@@ -479,10 +479,17 @@ def test_unchecking_one_switch_does_not_hide_its_whole_category(app):
     tab.show_network(rend, title="switches")
 
     tree = tab.switch_list
-    children = [tree.topLevelItem(i).child(j)
-                for i in range(tree.topLevelItemCount())
-                for j in range(tree.topLevelItem(i).childCount())]
-    assert len(children) == 2 and children[0].parent().childCount() == 2
+    # Equipment tree is category → feeder → switch; find the switch leaves,
+    # not the feeder groups directly under each category.
+    children = []
+    for i in range(tree.topLevelItemCount()):
+        category = tree.topLevelItem(i)
+        for j in range(category.childCount()):
+            feeder = category.child(j)
+            children.extend(
+                feeder.child(k) for k in range(feeder.childCount()))
+    assert len(children) == 2
+    assert all(child.parent().childCount() == 2 for child in children)
     first = children[0]
     first.setCheckState(0, Qt.CheckState.Unchecked)
     assert len(tab._hidden_switch_ids) == 1

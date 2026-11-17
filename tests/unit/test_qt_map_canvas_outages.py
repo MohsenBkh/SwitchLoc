@@ -56,10 +56,21 @@ def _renderer():
 
 
 def _items(tab):
+    """Return event leaves (feeder → status → event tree)."""
     tree = tab.outage_list
-    return [tree.topLevelItem(i).child(j)
-            for i in range(tree.topLevelItemCount())
-            for j in range(tree.topLevelItem(i).childCount())]
+    leaves = []
+
+    def visit(item):
+        for j in range(item.childCount()):
+            child = item.child(j)
+            if child.data(0, ROLE) is not None:
+                leaves.append(child)
+            else:
+                visit(child)
+
+    for i in range(tree.topLevelItemCount()):
+        visit(tree.topLevelItem(i))
+    return leaves
 
 
 def test_panel_exists_and_starts_empty(app):
@@ -74,11 +85,19 @@ def test_points_fill_the_panel_grouped_by_feeder(app):
     tab = _tab()
     tab.set_outage_points(POINTS)
     assert tab.outage_list.topLevelItemCount() == 2      # F1 و F2
-    labels = [i.text(0) for i in _items(tab)]
-    assert any("پست الف" in t and "تأیید مهندسی" in t for t in labels)
-    assert any("در انتظار" in t for t in labels)
+    leaves = _items(tab)
+    assert {i.text(0) for i in leaves} == {"پست الف", "پست ب", "پست ج"}
+    f1 = next(tab.outage_list.topLevelItem(i)
+              for i in range(tab.outage_list.topLevelItemCount())
+              if tab.outage_list.topLevelItem(i).text(0) == "F1")
+    status_groups = {f1.child(i).text(0): f1.child(i)
+                     for i in range(f1.childCount())}
+    assert "تأیید مهندسی" in status_groups
+    assert "در انتظار بررسی" in status_groups
+    assert status_groups["تأیید مهندسی"].child(0).text(0) == "پست الف"
+    assert status_groups["در انتظار بررسی"].child(0).text(0) == "پست ب"
     assert "3 خاموشی دارای مختصات" in tab.outage_count.text()
-    assert all(i.checkState(0) for i in _items(tab))     # همه روشن
+    assert all(i.checkState(0) for i in leaves)       # همه روشن
 
 
 def test_master_checkbox_controls_the_layer(app):
