@@ -38,7 +38,7 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
     from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox,
                                    QFormLayout, QFrame, QGroupBox,
                                    QHBoxLayout, QHeaderView, QLayout,
-                                   QLabel, QPushButton, QScrollArea,
+                                   QLabel, QLineEdit, QPushButton, QScrollArea,
                                    QSizePolicy, QSpinBox, QSplitter,
                                    QTableWidget, QTextEdit, QVBoxLayout,
                                    QWidget)
@@ -94,6 +94,8 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
             self.on_show_map = None      # callback(selected node ids)
             self.on_clear_study = None   # callback after user confirmation
             self.on_settings_changed = None
+            self.on_pick_manual_location = None
+            self.on_enter_manual_utm = None
             self._result = None
             self._selected_nodes: list[str] = []
             self._suspend_changed = False
@@ -130,7 +132,8 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
                 enable_copy_paste(table, editable=True)
 
             # ---- سیگنال‌ها ----
-            for w in (self.cmb_switch_type, self.cmb_method):
+            for w in (self.cmb_switch_type, self.cmb_method,
+                      self.cmb_placement_mode):
                 w.currentIndexChanged.connect(self._on_mode_changed)
             for w in (self.sp_lambda, self.sp_repair, self.sp_restore,
                       self.sp_ratio, self.sp_transient_min,
@@ -140,8 +143,13 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
                 w.valueChanged.connect(self._notify_changed)
             for w in (self.sp_max, self.sp_depth):
                 w.valueChanged.connect(self._notify_changed)
-            for w in (self.chk_existing, self.chk_show_map):
+            self.chk_existing.toggled.connect(self._on_mode_changed)
+            for w in (self.chk_include_fuses, self.chk_show_map):
                 w.toggled.connect(self._notify_changed)
+            self.cmb_manual_feeder.currentIndexChanged.connect(
+                self._notify_changed)
+            for w in (self.edit_manual_x, self.edit_manual_y):
+                w.textChanged.connect(self._notify_changed)
             self._on_mode_changed()
 
         # ==============================================================
@@ -187,7 +195,40 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
 
             self.lbl_note = self._note_label()
             bv.addWidget(self.lbl_note)
+            self.cmb_placement_mode = QComboBox()
+            self.cmb_placement_mode.addItem("جایابی خودکار", "automatic")
+            self.cmb_placement_mode.addItem("تعیین موقعیت دستی / روی نقشه", "manual")
+            form.addRow("نوع جایابی:", self.cmb_placement_mode)
             pv.addWidget(box)
+
+            self.grp_manual_position = QGroupBox("موقعیت کلید دستی")
+            mf = QFormLayout(self.grp_manual_position)
+            self.cmb_manual_feeder = QComboBox()
+            self.cmb_manual_feeder.addItem("— انتخاب فیدر —", "")
+            mf.addRow("فیدر:", self.cmb_manual_feeder)
+            self.edit_manual_x = QLineEdit()
+            self.edit_manual_x.setPlaceholderText("X در CRS پروژه (متر)")
+            self.edit_manual_y = QLineEdit()
+            self.edit_manual_y.setPlaceholderText("Y در CRS پروژه (متر)")
+            mf.addRow("X:", self.edit_manual_x)
+            mf.addRow("Y:", self.edit_manual_y)
+            location_buttons = QHBoxLayout()
+            self.btn_manual_utm = QPushButton("ورود مختصات UTM…")
+            self.btn_manual_utm.clicked.connect(
+                lambda: self.on_enter_manual_utm()
+                if self.on_enter_manual_utm else None)
+            self.btn_manual_pick = QPushButton("انتخاب از روی نقشه…")
+            self.btn_manual_pick.clicked.connect(
+                lambda: self.on_pick_manual_location()
+                if self.on_pick_manual_location else None)
+            location_buttons.addWidget(self.btn_manual_utm)
+            location_buttons.addWidget(self.btn_manual_pick)
+            mf.addRow(location_buttons)
+            self.lbl_manual_snap = QLabel(
+                "مختصات روی نزدیک‌ترین یال فیدر به‌صورت گرهٔ مجازی در مدل محاسبه ثبت می‌شود.")
+            self.lbl_manual_snap.setWordWrap(True)
+            mf.addRow(self.lbl_manual_snap)
+            pv.addWidget(self.grp_manual_position)
 
             rates = QGroupBox("۲) نرخ خرابی و زمان‌ها")
             rv = QVBoxLayout(rates)
@@ -306,6 +347,13 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
                 "کلیدهای موجود به‌عنوان قطعه‌بندی مبنا لحاظ شوند")
             self.chk_existing.setChecked(True)
             lform.addRow("", self.chk_existing)
+            self.chk_include_fuses = QCheckBox(
+                "لحاظ‌کردن فیوزهای کات‌اوت در مرزبندی EENS")
+            self.chk_include_fuses.setChecked(False)
+            self.chk_include_fuses.setToolTip(
+                "فیوزهای مربوط به ترمینال ترانسفورماتورهای توزیع در هر حال "
+                "به‌عنوان مرز زون شمرده نمی‌شوند.")
+            lform.addRow("", self.chk_include_fuses)
             self.chk_show_map = QCheckBox(
                 "کلیدهای پیشنهادی روی نقشه نمایش داده شوند")
             self.chk_show_map.setChecked(True)
@@ -595,8 +643,12 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
             switch_type = self.current_switch_type()
             method = self.current_method()
             manual = method == "manual"
+            manual_placement = (self.cmb_placement_mode.currentData()
+                               == "manual")
 
             self.grp_transient.setVisible(switch_type == SWITCH_RECLOSER)
+            self.grp_manual_position.setVisible(manual_placement)
+            self.chk_include_fuses.setEnabled(self.chk_existing.isChecked())
 
             auto_reason = ("خودکار از ماتریس λ/r واقعی خاموشی‌های پروژه — "
                            "برای ورود دستی، روش «دستی» را انتخاب کنید.")
@@ -663,6 +715,12 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
                     ("directional" if method == "directional"
                      else "uniform"),
                 "use_existing_switches": bool(self.chk_existing.isChecked()),
+                "include_fuse_cutouts": bool(self.chk_include_fuses.isChecked()),
+                "placement_mode": str(self.cmb_placement_mode.currentData()
+                                       or "automatic"),
+                "manual_feeder_key": str(self.cmb_manual_feeder.currentData() or ""),
+                "manual_x": self.edit_manual_x.text().strip(),
+                "manual_y": self.edit_manual_y.text().strip(),
                 "show_on_map": bool(self.chk_show_map.isChecked()),
             }
 
@@ -690,6 +748,18 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
             except (TypeError, ValueError):
                 return None
 
+        def set_feeders(self, feeders) -> None:
+            current = str(self.cmb_manual_feeder.currentData() or "")
+            self.cmb_manual_feeder.blockSignals(True)
+            self.cmb_manual_feeder.clear()
+            self.cmb_manual_feeder.addItem("— انتخاب فیدر —", "")
+            for feeder in sorted({str(x) for x in (feeders or ()) if str(x)}):
+                self.cmb_manual_feeder.addItem(feeder, feeder)
+            ix = self.cmb_manual_feeder.findData(current)
+            if ix >= 0:
+                self.cmb_manual_feeder.setCurrentIndex(ix)
+            self.cmb_manual_feeder.blockSignals(False)
+
         def apply_settings(self, d: dict | None) -> None:
             raw = dict(d or {})
             if not raw:
@@ -708,7 +778,8 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
             self._suspend_changed = True
             try:
                 for key, cmb in (("switch_type", self.cmb_switch_type),
-                                 ("method", self.cmb_method)):
+                                 ("method", self.cmb_method),
+                                 ("placement_mode", self.cmb_placement_mode)):
                     if d.get(key):
                         ix = cmb.findData(str(d[key]))
                         if ix >= 0:
@@ -753,6 +824,18 @@ def make_sectionalizer_tab(parent=None):     # pragma: no cover (Qt)
                 if d.get("use_existing_switches") is not None:
                     self.chk_existing.setChecked(
                         bool(d["use_existing_switches"]))
+                if d.get("include_fuse_cutouts") is not None:
+                    self.chk_include_fuses.setChecked(
+                        bool(d["include_fuse_cutouts"]))
+                for key, widget in (("manual_x", self.edit_manual_x),
+                                    ("manual_y", self.edit_manual_y)):
+                    if d.get(key) is not None:
+                        widget.setText(str(d[key]))
+                if d.get("manual_feeder_key"):
+                    ix = self.cmb_manual_feeder.findData(
+                        str(d["manual_feeder_key"]))
+                    if ix >= 0:
+                        self.cmb_manual_feeder.setCurrentIndex(ix)
                 if d.get("show_on_map") is not None:
                     self.chk_show_map.setChecked(bool(d["show_on_map"]))
             finally:

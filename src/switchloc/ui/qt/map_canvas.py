@@ -752,8 +752,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.switch_list = QTreeWidget()
             self.switch_list.setHeaderHidden(True)
             self.switch_list.setToolTip(
-                "با برداشتن تیک، فقط نماد همان کلید از نقشه حذف می‌شود؛ "
-                "داده و محاسبات شبکه بدون تغییر باقی می‌ماند.")
+                "ساختار: نوع کلید ← فیدر ← کلیدهای همان فیدر. با برداشتن "
+                "تیک یک کلید، فقط نماد آن از نقشه حذف می‌شود؛ داده و محاسبات "
+                "شبکه بدون تغییر می‌ماند.")
             self._switch_redraw_timer = QTimer(self)
             self._switch_redraw_timer.setSingleShot(True)
             self._switch_redraw_timer.timeout.connect(self._apply)
@@ -802,8 +803,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.outage_list = QTreeWidget()
             self.outage_list.setHeaderHidden(True)
             self.outage_list.setToolTip(
-                "هر ردیف یک رخداد خاموشی است؛ برداشتن تیک فقط نمایش همان "
-                "رخداد را حذف می‌کند و در تنظیمات نقشه ذخیره می‌شود.")
+                "ساختار: فیدر ← وضعیت بازبینی (تأیید مهندسی/در انتظار/ردشده) "
+                "← رخداد. برداشتن تیک فقط نمایش همان رخداد را حذف می‌کند و در "
+                "تنظیمات نقشه ذخیره می‌شود.")
             self.outage_list.itemChanged.connect(self._outage_item_changed)
             ov.addWidget(self.outage_list, 1)
             self.left_split.addWidget(outage_box)
@@ -1101,20 +1103,41 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.switch_list.blockSignals(True)
             self.switch_list.clear()
             groups = {}
+            feeder_groups = {}
+            # درخت نوع کلید → فیدر → تجهیز؛ ترتیب هر سه سطح قطعی و الفبایی است.
+            switch_rows.sort(key=lambda row: (
+                row[1].split(" | ", 2)[1], row[1].split(" | ", 2)[0],
+                row[1].split(" | ", 2)[2], row[0]))
             for sid, label in switch_rows:
-                parts = label.split(" | ", 2)
-                category = parts[1] if len(parts) > 1 else "نامشخص"
-                if category not in groups:
-                    parent_item = QTreeWidgetItem([category])
-                    parent_item.setFlags(parent_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsAutoTristate)
-                    parent_item.setCheckState(0, Qt.CheckState.Checked)
-                    self.switch_list.addTopLevelItem(parent_item)
-                    groups[category] = parent_item
-                item = QTreeWidgetItem([label])
+                feeder, category, title_part = (label.split(" | ", 2)
+                                                if " | " in label else
+                                                ("?", "نامشخص", label))
+                category_item = groups.get(category)
+                if category_item is None:
+                    category_item = QTreeWidgetItem([category])
+                    category_item.setFlags(
+                        category_item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                        | Qt.ItemFlag.ItemIsAutoTristate)
+                    category_item.setCheckState(0, Qt.CheckState.Checked)
+                    self.switch_list.addTopLevelItem(category_item)
+                    groups[category] = category_item
+                feeder_items = feeder_groups.setdefault(category, {})
+                feeder_item = feeder_items.get(feeder)
+                if feeder_item is None:
+                    feeder_item = QTreeWidgetItem([feeder])
+                    feeder_item.setFlags(
+                        feeder_item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                        | Qt.ItemFlag.ItemIsAutoTristate)
+                    feeder_item.setCheckState(0, Qt.CheckState.Checked)
+                    category_item.addChild(feeder_item)
+                    feeder_items[feeder] = feeder_item
+                item = QTreeWidgetItem([title_part])
                 item.setData(0, Qt.ItemDataRole.UserRole, sid)
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(0, Qt.CheckState.Unchecked if sid in self._hidden_switch_ids else Qt.CheckState.Checked)
-                groups[category].addChild(item)
+                item.setCheckState(0, Qt.CheckState.Unchecked
+                                   if sid in self._hidden_switch_ids
+                                   else Qt.CheckState.Checked)
+                feeder_item.addChild(item)
             self.switch_list.expandAll()
             self.switch_list.blockSignals(False)
             self.switch_count.setText(
@@ -1234,28 +1257,48 @@ def make_map_canvas(parent=None, osm_fetch=None):
         def _rebuild_outage_list(self) -> None:
             self.outage_list.blockSignals(True)
             self.outage_list.clear()
-            groups = {}
-            for pt in self._outage_points:
+            feeders = {}
+            status_groups = {}
+            status_order = {"confirmed": 0, "pending": 1, "rejected": 2}
+            status_fa = {"confirmed": "تأیید مهندسی",
+                         "pending": "در انتظار بررسی",
+                         "rejected": "ردشده"}
+            points = sorted(
+                self._outage_points,
+                key=lambda p: (str(p.get("feeder", "") or "بدون فیدر"),
+                               status_order.get(str(p.get("status", "pending")), 3),
+                               str(p.get("label", "")), str(p.get("id", ""))))
+            for pt in points:
                 fk = str(pt.get("feeder", "") or "بدون فیدر")
-                if fk not in groups:
-                    top = QTreeWidgetItem([fk])
-                    top.setFlags(top.flags() | Qt.ItemFlag.ItemIsUserCheckable
-                                 | Qt.ItemFlag.ItemIsAutoTristate)
-                    top.setCheckState(0, Qt.CheckState.Checked)
-                    self.outage_list.addTopLevelItem(top)
-                    groups[fk] = top
+                feeder_item = feeders.get(fk)
+                if feeder_item is None:
+                    feeder_item = QTreeWidgetItem([fk])
+                    feeder_item.setFlags(
+                        feeder_item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                        | Qt.ItemFlag.ItemIsAutoTristate)
+                    feeder_item.setCheckState(0, Qt.CheckState.Checked)
+                    self.outage_list.addTopLevelItem(feeder_item)
+                    feeders[fk] = feeder_item
+                status = str(pt.get("status", "pending") or "pending")
+                status_key = (fk, status)
+                status_item = status_groups.get(status_key)
+                if status_item is None:
+                    status_item = QTreeWidgetItem(
+                        [status_fa.get(status, "وضعیت نامشخص")])
+                    status_item.setFlags(
+                        status_item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                        | Qt.ItemFlag.ItemIsAutoTristate)
+                    status_item.setCheckState(0, Qt.CheckState.Checked)
+                    feeder_item.addChild(status_item)
+                    status_groups[status_key] = status_item
                 pid = str(pt.get("id", ""))
-                status_fa = {"confirmed": "تأیید مهندسی",
-                             "rejected": "رد شده",
-                             "pending": "در انتظار"}.get(
-                                 str(pt.get("status", "")), "—")
-                item = QTreeWidgetItem([f"{pt.get('label', pid)} — {status_fa}"])
+                item = QTreeWidgetItem([str(pt.get("label", pid))])
                 item.setData(0, Qt.ItemDataRole.UserRole, pid)
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 item.setCheckState(
                     0, Qt.CheckState.Unchecked if pid in self._hidden_outage_ids
                     else Qt.CheckState.Checked)
-                groups[fk].addChild(item)
+                status_item.addChild(item)
             self.outage_list.expandAll()
             self.outage_list.blockSignals(False)
             total = len(self._outage_points)
@@ -1279,14 +1322,26 @@ def make_map_canvas(parent=None, osm_fetch=None):
                 else:
                     self._hidden_outage_ids.add(str(pid))
             else:
-                # حالت «نیمه‌انتخاب» خودکارِ والد (AutoTristate) نباید به
-                # فرزندان تحمیل شود؛ وگرنه خاموش‌کردن یک رخداد کل فیدر را
-                # پنهان می‌کند.
+                # تغییر فیدر یا زیرگروه وضعیت، به رخدادهای برگ (leaf) اعمال شود.
                 state = item.checkState(0)
                 if state == Qt.CheckState.PartiallyChecked:
                     return
-                for i in range(item.childCount()):
-                    item.child(i).setCheckState(0, state)
+                self.outage_list.blockSignals(True)
+                def apply_to_leaves(parent):
+                    for i in range(parent.childCount()):
+                        child = parent.child(i)
+                        child_id = child.data(0, Qt.ItemDataRole.UserRole)
+                        if child_id:
+                            child.setCheckState(0, state)
+                            if state == Qt.CheckState.Checked:
+                                self._hidden_outage_ids.discard(str(child_id))
+                            else:
+                                self._hidden_outage_ids.add(str(child_id))
+                        else:
+                            child.setCheckState(0, state)
+                            apply_to_leaves(child)
+                apply_to_leaves(item)
+                self.outage_list.blockSignals(False)
             self._save_hidden_outages()
             total = len(self._outage_points)
             self.outage_count.setText(
@@ -1330,18 +1385,21 @@ def make_map_canvas(parent=None, osm_fetch=None):
         def _set_all_outages(self, visible: bool) -> None:
             self.outage_list.blockSignals(True)
             hidden = set()
-            for i in range(self.outage_list.topLevelItemCount()):
-                parent = self.outage_list.topLevelItem(i)
-                parent.setCheckState(0, Qt.CheckState.Checked if visible
-                                     else Qt.CheckState.Unchecked)
+            target_state = (Qt.CheckState.Checked if visible
+                            else Qt.CheckState.Unchecked)
+            def set_tree(parent):
+                parent.setCheckState(0, target_state)
                 for j in range(parent.childCount()):
                     child = parent.child(j)
-                    child.setCheckState(0, Qt.CheckState.Checked if visible
-                                        else Qt.CheckState.Unchecked)
-                    if not visible:
-                        pid = child.data(0, Qt.ItemDataRole.UserRole)
-                        if pid:
+                    pid = child.data(0, Qt.ItemDataRole.UserRole)
+                    if pid:
+                        child.setCheckState(0, target_state)
+                        if not visible:
                             hidden.add(str(pid))
+                    else:
+                        set_tree(child)
+            for i in range(self.outage_list.topLevelItemCount()):
+                set_tree(self.outage_list.topLevelItem(i))
             self._hidden_outage_ids = hidden
             self.outage_list.blockSignals(False)
             if not visible:
@@ -1362,32 +1420,64 @@ def make_map_canvas(parent=None, osm_fetch=None):
                     self._switch_user_hidden.add(sid)
                     self._switch_user_shown.discard(sid)
             else:
-                # Qt AutoTristate propagates parent changes to children.
-                # Each child updates the state; coalesce all redraws below.
-                return
-            total = sum(self.switch_list.topLevelItem(i).childCount()
+                state = item.checkState(0)
+                if state == Qt.CheckState.PartiallyChecked:
+                    return
+                self.switch_list.blockSignals(True)
+                def set_descendants(parent):
+                    for i in range(parent.childCount()):
+                        child = parent.child(i)
+                        child_id = child.data(0, Qt.ItemDataRole.UserRole)
+                        if child_id:
+                            child.setCheckState(0, state)
+                            if state == Qt.CheckState.Checked:
+                                self._hidden_switch_ids.discard(str(child_id))
+                                self._switch_user_shown.add(str(child_id))
+                                self._switch_user_hidden.discard(str(child_id))
+                            else:
+                                self._hidden_switch_ids.add(str(child_id))
+                                self._switch_user_hidden.add(str(child_id))
+                                self._switch_user_shown.discard(str(child_id))
+                        else:
+                            child.setCheckState(0, state)
+                            set_descendants(child)
+                set_descendants(item)
+                self.switch_list.blockSignals(False)
+            def count_leaves(parent):
+                return sum(1 if child.data(0, Qt.ItemDataRole.UserRole)
+                           else count_leaves(child)
+                           for child in (parent.child(i)
+                                         for i in range(parent.childCount())))
+            total = sum(count_leaves(self.switch_list.topLevelItem(i))
                         for i in range(self.switch_list.topLevelItemCount()))
-            self.switch_count.setText(f"{total} کلید | {total-len(self._hidden_switch_ids)} قابل نمایش")
+            self.switch_count.setText(
+                f"{total} کلید | {total-len(self._hidden_switch_ids)} قابل نمایش")
             self._switch_redraw_timer.start(50)
 
         def _set_all_switches(self, visible: bool) -> None:
             self._switch_redraw_timer.stop()
             self.switch_list.blockSignals(True)
             hidden = set()
+            shown = set()
             total = 0
+            target_state = (Qt.CheckState.Checked if visible
+                            else Qt.CheckState.Unchecked)
+            def visit(parent):
+                nonlocal total
+                parent.setCheckState(0, target_state)
+                for j in range(parent.childCount()):
+                    child = parent.child(j)
+                    sid = child.data(0, Qt.ItemDataRole.UserRole)
+                    if sid:
+                        total += 1
+                        child.setCheckState(0, target_state)
+                        (shown if visible else hidden).add(str(sid))
+                    else:
+                        visit(child)
             for i in range(self.switch_list.topLevelItemCount()):
-                parent_item = self.switch_list.topLevelItem(i)
-                parent_item.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
-                for j in range(parent_item.childCount()):
-                    child = parent_item.child(j); total += 1
-                    child.setCheckState(0, Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked)
-                    if not visible: hidden.add(child.data(0, Qt.ItemDataRole.UserRole))
+                visit(self.switch_list.topLevelItem(i))
             self._hidden_switch_ids = hidden
-            self._switch_user_shown = set() if not visible else {
-                child.data(0, Qt.ItemDataRole.UserRole)
-                for i in range(self.switch_list.topLevelItemCount())
-                for child in (self.switch_list.topLevelItem(i).child(j)
-                              for j in range(self.switch_list.topLevelItem(i).childCount()))}
+            self._switch_user_shown = shown
             self._switch_user_hidden = set() if visible else set(hidden)
             self.switch_list.blockSignals(False)
             self.switch_count.setText(f"{total} کلید | {total-len(hidden)} قابل نمایش")

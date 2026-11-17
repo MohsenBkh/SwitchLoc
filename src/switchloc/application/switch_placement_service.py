@@ -99,6 +99,10 @@ class SwitchPlacementAppSettings:
     backup_kw: dict = dc_field(default_factory=dict)
     #: فیدرهای مطالعه (خالی = همهٔ فیدرهای ردیابی‌شده)
     feeder_keys: tuple = ()
+    #: automatic | manual — گره‌های دستی: feeder_key → node_id
+    placement_mode: str = "automatic"
+    manual_nodes_by_feeder: dict = dc_field(default_factory=dict)
+    manual_location: dict = dc_field(default_factory=dict)
     #: گزارش در این پوشه نوشته شود
     report_dir: str | None = None
 
@@ -361,6 +365,12 @@ class SwitchPlacementService:
                     " مقدار r واقعی موجود نیست؛ زمان تعمیر تنظیمات "
                     f"({engine_settings.repair_time_min:g} دقیقه) استفاده شد.")
 
+        zone_of_node = topo.zones.zone_of_node
+        if engine_settings.include_fuse_cutouts:
+            from ..topology.zones import ZoneBuilder, ZonePolicy
+            zone_of_node = ZoneBuilder(
+                topo.graph, net, topo.traces,
+                ZonePolicy(include_fuse_cutout=True)).build(IssueLog()).zone_of_node
         engine = SwitchPlacementEngine(engine_settings)
         study = engine.run(
             topo.graph, topo.traces, node_load_kw, net=net,
@@ -371,7 +381,9 @@ class SwitchPlacementService:
             backup_kw=dict(st.backup_kw or {}) or None,
             feeders=st.feeder_keys or None,
             zone_of_node=topo.zones.zone_of_node,
-            branch_labels=_branch_labels(net))
+            branch_labels=_branch_labels(net),
+            manual_nodes_by_feeder=(st.manual_nodes_by_feeder
+                                    if st.placement_mode == "manual" else None))
         # فیدرهایی که کاندید دارند ولی هیچ کلیدی پیشنهاد نشد — دلیل را
         # صریح بگویید تا کاربر آن را باگ تلقی نکند.
         for feeder in study.feeders or []:
@@ -383,6 +395,8 @@ class SwitchPlacementService:
             if "زمان بازیابی بار سالم" in notes:
                 why = ("زمان بازیابی بار سالم از زمان تعمیر کمتر نیست؛ "
                        "جداسازی خطا سودی در EENS ندارد")
+            elif "گرهٔ دستی" in notes:
+                why = "موقعیت دستی یکی از محدودیت‌های محل کاندید را پاس نکرد"
             elif "بهبود محسوسی" in notes or "بهبود قابل" in notes:
                 why = "بهبود EENS زیر آستانهٔ معنادار بود"
             else:
@@ -394,6 +408,13 @@ class SwitchPlacementService:
                                            for k, v in rates.items()}
         study.settings["method"] = method
         study.settings["method_fa"] = EENS_METHOD_FA[method]
+        study.settings["placement_mode"] = (
+            st.placement_mode if st.placement_mode in {"automatic", "manual"}
+            else "automatic")
+        if st.placement_mode == "manual":
+            study.settings["manual_nodes_by_feeder"] = dict(
+                st.manual_nodes_by_feeder or {})
+            study.settings["manual_location"] = dict(st.manual_location or {})
         study.settings["switch_type"] = engine_settings.switch_type
         study.settings["switch_type_fa"] = SWITCH_TYPE_FA[engine_settings.switch_type]
         study.settings["repair_time_by_feeder"] = {

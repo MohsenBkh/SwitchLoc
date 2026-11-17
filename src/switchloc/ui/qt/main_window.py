@@ -1593,6 +1593,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         def done(res) -> None:
             state["dirty"] = True
             state["topo"] = res
+            sec_tab.set_feeders(study_feeder_keys() or [])
+            if state.get("sectionalizer_settings"):
+                sec_tab.apply_settings(state["sectionalizer_settings"])
             btn_review_outages.setEnabled(bool(outage_records()))
             topo_panel.setPlainText(fmt_topology_result(res))
             btn_show_map.setEnabled(True)
@@ -2782,6 +2785,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             state["plc"] = run
             if run.topo is not None:
                 state["topo"] = run.topo
+                sec_tab.set_feeders(study_feeder_keys() or [])
             plac_panel.setPlainText(fmt_placement_result(run.result))
             btn_show_plac_map.setEnabled(True)
             btn_exports.setEnabled(True)
@@ -2876,7 +2880,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     plac_rcol.addWidget(plac_panel, 1)
 
     # --------------- روش جایابی بهینهٔ کلید و کاهش EENS ----------------------
-    def do_sectionalizer() -> None:
+    def do_sectionalizer(config=None) -> None:
         """اجرای موتور جایابی بهینهٔ کلید روی پروژهٔ باز."""
         db = state.get("db")
         if not db:
@@ -2885,8 +2889,58 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 "ابتدا پروژه را باز یا وارد کنید؛ نتیجه در همان فایل پروژه "
                 "ذخیره می‌شود.")
             return
-        cfg = dict(sec_tab.settings() or {})
+        sec_tab.set_feeders(study_feeder_keys() or [])
+        cfg = dict(config or sec_tab.settings() or {})
         state["sectionalizer_settings"] = cfg
+        state["sectionalizer_manual_node"] = None
+        manual_nodes_by_feeder = {}
+        manual_location = {}
+        manual_topo = None
+        if cfg.get("placement_mode") == "manual":
+            feeder_key = str(cfg.get("manual_feeder_key") or "")
+            try:
+                x = float(str(cfg.get("manual_x") or "").replace(",", ""))
+                y = float(str(cfg.get("manual_y") or "").replace(",", ""))
+            except (TypeError, ValueError):
+                QMessageBox.warning(
+                    win, "جایابی دستی EENS",
+                    "فیدر و مختصات معتبر را وارد کنید یا نقطه‌ای از نقشه انتخاب کنید.")
+                return
+            topo_for_snap = state.get("topo")
+            from ...topology.tracing import same_feeder
+            trace = next((tr for tr in (topo_for_snap.traces if topo_for_snap else [])
+                          if same_feeder(tr.feeder_key, feeder_key)), None)
+            if not feeder_key or trace is None:
+                QMessageBox.warning(win, "جایابی دستی EENS",
+                                    "فیدر انتخاب‌شده در توپولوژی جاری پیدا نشد.")
+                return
+            from ...manual_placement import split_feeder_edge_at_point
+            try:
+                manual_graph, manual_traces, node, distance, snapped = \
+                    split_feeder_edge_at_point(
+                        topo_for_snap.graph, topo_for_snap.traces,
+                        feeder_key, x, y, max_dist_m=50.0)
+            except ValueError as exc:
+                QMessageBox.warning(win, "جایابی دستی EENS", str(exc))
+                return
+            from dataclasses import replace as _dc_replace
+            manual_topo = _dc_replace(topo_for_snap, graph=manual_graph,
+                                      traces=manual_traces)
+            manual_nodes_by_feeder[feeder_key] = node
+            manual_location[feeder_key] = {
+                "x_project_crs": float(x), "y_project_crs": float(y),
+                "snapped_x_project_crs": float(snapped[0]),
+                "snapped_y_project_crs": float(snapped[1]),
+                "snap_node": node, "offset_to_line_m": round(float(distance), 2)}
+            sec_tab.lbl_manual_snap.setText(
+                f"گرهٔ محاسباتی: {node} — فاصلهٔ نقطه تا خط: "
+                f"{float(distance):.1f} متر؛ محل کلید با گرهٔ مجازی روی همان خط "
+                "مدل می‌شود.")
+            cfg["manual_snap_node"] = node
+            cfg["manual_snap_distance_m"] = round(float(distance), 2)
+            state["sectionalizer_manual_node"] = {
+                "id": node, "x": float(snapped[0]), "y": float(snapped[1]),
+                "feeder_key": feeder_key}
 
         # ---- ری‌چک کامل ورودی‌ها قبل از اجرا (درخواست کاربر v1.15) ----
         # مشکل قبلی: موتور بی‌صدا با دادهٔ بار پیش‌فرض کار می‌کرد. اکنون
@@ -2969,6 +3023,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 cfg.get("max_downstream_load_ratio", 0.8)),
             restoration_model=str(cfg.get("restoration_model", "uniform")),
             use_existing_switches=bool(cfg.get("use_existing_switches", True)),
+            include_fuse_cutouts=bool(cfg.get("include_fuse_cutouts", False)),
         )
         backup = float(cfg.get("backup_kw") or 0.0)
         app_settings = SwitchPlacementAppSettings(
@@ -2978,9 +3033,16 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             failure_rate_source=str(cfg.get("failure_rate_source", "outage")),
             backup_kw=({k: backup for k in (study_feeder_keys() or ())}
                        if backup > 0 else {}),
-            feeder_keys=tuple(study_feeder_keys() or ()),
+            feeder_keys=(tuple([str(cfg.get("manual_feeder_key"))])
+                         if cfg.get("placement_mode") == "manual"
+                         else tuple(study_feeder_keys() or ())),
+            placement_mode=str(cfg.get("placement_mode") or "automatic"),
+            manual_nodes_by_feeder=manual_nodes_by_feeder,
+            manual_location=manual_location,
             report_dir=str(_reports_dir()))
         net, topo = state.get("net"), state.get("topo")
+        if manual_topo is not None:
+            topo = manual_topo
 
         def work():
             return SwitchPlacementService(app_settings).run(
@@ -3062,7 +3124,70 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         refresh_map()
         status_msg("نتیجهٔ مطالعه و کلیدهای پیشنهادی EENS پاک شد.")
 
-    sec_tab.on_run = lambda settings=None: do_sectionalizer()
+    def enter_eens_manual_utm() -> None:
+        from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox,
+                                       QFormLayout, QLineEdit)
+        from pyproj import CRS
+        from ...gis.crs import transform_utm_to_project
+        dlg = QDialog(win)
+        dlg.setWindowTitle("ورود مختصات جایابی EENS — UTM")
+        form = QFormLayout(dlg)
+        zone = QComboBox(); zone.addItem("38N", 38); zone.addItem("39N", 39)
+        east = QLineEdit(); east.setPlaceholderText("مثلاً 500000")
+        north = QLineEdit(); north.setPlaceholderText("مثلاً 3950000")
+        form.addRow("UTM Zone:", zone)
+        form.addRow("Easting (m):", east)
+        form.addRow("Northing (m):", north)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept); buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+        if not dlg.exec():
+            return
+        try:
+            from ..inputs_model import parse_number
+            easting, northing = parse_number(east.text()), parse_number(north.text())
+            if easting is None or northing is None:
+                raise ValueError("Easting و Northing باید عدد معتبر باشند.")
+            if not (100000 <= easting <= 900000 and 0 <= northing <= 10000000):
+                raise ValueError("مختصات خارج از محدودهٔ معتبر UTM است.")
+            target = project_crs()
+            if not target:
+                raise ValueError("CRS پروژه مشخص نیست؛ ابتدا لایه‌های GIS را تعریف کنید.")
+            x, y = transform_utm_to_project(
+                easting, northing, int(zone.currentData()),
+                CRS.from_user_input(target))
+        except Exception as exc:
+            QMessageBox.warning(win, "مختصات UTM", str(exc))
+            return
+        sec_tab.edit_manual_x.setText(f"{x:.3f}")
+        sec_tab.edit_manual_y.setText(f"{y:.3f}")
+        state["manual_highlight_point"] = (x, y)
+        tabs.setCurrentWidget(map_tab)
+        refresh_map()
+        tabs.setCurrentWidget(sec_tab)
+
+    def pick_eens_manual_map() -> None:
+        if state.get("topo") is None:
+            QMessageBox.information(win, "جایابی دستی EENS",
+                                    "ابتدا توپولوژی پروژه را اجرا کنید.")
+            return
+        map_tab.canvas.on_pick = _on_eens_map_pick
+        map_tab.canvas.set_pick_mode(True)
+        tabs.setCurrentWidget(map_tab)
+        QMessageBox.information(win, "جایابی دستی EENS",
+                                "برای تعیین محل کلید پیشنهادی، روی نقشه کلیک کنید.")
+
+    def _on_eens_map_pick(x: float, y: float) -> None:
+        sec_tab.edit_manual_x.setText(f"{x:.3f}")
+        sec_tab.edit_manual_y.setText(f"{y:.3f}")
+        state["manual_highlight_point"] = (x, y)
+        tabs.setCurrentWidget(sec_tab)
+        refresh_map()
+
+    sec_tab.on_enter_manual_utm = enter_eens_manual_utm
+    sec_tab.on_pick_manual_location = pick_eens_manual_map
+    sec_tab.on_run = lambda settings=None: do_sectionalizer(settings)
     sec_tab.on_show_map = show_sectionalizer_on_map
     sec_tab.on_clear_study = clear_switch_study
     map_tab.on_clear_study = clear_switch_study
@@ -3627,8 +3752,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                     k: v["filename"] for k, v in list_workbooks(str(db_path)).items()
                     if k != COLLECTIVE_KEY}
                 _load_project_kv(str(db_path))   # استایل‌ها + نام گزارش
-                # prior placement run → phase-5 exports available
-                btn_exports.setEnabled(_has_plc)
+                # Placement or persisted EENS study → phase-5 exports available
+                btn_exports.setEnabled(
+                    _has_plc or bool(state.get("sectionalizer_persisted")))
         except Exception as exc:                       # noqa: BLE001
             _write_log(_fmt_exc(exc))
             QMessageBox.warning(win, "SwitchLoc",

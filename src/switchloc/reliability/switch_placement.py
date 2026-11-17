@@ -143,6 +143,9 @@ class SwitchPlacementSettings:
     min_candidate_depth: int = DEFAULT_MIN_CANDIDATE_DEPTH
     #: قطعه‌بندی موجود (کلیدهای نصب‌شده) در حالت پایه لحاظ شود
     use_existing_switches: bool = True
+    #: فیوزهای شبکه (به‌جز فیوزهای ترمینال ترانس که ZonePolicy حذف می‌کند)
+    #: در محاسبه به‌عنوان مرز زون لحاظ شوند.
+    include_fuse_cutouts: bool = False
     #: uniform (کد مرجع) یا directional (سخت‌گیرانه)
     restoration_model: str = "uniform"
     #: گره‌هایی که از قبل کلید دارند کاندید نشوند (نصب دوبارهٔ کلید)
@@ -205,6 +208,7 @@ class SwitchPlacementSettings:
             "max_downstream_load_ratio": float(self.max_downstream_load_ratio),
             "min_candidate_depth": int(self.min_candidate_depth),
             "use_existing_switches": bool(self.use_existing_switches),
+            "include_fuse_cutouts": bool(self.include_fuse_cutouts),
             "exclude_nodes_with_switch": bool(self.exclude_nodes_with_switch),
             "exclude_transformer_terminal_nodes":
                 bool(self.exclude_transformer_terminal_nodes),
@@ -1079,8 +1083,10 @@ class SwitchPlacementEngine:
         """گره‌هایی که در وضعیت نرمال مرز قطعه‌اند (کلیدهای موجود)."""
         if net is None:
             return {}
-        from ..topology.zones import ZoneBuilder
-        builder = ZoneBuilder(graph, net, traces, self.zone_policy)
+        from ..topology.zones import ZoneBuilder, ZonePolicy
+        policy = self.zone_policy or ZonePolicy(
+            include_fuse_cutout=self.settings.include_fuse_cutouts)
+        builder = ZoneBuilder(graph, net, traces, policy)
         out: dict[str, set] = {}
         for tr in traces:
             key = normalize_feeder_key(tr.feeder_key) or tr.feeder_key
@@ -1100,7 +1106,8 @@ class SwitchPlacementEngine:
             feeders: Iterable[str] | None = None,
             zone_of_node: dict | None = None,
             existing_cut_nodes: dict | None = None,
-            branch_labels: dict | None = None) -> SwitchPlacementStudy:
+            branch_labels: dict | None = None,
+            manual_nodes_by_feeder: dict | None = None) -> SwitchPlacementStudy:
         """اجرای موتور روی همهٔ فیدرهای ردیابی‌شده (یا زیرمجموعهٔ ``feeders``)."""
         st = self.settings
         wanted = [str(f) for f in feeders] if feeders else None
@@ -1153,10 +1160,17 @@ class SwitchPlacementEngine:
             value = _lookup(transient_rates, name)
             if value is not None and float(value) >= 0:
                 tr_rate = float(value)
+            fixed_node = _lookup(manual_nodes_by_feeder, name)
+            if fixed_node is None:
+                fixed_node = _lookup(manual_nodes_by_feeder, key)
+            if manual_nodes_by_feeder is not None and fixed_node is None:
+                raise ValueError(
+                    f"در حالت دستی برای فیدر {name or key} گرهٔ نصب تعیین نشده است.")
             study.feeders.append(self._run_feeder(
                 graph, tr, key, node_load_kw, rate, source, backup,
                 cuts_map.get(key, set()), zone_of_node or {}, branch_labels or {},
-                net=net, transient_rate=tr_rate, repair_time=rep))
+                net=net, transient_rate=tr_rate, repair_time=rep,
+                manual_node=fixed_node))
         return study
 
     # ------------------------------------------------------------------
@@ -1209,7 +1223,8 @@ class SwitchPlacementEngine:
                     backup: float | None, existing_cuts: set,
                     zone_of_node: dict, branch_labels: dict,
                     net=None, transient_rate: float = 0.0,
-                    repair_time: float | None = None) -> FeederStudy:
+                    repair_time: float | None = None,
+                    manual_node: str | None = None) -> FeederStudy:
         st = self.settings
         rep_min = (float(repair_time) if repair_time is not None
                    else float(st.repair_time_min))
@@ -1315,7 +1330,7 @@ class SwitchPlacementEngine:
             if st.exclude_transformer_terminal_nodes and node in transformer_nodes:
                 rejected["already_has_device"] += 1
                 continue
-            if depth < st.min_candidate_depth:
+            if manual_node is None and depth < st.min_candidate_depth:
                 rejected["too_shallow"] += 1
                 continue
             downstream = tree.subtree_load_kw.get(node, 0.0)
@@ -1324,7 +1339,7 @@ class SwitchPlacementEngine:
                 continue
             ratio = (downstream / tree.total_load_kw
                      if tree.total_load_kw > 0 else 0.0)
-            if ratio > st.max_downstream_load_ratio:
+            if manual_node is None and ratio > st.max_downstream_load_ratio:
                 rejected["over_load_ratio"] += 1
                 continue
             length = tree.subtree_length_m.get(node, 0.0)
@@ -1346,7 +1361,7 @@ class SwitchPlacementEngine:
                 zone_id=str(zone_of_node.get(node, "") or ""),
                 existing_device="/".join(existing_codes)))
 
-        if st.max_candidates_per_feeder and \
+        if manual_node is None and st.max_candidates_per_feeder and \
                 len(candidates) > int(st.max_candidates_per_feeder):
             study.notes.append(
                 f"تعداد کاندیدها به {st.max_candidates_per_feeder} محدود شد "
@@ -1359,6 +1374,39 @@ class SwitchPlacementEngine:
             c.rank = i
         study.candidates = candidates
         study.rejected = rejected
+
+        # حالت دستی: فقط همان گره‌ای که کاربر تعیین کرده ارزیابی می‌شود؛
+        # نتیجه می‌تواند بهبود یا افزایش EENS باشد و در هر دو صورت گزارش می‌شود.
+        if manual_node is not None:
+            fixed = next((c for c in candidates if c.node == str(manual_node)), None)
+            if fixed is None:
+                study.candidates = []
+                study.notes.append(
+                    f"گرهٔ دستی {manual_node} کاندید معتبر نیست: باید روی فیدر "
+                    "انتخاب‌شده، خارج از نقطهٔ سر فیدر، دارای بار و طول "
+                    "پایین‌دست و فاقد کلید موجود باشد.")
+                study.best = OptimizationStep(
+                    count=0, selected=[], eens_kwh=study.baseline_eens_kwh,
+                    gain_kwh=0.0, improvement_percent=0.0,
+                    sections=list(study.baseline_sections))
+                return study
+            fixed.rank = 1
+            study.candidates = [fixed]
+            fixed_cuts = base_cuts | {fixed.node}
+            fixed_sections = build_sections(tree, fixed_cuts)
+            fixed_eens, _ = _total_eens(fixed_sections, fixed_cuts)
+            gain = study.baseline_eens_kwh - fixed_eens
+            improvement = (gain / study.baseline_eens_kwh * 100.0
+                           if study.baseline_eens_kwh > 0 else 0.0)
+            study.steps.append(OptimizationStep(
+                count=1, selected=[fixed], eens_kwh=fixed_eens,
+                gain_kwh=gain, improvement_percent=improvement,
+                sections=fixed_sections))
+            study.best = study.steps[-1]
+            study.notes.append(
+                "حالت جایابی دستی: فقط مختصات/گره انتخاب‌شده توسط کاربر "
+                "ارزیابی شد؛ هیچ جست‌وجوی خودکاری انجام نشد.")
+            return study
 
         # -- جست‌وجوی حریصانه ----------------------------------------------
         current_eens = study.baseline_eens_kwh
