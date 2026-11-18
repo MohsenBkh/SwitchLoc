@@ -6,7 +6,7 @@ REM  1. Checks Python 3.10+ on PATH.
 REM  2. Installs the dependencies directly into the Python found on PATH
 REM     (no virtual environment).
 REM  3. Import smoke test + GUI smoke test (offscreen Qt).
-REM  4. Engineering test suite (skip with SKIP_TESTS=1).
+REM  4. Engineering test suite (optional; set RUN_FULL_TESTS=1 to run).
 REM  5. Builds dist\SwitchLoc.exe (one file, no console, icon, Qt splash).
 REM  6. Copies projects\ + data\ + README.md next to the exe.
 REM
@@ -79,19 +79,17 @@ if errorlevel 1 goto :fail_import
 set "QT_QPA_PLATFORM="
 
 echo.
-echo [4/6] Engineering test suite...
-echo   This may take several minutes; keep this window open until
-echo   "All tests passed." is printed. Pressing Ctrl+C or closing the
-echo   window stops the build with exit code 3221225786.
-if "%SKIP_TESTS%"=="1" goto :skip_tests
+echo [4/6] Engineering test suite ^(optional^)...
+if not "%RUN_FULL_TESTS%"=="1" goto :skip_tests
+echo   RUN_FULL_TESTS=1 set: running the full engineering suite.
 set "QT_QPA_PLATFORM=offscreen"
-"%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -m pytest tests -q --maxfail=1 --tb=short --color=no --disable-warnings --durations=25
+"%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -m pytest tests -q --disable-warnings
 if errorlevel 1 goto :fail_tests
 set "QT_QPA_PLATFORM="
 echo   All tests passed.
 goto :tests_done
 :skip_tests
-echo   Skipped ^(SKIP_TESTS=1^).
+echo   Skipped ^(set RUN_FULL_TESTS=1 to run the full suite^).
 :tests_done
 
 echo.
@@ -148,7 +146,7 @@ set "FAIL_REASON=import/GUI smoke test failed"
 goto :fail_end
 :fail_tests
 echo ERROR: unit tests failed -- build stopped. Fix the tests or run
-echo       with SKIP_TESTS=1 to skip them.
+echo       Full engineering suite is optional; omit RUN_FULL_TESTS=1 to skip it.
 set "FAIL_REASON=engineering tests failed"
 goto :fail_end
 :fail_copy

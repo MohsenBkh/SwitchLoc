@@ -175,15 +175,15 @@ python -m pytest tests/ -q
 | فایل | کار |
 |---|---|
 | `RUN.bat` | اجرای یک‌کلیکی فقط با فایل اجرایی — بدون Python، بدون pip و بدون محیط مجازی؛ `dist\SwitchLoc.exe` (دسکتاپ) یا `dist\SwitchLocCLI.exe` (خط فرمان) را اجرا می‌کند. اگر exe هنوز ساخته نشده باشد، پیام می‌دهد که یک‌بار `BUILD.bat` را اجرا کنید |
-| `BUILD.bat` | ساخت یک‌کلیکی — بررسی Python 3.10+، نصب مستقیم وابستگی‌ها (شامل ابزارهای اختیاری گزارش `requirements-report.txt`)، تست دود ایمپورت، آزمون‌های مهندسی (با `SKIP_TESTS=1` قابل رد)، ساخت دو exe «تک‌فایلی» با PyInstaller (فونت‌ها و ابزارهای PDF باندل می‌شوند) و کپی `projects\` + `data\` + `README.md` کنار exe تا `dist\` کامل و قابل‌ارسال باشد |
+| `BUILD.bat` | ساخت یک‌کلیکی — بررسی Python 3.10+، نصب مستقیم وابستگی‌ها (شامل ابزارهای اختیاری گزارش `requirements-report.txt`)، تست دود ایمپورت (آزمون کامل مهندسی اختیاری؛ با `RUN_FULL_TESTS=1`)، ساخت دو exe «تک‌فایلی» با PyInstaller (فونت‌ها و ابزارهای PDF باندل می‌شوند) و کپی `projects\` + `data\` + `README.md` کنار exe تا `dist\` کامل و قابل‌ارسال باشد |
 
 ```bat
-BUILD.bat                                     :: یک‌بار: تست‌ها + ساخت دو exe تک‌فایلی در dist\
+BUILD.bat                                :: ساخت سریع (بدون سوئیت کامل تست)
 RUN.bat                                       :: پوسته دسکتاپ (dist\SwitchLoc.exe)
 RUN.bat projects\<project>.sqlite       :: پوسته دسکتاپ روی یک پروژه (پروژه هنگام بالا آمدن باز می‌شود)
 RUN.bat cli topology projects\<project>.sqlite --report-dir reports
 RUN.bat cli report projects\<project>.sqlite   :: اکسل + ورد + PDF + GIS در reports\exports\
-set SKIP_TESTS=1 && BUILD.bat                 :: ساخت بدون اجرای آزمون‌ها
+set RUN_FULL_TESTS=1 && BUILD.bat          :: ساخت همراه با سوئیت کامل تست‌ها
 ```
 
 - **یک فایل اجرایی تجمیع‌شده، بدون `_internal`**: هر دو exe با `--onefile` ساخته می‌شوند؛ در `dist\` فقط `SwitchLoc.exe` و `SwitchLocCLI.exe` هستند (به‌همراه پوشه‌های `projects\\` و `data\\`).
