@@ -147,7 +147,7 @@ def test_show_all_and_hide_all_buttons(app):
 
 def test_group_checkbox_toggles_all_of_its_children(app):
     tab = _tab()
-    tab.show_network(_renderer(), title="t")
+    tab.show_network(_renderer(), title="t", hidden_outage_ids=[])
     tab.set_outage_points(POINTS)
     group = next(tab.outage_list.topLevelItem(i)
                  for i in range(tab.outage_list.topLevelItemCount())
