@@ -129,7 +129,10 @@ class EquipmentTypeCatalog:
         if kind == "line_aerial":
             bare = any(word in installation for word in ("لخت", "bare", "uncovered"))
             if not bare:
-                return None, "برای خط هوایی، هادی لخت به‌طور صریح در GIS مشخص نشده است."
+                if not installation and ("acsr" in conductor or "فولاد" in conductor) and size in (35, 70):
+                    bare = True
+                else:
+                    return None, "برای خط هوایی، هادی لخت به‌طور صریح در GIS مشخص نشده است."
             if ("acsr" in conductor or "فولاد" in conductor) and size in (35, 70):
                 return f"{size}-Al_St", "تطبیق دقیق ACSR/آلومینیوم-فولاد/سطح مقطع/هوایی لخت"
             if "هاینا" in conductor or "hyena" in conductor:

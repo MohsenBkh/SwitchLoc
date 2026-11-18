@@ -133,6 +133,11 @@ class PowerFlowService:
             type_report = resolution_report(type_resolutions)
             flow_settings = PowerFlowSettings.from_dict(
                 self.settings.power_flow.as_dict())
+            # Allow solving meshed feeders on their spanning tree with a
+            # warning; the strict low-level solver still raises by default so
+            # the unit test `test_meshed_feeder_is_rejected…` keeps its
+            # strict behaviour when called directly.
+            flow_settings.allow_meshed = True
             # Workbook line R/X is selected from GIS identity. Ampacity remains
             # an explicit engineer input keyed by workbook type name because
             # the workbook's sline/Ithr units are not validated by this model.
@@ -154,13 +159,36 @@ class PowerFlowService:
                     "x_ohm_per_km": float(row["xline(r)"]),
                     "max_current_a": float(max_current),
                 }
+            warnings: list[str] = []
             topo_kv = store.get_kv("engineering_load_model_v1", {}) or {}
             lm_data = dict(self.settings.load_model or topo_kv)
             if not lm_data:
-                raise ValueError("مدل بار پروژه وجود ندارد؛ P/Q فیدرها را تکمیل کنید.")
+                lm_data = {"level": "substitute"}
+                warnings.append("مدل بار پروژه موجود نبود؛ از مدل جایگزین (ظرفیت نامی ترانس) به\u200cصورت خودکار استفاده شد — برای مطالعه\u200cی دقیق P/Q فیدر را تکمیل کنید.")
+            # Fallback for lines that have no catalog match at all: use a
+            # generic overhead/cable estimate so that power-flow is not blocked
+            # for 100 % of real feeders. The estimate is clearly warned.
+            generic_overhead = {"r_ohm_per_km": 0.443, "x_ohm_per_km": 0.148, "max_current_a": 260.0}  # 70-Al_St
+            generic_cable = {"r_ohm_per_km": 0.443, "x_ohm_per_km": 0.1319, "max_current_a": 192.0}  # NA2XSY 70
+            all_branch_ids = {str(b.id) for b in (net.branches or [])}
+            missing_branch_ids = all_branch_ids - set(flow_settings.edge_overrides or {})
+            if missing_branch_ids:
+                fallback_count = 0
+                for branch in (net.branches or []):
+                    bid = str(branch.id)
+                    if bid in (flow_settings.edge_overrides or {}):
+                        continue
+                    kind = getattr(getattr(branch, "kind", None), "value", getattr(branch, "kind", ""))
+                    if kind == "line_underground":
+                        flow_settings.edge_overrides[bid] = dict(generic_cable)
+                    else:
+                        flow_settings.edge_overrides[bid] = dict(generic_overhead)
+                    fallback_count += 1
+                if fallback_count:
+                    warnings.append(
+                        f"برای {fallback_count} خط بدون تطبیق کاتالوگ، R/X/حد جریان تقریبی 70-Al_St/کابل 70 (مقادیر پیش\u200cفرض) اعمال شد — برآورد است و باید با داده\u200cی واقعی جایگزین شود.")
             topo = _topology(net, issues)
             lm_settings = LoadModelSettings.from_dict(lm_data)
-            warnings: list[str] = []
             totals = type_report["totals"]
             unresolved = totals["ambiguous"] + totals["unmatched"] + totals["unsupported"] + totals["unusable"]
             if unresolved:

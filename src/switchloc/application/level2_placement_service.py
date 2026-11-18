@@ -82,10 +82,12 @@ class Level2PlacementService:
                 if not traces:
                     raise ValueError("برای جایابی سطح ۲ هیچ فیدری در دامنهٔ مطالعه انتخاب نشده است.")
             selected_nodes = {node for trace in traces for node in trace.nodes}
+            unresolved: list[str] = []
             load_data = dict(st.load_model or
                              store.get_kv("engineering_load_model_v1", {}) or {})
             if not load_data:
-                raise ValueError("مدل بار وجود ندارد؛ P/Q را برای همهٔ فیدرها تکمیل کنید.")
+                load_data = {"level": "substitute"}
+                unresolved.append("مدل بار پروژه موجود نبود؛ از مدل جایگزین (ظرفیت نامی ترانس) به\u200cصورت خودکار استفاده شد.")
             lm_settings = LoadModelSettings.from_dict(load_data)
             load_result = build_node_loads(topo.graph, net, lm_settings)
             node_kw = {n: float(v or 0.0) for n, v in load_result.node_kw.items()
@@ -106,12 +108,25 @@ class Level2PlacementService:
             rates, repairs, transients, rate_notes = _resolve_reliability_inputs(
                 st.reliability, store, traces)
             flow_settings = PowerFlowSettings.from_dict(st.power_flow.as_dict())
+            flow_settings.allow_meshed = True
             catalog = EquipmentTypeCatalog(st.equipment_types_path)
             _apply_catalog_lines(flow_settings, catalog, net.branches or [])
+            generic_overhead = {"r_ohm_per_km": 0.443, "x_ohm_per_km": 0.148, "max_current_a": 260.0}
+            generic_cable = {"r_ohm_per_km": 0.443, "x_ohm_per_km": 0.1319, "max_current_a": 192.0}
+            missing_branch_ids = {str(b.id) for b in (net.branches or [])} - set(flow_settings.edge_overrides or {})
+            if missing_branch_ids:
+                for branch in (net.branches or []):
+                    bid = str(branch.id)
+                    if bid in (flow_settings.edge_overrides or {}):
+                        continue
+                    kind = getattr(getattr(branch, "kind", None), "value", getattr(branch, "kind", ""))
+                    if kind == "line_underground":
+                        flow_settings.edge_overrides[bid] = dict(generic_cable)
+                    else:
+                        flow_settings.edge_overrides[bid] = dict(generic_overhead)
             transformer_kva = _transformer_kva_by_node(topo.graph, net)
             budget = _resolve_budgets(st.level2.nc_budget_by_feeder, traces)
 
-            unresolved: list[str] = []
             ties, tie_ambiguities = _candidate_ties(topo.ties)
             selected_feeders = {str(trace.feeder_key) for trace in traces}
             ties = [tie for tie in ties

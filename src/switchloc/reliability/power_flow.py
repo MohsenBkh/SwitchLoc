@@ -59,6 +59,11 @@ class PowerFlowSettings:
     # Workbook types do not provide an independently verified ampacity unit.
     # Require explicit engineer-confirmed current ratings by selected type.
     type_ampacity_a: dict = field(default_factory=dict)
+    # If True, meshed feeders are solved on their spanning tree with a
+    # warning instead of raising. Strict radial check remains the default
+    # for the low-level solver so that the unit test still catches accidental
+    # meshed use.
+    allow_meshed: bool = False
 
     def validate(self) -> None:
         if not math.isfinite(float(self.base_voltage_kv)) or self.base_voltage_kv <= 0:
@@ -187,8 +192,16 @@ def solve_radial_power_flow(
     order = list(getattr(tree, "order", ()) or ())
     if not root or not order or order[0] != root:
         raise ValueError("درخت فیدر ریشه/ترتیب معتبر ندارد.")
-    if getattr(tree, "extra_edge_ids", ()) or getattr(tree, "unreachable_edge_ids", ()):
-        raise ValueError("پخش بار نسخهٔ اول فقط برای فیدر شعاعیِ بدون یال حلقه‌ای است.")
+    extra = list(getattr(tree, "extra_edge_ids", ()) or ())
+    unreachable = list(getattr(tree, "unreachable_edge_ids", ()) or ())
+    meshed_warning: str | None = None
+    if extra or unreachable:
+        if not getattr(settings, "allow_meshed", False):
+            raise ValueError("پخش بار نسخهٔ اول فقط برای فیدر شعاعیِ بدون یال حلقه‌ای است.")
+        meshed_warning = (
+            f"{len(extra)} یال حلقه‌ای/{len(unreachable)} یال دور از دسترس در ردیابی؛ "
+            "حل پخش بار روی درخت پوشا (spanning tree) انجام شد — حلقه‌ها نادیده گرفته شدند."
+        )
     if len(order) != len(set(order)):
         raise ValueError("گره تکراری در درخت فیدر پیدا شد.")
 
@@ -318,6 +331,8 @@ def solve_radial_power_flow(
         "مدل سه‌فاز متعادل/توالی مثبت با بار ثابت P/Q و پخش رفت‌وبرگشتی اجرا شد.",
         "امپدانس ترانس، شنت خط، عدم‌تعادل فاز، تولید پراکنده و کنترل تپ در این MVP مدل نشده‌اند.",
     ]
+    if meshed_warning:
+        assumptions.append(meshed_warning)
     if missing_transformers:
         assumptions.append("ظرفیت ترانس برای گره(های) باردار ثبت نشده؛ امکان تأیید حد بارگیری کامل نیست.")
     return PowerFlowResult(

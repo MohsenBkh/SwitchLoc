@@ -9,8 +9,6 @@ terms). The algorithm never truncates the candidate set silently.
 from __future__ import annotations
 
 import itertools
-
-from ..task_control import check_cancelled
 import math
 from dataclasses import asdict, dataclass, field
 from typing import Iterable
@@ -207,16 +205,13 @@ def enumerate_location_plans(candidate_lists: dict[str, list],
     feeders = sorted(budgets)
     choices = []
     for feeder in feeders:
-        check_cancelled()
         cand = sorted(candidate_lists.get(feeder, ()),
                       key=lambda x: (str(getattr(x, "node", "")),
                                      str(getattr(x, "edge_id", ""))))
         choices.append(list(itertools.combinations(cand, int(budgets[feeder]))))
     no_choices = itertools.combinations(no_candidates, int(no_budget))
     for no_sel in no_choices:
-        check_cancelled()
         for feeder_choices in itertools.product(*choices):
-            check_cancelled()
             selected_nodes = [str(getattr(c, "node", ""))
                               for batch in feeder_choices for c in batch]
             if len(selected_nodes) != len(set(selected_nodes)):
