@@ -369,7 +369,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
     from ...persistence.store import ProjectStore
     from .chrome import install_chrome
-    from .worker import call_in_gui, error_box, install_excepthook, run_task
+    from .worker import (call_in_gui, cancel_current_task, error_box, is_busy,
+                         install_excepthook, register_stop_action,
+                         register_task_ui_handler, run_task)
 
     setup_logging()
     _log.info("SwitchLoc %s starting", __version__)
@@ -1070,7 +1072,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         except Exception as exc:                       # noqa: BLE001
             _log.warning("placement runs of %s not listed: %s", path, exc)
             _has_plc = False
-        btn_exports.setEnabled(_has_plc)
+        btn_exports.setEnabled(_has_plc or bool(state.get("sectionalizer_persisted")))
         s = net.summary()
         import_panel.setPlainText(
             f"Project     : {s.get('project', '')}\n"
@@ -1597,6 +1599,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         def done(res) -> None:
             state["dirty"] = True
             state["topo"] = res
+            sec_tab.set_feeders(study_feeder_keys() or [])
+            if state.get("sectionalizer_settings"):
+                sec_tab.apply_settings(state["sectionalizer_settings"])
             btn_review_outages.setEnabled(bool(outage_records()))
             topo_panel.setPlainText(fmt_topology_result(res))
             btn_show_map.setEnabled(True)
@@ -2655,7 +2660,10 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 "No study available. Run placement first, or open a "
                 "project that already contains a placement run.")
             return
-        dlg = make_exports_dialog(win)
+        export_formats = ("xlsx", "docx", "pdf", "gis")
+        if state.get("sectionalizer") or state.get("sectionalizer_persisted"):
+            export_formats += ("eens_json",)
+        dlg = make_exports_dialog(win, formats=export_formats)
         if not dlg.exec():
             return
         formats = dlg.selected() or ("xlsx",)
@@ -2676,6 +2684,28 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         manual = list(state.get("manual_evals") or [])
 
         def work():
+            if formats == ("eens_json",):
+                from ...reporting.eens_report import export_eens_json
+                from ...reporting.service import ExportResult
+                live_eens = state.get("sectionalizer")
+                if live_eens is not None:
+                    payload = live_eens.as_dict()
+                    payload["markdown"] = live_eens.markdown
+                else:
+                    from ...application.switch_placement_service import KV_KEY
+                    from ...persistence.store import ProjectStore
+                    store = ProjectStore(str(db))
+                    try:
+                        payload = store.get_kv(KV_KEY) or {}
+                    finally:
+                        store.close()
+                path = str(Path(out_dir) / "sectionalizer_eens_report.json")
+                exported_path = export_eens_json(payload, path)
+                return ExportResult(
+                    paths={"eens_json": exported_path},
+                    crosscheck={"status": "skipped",
+                                "status_fa": "خروجی مستقل از اجرای تازهٔ جایابی"})
+
             from ...reporting.service import ExportSettings, ReportService
             # نوع مطالعه‌ای که کاربر واقعاً اجرا کرده است: اگر آخرین اجرا
             # «جایابی کلید/EENS» بوده، گزارش نهایی فقط همان مطالعه را
@@ -2761,6 +2791,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             state["plc"] = run
             if run.topo is not None:
                 state["topo"] = run.topo
+                sec_tab.set_feeders(study_feeder_keys() or [])
             plac_panel.setPlainText(fmt_placement_result(run.result))
             btn_show_plac_map.setEnabled(True)
             btn_exports.setEnabled(True)
@@ -2855,7 +2886,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     plac_rcol.addWidget(plac_panel, 1)
 
     # --------------- روش جایابی بهینهٔ کلید و کاهش EENS ----------------------
-    def do_sectionalizer() -> None:
+    def do_sectionalizer(config=None) -> None:
         """اجرای موتور جایابی بهینهٔ کلید روی پروژهٔ باز."""
         db = state.get("db")
         if not db:
@@ -2864,8 +2895,58 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 "ابتدا پروژه را باز یا وارد کنید؛ نتیجه در همان فایل پروژه "
                 "ذخیره می‌شود.")
             return
-        cfg = dict(sec_tab.settings() or {})
+        sec_tab.set_feeders(study_feeder_keys() or [])
+        cfg = dict(config or sec_tab.settings() or {})
         state["sectionalizer_settings"] = cfg
+        state["sectionalizer_manual_node"] = None
+        manual_nodes_by_feeder = {}
+        manual_location = {}
+        manual_topo = None
+        if cfg.get("placement_mode") == "manual":
+            feeder_key = str(cfg.get("manual_feeder_key") or "")
+            try:
+                x = float(str(cfg.get("manual_x") or "").replace(",", ""))
+                y = float(str(cfg.get("manual_y") or "").replace(",", ""))
+            except (TypeError, ValueError):
+                QMessageBox.warning(
+                    win, "جایابی دستی EENS",
+                    "فیدر و مختصات معتبر را وارد کنید یا نقطه‌ای از نقشه انتخاب کنید.")
+                return
+            topo_for_snap = state.get("topo")
+            from ...topology.tracing import same_feeder
+            trace = next((tr for tr in (topo_for_snap.traces if topo_for_snap else [])
+                          if same_feeder(tr.feeder_key, feeder_key)), None)
+            if not feeder_key or trace is None:
+                QMessageBox.warning(win, "جایابی دستی EENS",
+                                    "فیدر انتخاب‌شده در توپولوژی جاری پیدا نشد.")
+                return
+            from ...manual_placement import split_feeder_edge_at_point
+            try:
+                manual_graph, manual_traces, node, distance, snapped = \
+                    split_feeder_edge_at_point(
+                        topo_for_snap.graph, topo_for_snap.traces,
+                        feeder_key, x, y, max_dist_m=50.0)
+            except ValueError as exc:
+                QMessageBox.warning(win, "جایابی دستی EENS", str(exc))
+                return
+            from dataclasses import replace as _dc_replace
+            manual_topo = _dc_replace(topo_for_snap, graph=manual_graph,
+                                      traces=manual_traces)
+            manual_nodes_by_feeder[feeder_key] = node
+            manual_location[feeder_key] = {
+                "x_project_crs": float(x), "y_project_crs": float(y),
+                "snapped_x_project_crs": float(snapped[0]),
+                "snapped_y_project_crs": float(snapped[1]),
+                "snap_node": node, "offset_to_line_m": round(float(distance), 2)}
+            sec_tab.lbl_manual_snap.setText(
+                f"گرهٔ محاسباتی: {node} — فاصلهٔ نقطه تا خط: "
+                f"{float(distance):.1f} متر؛ محل کلید با گرهٔ مجازی روی همان خط "
+                "مدل می‌شود.")
+            cfg["manual_snap_node"] = node
+            cfg["manual_snap_distance_m"] = round(float(distance), 2)
+            state["sectionalizer_manual_node"] = {
+                "id": node, "x": float(snapped[0]), "y": float(snapped[1]),
+                "feeder_key": feeder_key}
 
         # ---- ری‌چک کامل ورودی‌ها قبل از اجرا (درخواست کاربر v1.15) ----
         # مشکل قبلی: موتور بی‌صدا با دادهٔ بار پیش‌فرض کار می‌کرد. اکنون
@@ -2948,6 +3029,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                 cfg.get("max_downstream_load_ratio", 0.8)),
             restoration_model=str(cfg.get("restoration_model", "uniform")),
             use_existing_switches=bool(cfg.get("use_existing_switches", True)),
+            include_fuse_cutouts=bool(cfg.get("include_fuse_cutouts", False)),
         )
         backup = float(cfg.get("backup_kw") or 0.0)
         app_settings = SwitchPlacementAppSettings(
@@ -2957,9 +3039,16 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             failure_rate_source=str(cfg.get("failure_rate_source", "outage")),
             backup_kw=({k: backup for k in (study_feeder_keys() or ())}
                        if backup > 0 else {}),
-            feeder_keys=tuple(study_feeder_keys() or ()),
+            feeder_keys=(tuple([str(cfg.get("manual_feeder_key"))])
+                         if cfg.get("placement_mode") == "manual"
+                         else tuple(study_feeder_keys() or ())),
+            placement_mode=str(cfg.get("placement_mode") or "automatic"),
+            manual_nodes_by_feeder=manual_nodes_by_feeder,
+            manual_location=manual_location,
             report_dir=str(_reports_dir()))
         net, topo = state.get("net"), state.get("topo")
+        if manual_topo is not None:
+            topo = manual_topo
 
         def work():
             return SwitchPlacementService(app_settings).run(
@@ -2977,6 +3066,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
         def done(res) -> None:
             state["sectionalizer"] = res
+            btn_exports.setEnabled(True)
             state["dirty"] = True
             state["sectionalizer_map_nodes"] = _sec_nodes_of(res.study)
             sec_tab.show_result(res)
@@ -3000,9 +3090,13 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             sec_tab.set_busy(False, "اجرا ناموفق بود.")
             error_box(win, "جایابی بهینهٔ کلید ناموفق بود")(exc)
 
+        def _cancelled() -> None:
+            sec_tab.set_busy(False, "جایابی به درخواست کاربر لغو شد.")
+            status_msg("فرایند جایابی لغو شد؛ برنامه آمادهٔ کار بعدی است.")
+
         sec_tab.set_busy(True, "در حال محاسبه…")
         run_task(win, "جایابی بهینهٔ کلید و EENS…", work, _ok, _fail,
-                 title="Switch placement & EENS")
+                 title="Switch placement & EENS", on_cancel=_cancelled)
 
     def show_sectionalizer_on_map(nodes=None) -> None:
         """نمایش پیشنهادهای انتخاب‌شده روی نقشه (فیلتر بر اساس گره‌ها)."""
@@ -3040,7 +3134,70 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         refresh_map()
         status_msg("نتیجهٔ مطالعه و کلیدهای پیشنهادی EENS پاک شد.")
 
-    sec_tab.on_run = lambda settings=None: do_sectionalizer()
+    def enter_eens_manual_utm() -> None:
+        from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox,
+                                       QFormLayout, QLineEdit)
+        from pyproj import CRS
+        from ...gis.crs import transform_utm_to_project
+        dlg = QDialog(win)
+        dlg.setWindowTitle("ورود مختصات جایابی EENS — UTM")
+        form = QFormLayout(dlg)
+        zone = QComboBox(); zone.addItem("38N", 38); zone.addItem("39N", 39)
+        east = QLineEdit(); east.setPlaceholderText("مثلاً 500000")
+        north = QLineEdit(); north.setPlaceholderText("مثلاً 3950000")
+        form.addRow("UTM Zone:", zone)
+        form.addRow("Easting (m):", east)
+        form.addRow("Northing (m):", north)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok |
+                                   QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept); buttons.rejected.connect(dlg.reject)
+        form.addRow(buttons)
+        if not dlg.exec():
+            return
+        try:
+            from ..inputs_model import parse_number
+            easting, northing = parse_number(east.text()), parse_number(north.text())
+            if easting is None or northing is None:
+                raise ValueError("Easting و Northing باید عدد معتبر باشند.")
+            if not (100000 <= easting <= 900000 and 0 <= northing <= 10000000):
+                raise ValueError("مختصات خارج از محدودهٔ معتبر UTM است.")
+            target = project_crs()
+            if not target:
+                raise ValueError("CRS پروژه مشخص نیست؛ ابتدا لایه‌های GIS را تعریف کنید.")
+            x, y = transform_utm_to_project(
+                easting, northing, int(zone.currentData()),
+                CRS.from_user_input(target))
+        except Exception as exc:
+            QMessageBox.warning(win, "مختصات UTM", str(exc))
+            return
+        sec_tab.edit_manual_x.setText(f"{x:.3f}")
+        sec_tab.edit_manual_y.setText(f"{y:.3f}")
+        state["manual_highlight_point"] = (x, y)
+        tabs.setCurrentWidget(map_tab)
+        refresh_map()
+        tabs.setCurrentWidget(sec_tab)
+
+    def pick_eens_manual_map() -> None:
+        if state.get("topo") is None:
+            QMessageBox.information(win, "جایابی دستی EENS",
+                                    "ابتدا توپولوژی پروژه را اجرا کنید.")
+            return
+        map_tab.canvas.on_pick = _on_eens_map_pick
+        map_tab.canvas.set_pick_mode(True)
+        tabs.setCurrentWidget(map_tab)
+        QMessageBox.information(win, "جایابی دستی EENS",
+                                "برای تعیین محل کلید پیشنهادی، روی نقشه کلیک کنید.")
+
+    def _on_eens_map_pick(x: float, y: float) -> None:
+        sec_tab.edit_manual_x.setText(f"{x:.3f}")
+        sec_tab.edit_manual_y.setText(f"{y:.3f}")
+        state["manual_highlight_point"] = (x, y)
+        tabs.setCurrentWidget(sec_tab)
+        refresh_map()
+
+    sec_tab.on_enter_manual_utm = enter_eens_manual_utm
+    sec_tab.on_pick_manual_location = pick_eens_manual_map
+    sec_tab.on_run = lambda settings=None: do_sectionalizer(settings)
     sec_tab.on_show_map = show_sectionalizer_on_map
     sec_tab.on_clear_study = clear_switch_study
     map_tab.on_clear_study = clear_switch_study
@@ -3104,10 +3261,11 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         # لایهٔ خاموشی‌های دارای مختصات (درخواست کاربر — مورد ۴)
         if outage_records() and not state.get("outage_points_built"):
             rebuild_outage_points()
-        hidden_outages = set()
-        if state.get("map_style") is not None:
+        hidden_outages = None
+        if (state.get("map_style") is not None
+                and state["map_style"].hidden_outage_ids is not None):
             hidden_outages = {str(x) for x in
-                              (state["map_style"].hidden_outage_ids or [])}
+                              state["map_style"].hidden_outage_ids}
         map_tab.show_network(renderer, title="SwitchLoc — Network Map",
                              proposed_nodes=proposed, crs=crs,
                              manual_nodes=manual or None,
@@ -3180,6 +3338,227 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     # expose for manual triggering / testing
     state["_pf_helpers"] = {"store": _store_pf_app_result, "run": _run_powerflow_for_map_async}
 
+    def _refresh_level2_inputs() -> None:
+        net = state.get("net")
+        if net is None:
+            level2_tab.set_project_data([], project_key=state.get("db"))
+            return
+        topo = state.get("topo")
+        if topo is None:
+            try:
+                from ...validation.issues import IssueLog
+                topo = TopologyService(TopologySettings(persist=False)).run(
+                    net, issues=IssueLog())
+            except Exception as exc:
+                _log.warning("could not prepare feeder list for Level-2 form: %s", exc)
+                topo = None
+        all_feeders = ([str(item.feeder_key) for item in topo.traces]
+                       if topo is not None else
+                       sorted({str(x.feeder_name) for x in
+                               (net.branches or []) + (net.transformers or [])
+                               if str(x.feeder_name or "")}))
+        from ...topology.tracing import same_feeder
+        selected_scope = {str(key) for key in study_feeder_keys()}
+        feeders = [key for key in all_feeders
+                   if any(same_feeder(key, selected)
+                          for selected in selected_scope)]
+        available_no_count = 0
+        if topo is not None:
+            from ...application.level2_placement_service import _candidate_ties
+            candidates, _ = _candidate_ties(topo.ties)
+            available_no_count = sum(
+                any(same_feeder(tie.feeder_a, selected) for selected in feeders)
+                and any(same_feeder(tie.feeder_b, selected) for selected in feeders)
+                for tie in candidates)
+        line_types = []
+        line_ampacities = {}
+        selected_branches = [branch for branch in (net.branches or [])
+                             if any(same_feeder(branch.feeder_name, key)
+                                    for key in feeders)]
+        try:
+            from ...application.equipment_types import EquipmentTypeCatalog
+            catalog = EquipmentTypeCatalog()
+            line_types = sorted({resolution.selected_type
+                                 for branch in selected_branches
+                                 for resolution in [catalog.resolve_branch(branch)]
+                                 if resolution.status == "matched"
+                                 and resolution.selected_type})
+            line_ampacities = {name: catalog.line_ampacity_a(name)
+                               for name in line_types
+                               if catalog.line_ampacity_a(name) is not None}
+        except (OSError, ValueError) as exc:
+            _log.warning("could not resolve Level-2 line types: %s", exc)
+        saved = {}
+        db_path = state.get("db")
+        if db_path:
+            try:
+                from ...persistence.store import ProjectStore
+                store = ProjectStore(str(db_path))
+                try:
+                    saved = store.get_kv("level2_placement_settings", {}) or {}
+                finally:
+                    store.close()
+            except Exception as exc:
+                _log.warning("could not read saved Level-2 settings: %s", exc)
+        level2_tab.set_project_data(
+            feeders, line_types, state.get("load_model") or {}, saved,
+            project_key=db_path, line_ampacities=line_ampacities,
+            available_no_count=available_no_count)
+
+    def _level2_project_inputs() -> dict:
+        """Project load/outage/sectionalizer inputs for the Level-2 form."""
+        from ...topology.tracing import same_feeder
+        selected = list(study_feeder_keys() or [])
+        load_model = dict(state.get("load_model") or {})
+        outage_data = state.get("outage_store") or {}
+        db_path = state.get("db")
+        if db_path:
+            try:
+                from ...persistence.store import ProjectStore
+                store = ProjectStore(str(db_path))
+                try:
+                    if not load_model:
+                        load_model = dict(store.get_kv("engineering_load_model_v1", {}) or {})
+                    if not outage_data:
+                        outage_data = dict(store.load_outages() or {})
+                finally:
+                    store.close()
+            except Exception as exc:
+                _log.warning("could not collect Level-2 project inputs: %s", exc)
+        rates, repairs, transients = {}, {}, {}
+
+        def matching(mapping, feeder):
+            if feeder in mapping:
+                return mapping[feeder]
+            keys = [key for key in mapping if same_feeder(key, feeder)]
+            return mapping[keys[0]] if len(keys) == 1 else None
+
+        outage_rows = _lam_rows_of(state.get("outage"))
+        if not outage_rows:
+            outage_rows = _lam_rows_of(outage_data)
+        for row in outage_rows:
+            if not isinstance(row, dict):
+                row = getattr(row, "__dict__", {})
+            feeder = str(row.get("feeder_key") or "")
+            evidence = bool(row.get("events_random")) or float(
+                row.get("exposure_years") or 0) > 0
+            if feeder and evidence:
+                if row.get("lambda_per_year") is not None:
+                    rates[feeder] = float(row["lambda_per_year"])
+                if row.get("r_minutes") is not None and float(row["r_minutes"]) > 0:
+                    repairs[feeder] = float(row["r_minutes"])
+        for feeder, values in (state.get("lambda_overrides") or {}).items():
+            if not isinstance(values, dict):
+                continue
+            if values.get("lambda_per_year") is not None:
+                rates[str(feeder)] = float(values["lambda_per_year"])
+            if values.get("r_minutes") is not None:
+                repairs[str(feeder)] = float(values["r_minutes"])
+
+        sec_settings = dict(state.get("sectionalizer_settings") or sec_tab.settings() or {})
+        lambda_default = float(sec_settings.get("total_failure_rate_per_year", 30.0))
+        repair_default = float(sec_settings.get("repair_time_min", 50.0))
+        backup_source = sec_settings.get("backup_kw", 0.0)
+        if isinstance(backup_source, dict):
+            backup = {key: float(value) for key, value in backup_source.items()
+                      if value is not None and float(value) > 0}
+        else:
+            backup_value = float(backup_source or 0.0)
+            backup = ({key: backup_value for key in selected}
+                      if backup_value > 0 else {})
+        selected_rates, selected_repairs, reliability_source = {}, {}, {}
+        for feeder in selected:
+            rate = matching(rates, feeder)
+            repair = matching(repairs, feeder)
+            used_default = rate is None or repair is None
+            selected_rates[feeder] = float(lambda_default if rate is None else rate)
+            selected_repairs[feeder] = float(repair_default if repair is None else repair)
+            reliability_source[feeder] = (
+                "سوابق خاموشی + تنظیمات جایابی برای مقدار مفقود"
+                if used_default else "سوابق خاموشی/اصلاحات ورودی")
+        return {"load_model": load_model,
+                "failure_rates": selected_rates,
+                "repair_times_min": selected_repairs,
+                "transient_rates": transients,
+                "reliability_source": reliability_source,
+                "backup_kw": {key: value for key, value in backup.items()
+                              if any(same_feeder(key, feeder) for feeder in selected)}}
+
+    def _run_level2(config_data: dict) -> None:
+        project_db = state.get("db")
+        if not project_db:
+            QMessageBox.warning(win, "پروژه باز نیست",
+                                "ابتدا یک پروژهٔ SQLite را باز یا ایجاد کنید.")
+            return
+        # Pull project sources automatically too; values typed in the Level-2
+        # grid have precedence, while missing λ/r and backup fields inherit
+        # the feeder-specific outage/settings data for the selected scope.
+        config_data = dict(config_data)
+        config_data["feeder_keys"] = list(study_feeder_keys() or [])
+        if not config_data.get("load_model") and state.get("load_model"):
+            config_data["load_model"] = dict(state["load_model"])
+        project_inputs = _level2_project_inputs()
+        reliability = dict(config_data.get("reliability", {}) or {})
+        sources = dict(project_inputs.get("reliability_source", {}) or {})
+        explicit_feeders = set()
+        for field in ("failure_rates", "repair_times_min", "transient_rates", "backup_kw"):
+            explicit = reliability.get(field, {}) or {}
+            merged = dict(project_inputs.get(field, {}) or {})
+            merged.update(explicit)
+            reliability[field] = merged
+            if field in {"failure_rates", "repair_times_min"}:
+                explicit_feeders.update(map(str, explicit))
+        for feeder in explicit_feeders:
+            sources[feeder] = "مقادیر λ/r جدول جایابی سطح ۲ (اولویت ورودی مستقیم)"
+        reliability["input_source_by_feeder"] = sources
+        config_data["reliability"] = reliability
+        level2_tab.set_busy(True)
+
+        def work():
+            from ...application.level2_placement_service import (
+                Level2PlacementService, level2_settings_from_data)
+            from ...persistence.store import ProjectStore
+            store = ProjectStore(str(project_db))
+            try:
+                store.set_kv("level2_placement_settings", config_data,
+                             user="level2-placement-ui")
+            finally:
+                store.close()
+            return Level2PlacementService(
+                level2_settings_from_data(config_data)).run(str(project_db))
+
+        def done(result):
+            level2_tab.set_busy(False)
+            state["level2_placement"] = result
+            level2_tab.show_result(result)
+            status_msg(
+                f"جایابی سطح ۲: {sum(result.feasible_plan_count_by_type.values()):,} "
+                "آرایش مجاز بررسی/ثبت شد.")
+            if result.unresolved:
+                QMessageBox.information(
+                    win, "جایابی سطح ۲ — موارد نیازمند بررسی",
+                    "تحلیل تمام شد، اما مواردی نیازمند بازبینی است:\n• "
+                    + "\n• ".join(result.unresolved[:12]))
+            # auto-run powerflow for map display
+            try:
+                _run_powerflow_for_map_async(
+                    feeder_keys=tuple(config_data.get("feeder_keys") or []),
+                    power_flow_dict=dict(config_data.get("power_flow") or {}),
+                    load_model_dict=dict(config_data.get("load_model") or {}),
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("auto powerflow after Level-2 failed: %s", exc)
+
+        def failed(exc):
+            level2_tab.set_busy(False, "اجرای جایابی سطح ۲ ناموفق بود.")
+            error_box(win, "جایابی سطح ۲ ناموفق بود")(exc)
+
+        run_task(win, "در حال جست‌وجوی جایابی سطح دوم…", work, done,
+                 on_error=failed, title="جایابی سطح دوم")
+
+    level2_tab.on_run = _run_level2
+    level2_tab.on_refresh = _refresh_level2_inputs
+    level2_tab.on_get_project_inputs = _level2_project_inputs
     tabs.addTab(import_tab, "Data Import")
     tabs.addTab(topo_tab, "Topology")
     tabs.addTab(plac_tab, "Placement")
@@ -3187,43 +3566,6 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     tabs.addTab(level2_tab, "Level-2 placement + load flow")
     tabs.addTab(dash_tab, "Dashboard")
     tabs.addTab(map_tab, "Map")
-
-    # ---- Level-2 wiring — run + auto-fill map powerflow -----------------
-    def _level2_run(path: str) -> None:
-        db = state.get("db")
-        if not db:
-            QMessageBox.warning(win, "پروژه باز نیست", "ابتدا پروژه را باز کنید.")
-            return
-        level2_tab.set_busy(True)
-        _pf_dict_holder: dict = {}
-        def work():
-            from ...application.level2_placement_service import Level2PlacementService, load_level2_config
-            cfg = load_level2_config(path)
-            if not cfg.feeder_keys:
-                cfg.feeder_keys = tuple(study_feeder_keys() or [])
-            if not cfg.load_model and state.get("load_model"):
-                cfg.load_model = dict(state.get("load_model") or {})
-            _pf_dict_holder["pf"] = cfg.power_flow.as_dict()
-            _pf_dict_holder["load"] = dict(cfg.load_model or {})
-            _pf_dict_holder["fkeys"] = tuple(cfg.feeder_keys or [])
-            return Level2PlacementService(cfg).run(str(db))
-        def done(result):
-            level2_tab.set_busy(False)
-            state["level2_placement"] = result
-            level2_tab.show_result(result)
-            status_msg(f"جایابی سطح ۲: {sum(result.feasible_plan_count_by_type.values()):,} آرایش مجاز")
-            if result.unresolved:
-                QMessageBox.information(win, "جایابی سطح ۲ — موارد نیازمند بررسی", "تحلیل تمام شد، اما مواردی نیازمند بازبینی است:\n• " + "\n• ".join(result.unresolved[:12]))
-            try:
-                _run_powerflow_for_map_async(feeder_keys=_pf_dict_holder.get("fkeys"), power_flow_dict=_pf_dict_holder.get("pf"), load_model_dict=_pf_dict_holder.get("load"))
-            except Exception as exc:  # noqa: BLE001
-                _log.warning("auto powerflow after Level-2 failed: %s", exc)
-        def failed(exc):
-            level2_tab.set_busy(False, "اجرای جایابی سطح ۲ ناموفق بود.")
-            from .worker import error_box as _eb
-            _eb(win, "جایابی سطح ۲ ناموفق بود")(exc)
-        run_task(win, "در حال جست‌وجوی جایابی سطح دوم…", work, done, on_error=failed, title="جایابی سطح دوم")
-    level2_tab.on_run = _level2_run
 
     def _refresh_visible_map(_index):
         if tabs.currentWidget() is map_tab and state.get("_map_dirty"):
@@ -3418,6 +3760,11 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             QMessageBox.critical(win, "New project", str(exc))
 
     def _close_with_project_prompt(event) -> None:
+        if is_busy():
+            cancel_current_task()
+            status_msg("لغو فرایند درخواست شد؛ پس از توقف ایمن دوباره ببندید.")
+            event.ignore()
+            return
         if not _confirm_pending_changes():
             event.ignore(); return
         event.accept()
@@ -3439,11 +3786,16 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             "exports": do_exports,
             "approve": do_approve_shim,
             "map_style": open_map_style,
+            "cancel_task": cancel_current_task,
             "help": show_help,
             "about": show_about,
         },
         assets_dir=assets, version=__version__)
     chrome_ref["c"] = chrome
+    register_stop_action(chrome.stop_action)
+    register_task_ui_handler(
+        lambda busy: (chrome.central.setEnabled(not busy),
+                      chrome.set_busy(busy)))
     win.closeEvent = _close_with_project_prompt
     win.setCentralWidget(chrome.central)
     chrome.set_workflow(chrome_ref["wf"])
@@ -3486,8 +3838,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                     k: v["filename"] for k, v in list_workbooks(str(db_path)).items()
                     if k != COLLECTIVE_KEY}
                 _load_project_kv(str(db_path))   # استایل‌ها + نام گزارش
-                # prior placement run → phase-5 exports available
-                btn_exports.setEnabled(_has_plc)
+                # Placement or persisted EENS study → phase-5 exports available
+                btn_exports.setEnabled(
+                    _has_plc or bool(state.get("sectionalizer_persisted")))
         except Exception as exc:                       # noqa: BLE001
             _write_log(_fmt_exc(exc))
             QMessageBox.warning(win, "SwitchLoc",
