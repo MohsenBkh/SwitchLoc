@@ -80,9 +80,12 @@ set "QT_QPA_PLATFORM="
 
 echo.
 echo [4/6] Engineering test suite...
+echo   This may take several minutes; keep this window open until
+echo   "All tests passed." is printed. Pressing Ctrl+C or closing the
+echo   window stops the build with exit code 3221225786.
 if "%SKIP_TESTS%"=="1" goto :skip_tests
 set "QT_QPA_PLATFORM=offscreen"
-"%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -m pytest tests -vv --maxfail=1 --tb=short --color=no --disable-warnings
+"%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -m pytest tests -q --maxfail=1 --tb=short --color=no --disable-warnings --durations=25
 if errorlevel 1 goto :fail_tests
 set "QT_QPA_PLATFORM="
 echo   All tests passed.
