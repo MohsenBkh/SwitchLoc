@@ -38,3 +38,15 @@ def test_build_logger_records_nonzero_exit_code(tmp_path):
     contents = log.read_text(encoding="utf-8")
     assert "compile failed" in contents
     assert "EXIT CODE: 23" in contents
+
+
+def test_build_logger_explains_windows_ntstatus_exit_code(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("run_logged", LOGGER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module._describe_exit_code(3221225786) == module._NTSTATUS_HINTS[0xC000013A]
+    assert module._describe_exit_code(0xC000013A) == module._NTSTATUS_HINTS[0xC000013A]
+    assert module._describe_exit_code(1) == ""

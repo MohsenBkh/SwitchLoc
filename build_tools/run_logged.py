@@ -9,6 +9,21 @@ from datetime import datetime
 from pathlib import Path
 
 
+_NTSTATUS_HINTS = {
+    0xC000013A: "STATUS_CONTROL_C_EXIT — the process was interrupted (Ctrl+C or the console window was closed), not a normal exit",
+    0xC0000005: "STATUS_ACCESS_VIOLATION — the process crashed (invalid memory access)",
+    0xC0000409: "STATUS_STACK_BUFFER_OVERRUN — the process crashed (stack buffer overrun)",
+    0xC00000FD: "STATUS_STACK_OVERFLOW — the process ran out of stack",
+    0xC0000374: "STATUS_HEAP_CORRUPTION — the process crashed (heap corruption)",
+}
+
+
+def _describe_exit_code(code: int) -> str:
+    """Return a human-readable hint for well-known Windows NTSTATUS exit codes."""
+    unsigned = code if code >= 0 else code + 0x100000000
+    return _NTSTATUS_HINTS.get(unsigned, "")
+
+
 def _write_console(data: bytes) -> None:
     """Pass child bytes through unchanged so Windows console output is preserved."""
     stream = getattr(sys.stdout, "buffer", None)
@@ -49,8 +64,12 @@ def main(argv: list[str] | None = None) -> int:
                 log.flush()
                 _write_console(chunk)
             code = process.wait()
+            hint = _describe_exit_code(code)
             log.write(f"\n[{datetime.now().astimezone().isoformat(timespec='seconds')}] "
                       f"EXIT CODE: {code}\n")
+            if hint:
+                log.write(f"EXIT CODE MEANING: {hint}\n")
+                print(f"\n[run_logged] {hint}\n")
             log.flush()
             return code
     except OSError as exc:

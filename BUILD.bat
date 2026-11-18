@@ -80,7 +80,7 @@ echo.
 echo [4/6] Engineering test suite...
 if "%SKIP_TESTS%"=="1" goto :skip_tests
 set "QT_QPA_PLATFORM=offscreen"
-"%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -m pytest tests -q --disable-warnings
+"%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -m pytest tests -vv --maxfail=1 --tb=short --color=no --disable-warnings
 if errorlevel 1 goto :fail_tests
 set "QT_QPA_PLATFORM="
 echo   All tests passed.
