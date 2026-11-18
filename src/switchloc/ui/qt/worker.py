@@ -86,9 +86,18 @@ def cancel_current_task() -> bool:
     dialog = _STATE.get("dialog")
     if dialog is not None:
         dialog.setLabelText("لغو درخواست شد؛ در انتظار توقف ایمن فرایند…")
-        button = dialog.cancelButton()
+        button = _STATE.get("progress_cancel_button")
         if button is not None:
-            button.setEnabled(False)
+            try:
+                button.setText("لغو درخواست شد")
+                button.setEnabled(False)
+            except Exception:                      # noqa: BLE001 - button may be gone already
+                pass
+        else:
+            try:
+                dialog.setCancelButton(None)
+            except Exception:                      # noqa: BLE001 - never mask cancel request
+                pass
     action = _STATE.get("stop_action")
     if action is not None:
         action.setEnabled(False)
@@ -182,7 +191,7 @@ def run_task(parent, label: str, work: Callable[[], Any],
         return True
 
     from PySide6.QtCore import QObject, QThread, Qt, Signal, Slot
-    from PySide6.QtWidgets import QApplication, QProgressDialog
+    from PySide6.QtWidgets import QApplication, QProgressDialog, QPushButton
 
     class _Worker(QObject):
         finished = Signal(object)
@@ -243,7 +252,8 @@ def run_task(parent, label: str, work: Callable[[], Any],
             if self._released or not (self._worker_signal_seen and self._thread_stopped):
                 return
             self._released = True
-            _STATE.update(busy=False, task_control=None, dialog=None)
+            _STATE.update(busy=False, task_control=None, dialog=None,
+                          progress_cancel_button=None)
             _notify_task_ui(False)
             action = _STATE.get("stop_action")
             if action is not None:
@@ -297,13 +307,14 @@ def run_task(parent, label: str, work: Callable[[], Any],
                 self.dialog.show()
                 req.done.set()
 
+    cancel_button = QPushButton("لغو فرایند")
     dialog = QProgressDialog(label, None, 0, 0, parent)
     dialog.setWindowTitle(title)
     # The main window is temporarily locked except for its universal Stop
     # action; a modeless dialog lets that toolbar button remain reachable.
     dialog.setWindowModality(Qt.WindowModality.NonModal)
     dialog.setMinimumDuration(0)
-    dialog.setCancelButtonText("لغو فرایند")
+    dialog.setCancelButton(cancel_button)
     dialog.canceled.connect(cancel_current_task)
     dialog.setAutoClose(False)
     dialog.setAutoReset(False)
@@ -321,7 +332,8 @@ def run_task(parent, label: str, work: Callable[[], Any],
     worker.gui_request.connect(controller.on_gui_request)
     thread.started.connect(worker.run)
     controller._worker = worker                    # keep alive with controller
-    _STATE.update(busy=True, task_control=task_control, dialog=dialog)
+    _STATE.update(busy=True, task_control=task_control, dialog=dialog,
+                  progress_cancel_button=cancel_button)
     _notify_task_ui(True)
     action = _STATE.get("stop_action")
     if action is not None:

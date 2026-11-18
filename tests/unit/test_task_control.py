@@ -51,3 +51,53 @@ def test_cancelled_network_persist_rolls_back_partial_transaction(tmp_path):
         deactivate_task(token)
     assert store.runs() == []
     store.close()
+
+
+def test_cancel_current_task_disables_progress_cancel_button_without_qt_dialog_api():
+    from switchloc.ui.qt import worker
+
+    class FakeButton:
+        def __init__(self):
+            self.enabled = True
+            self.text = "لغو فرایند"
+
+        def setEnabled(self, value):
+            self.enabled = bool(value)
+
+        def setText(self, value):
+            self.text = value
+
+    class FakeDialog:
+        def __init__(self):
+            self.label = ""
+            self.cancel_removed = False
+
+        def setLabelText(self, value):
+            self.label = value
+
+        def setCancelButton(self, button):
+            assert button is None
+            self.cancel_removed = True
+
+    saved = worker._STATE.copy()
+
+    worker._STATE.update(busy=True, task_control=TaskControl(),
+                         dialog=FakeDialog(), progress_cancel_button=FakeButton())
+    try:
+        assert worker.cancel_current_task() is True
+        assert worker._STATE["task_control"].cancelled is True
+        assert worker._STATE["progress_cancel_button"].enabled is False
+        assert worker._STATE["progress_cancel_button"].text == "لغو درخواست شد"
+    finally:
+        worker._STATE.clear()
+        worker._STATE.update(saved)
+
+    dialog = FakeDialog()
+    worker._STATE.update(busy=True, task_control=TaskControl(),
+                         dialog=dialog, progress_cancel_button=None)
+    try:
+        assert worker.cancel_current_task() is True
+        assert dialog.cancel_removed is True
+    finally:
+        worker._STATE.clear()
+        worker._STATE.update(saved)
