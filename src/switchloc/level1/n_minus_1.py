@@ -45,6 +45,7 @@ from ..level1.formulas import EPTLResult, ZoneFaultRow, compute_ep_tl
 from ..topology.graph import NetworkGraph
 from ..topology.tracing import FeederTrace
 from ..topology.zones import SwitchZone, ZoneResult
+from ..task_control import check_cancelled
 from .transfer import barrier_cut_nodes, islands_with_ties, shared_node_links
 
 
@@ -276,6 +277,7 @@ def zone_fault_rows(tree: ZoneTree,
     zone_nodes = {z.id: set(z.nodes) for z in tree.zones}
     rows: list[ZoneFaultRow] = []
     for z in tree.zones:
+        check_cancelled()
         subtree = tree.subtree_zones(z.id)
         outage_kw = tree.subtree_load_kw(z.id)
         members = [zz for zz in subtree if zz != z.id]
@@ -324,6 +326,7 @@ def run_n_minus_one(graph: NetworkGraph, net: CanonicalNetwork,
 
     trees: dict[str, ZoneTree] = {}
     for tr in sorted(traces, key=lambda t: t.feeder_key):
+        check_cancelled()
         tree = build_zone_tree(graph, tr, zones_by_feeder.get(tr.feeder_key, []),
                                transf_kw, issues)
         if tree is not None:
@@ -341,6 +344,7 @@ def run_n_minus_one(graph: NetworkGraph, net: CanonicalNetwork,
     ties_of_feeder: dict[str, list] = {k: [] for k in trees}
     pair_count: dict[tuple[str, str], int] = {}
     for tie in sorted(ties, key=lambda t: t.id):
+        check_cancelled()
         a, b = tie.feeder_a, tie.feeder_b
         pair_count[(a, b)] = pair_count.get((a, b), 0) + 1
         if tie.automation_capable:
@@ -360,6 +364,7 @@ def run_n_minus_one(graph: NetworkGraph, net: CanonicalNetwork,
     # ---- transfer capability per (feeder, tie zone) ----------------------
     transfer: dict[str, dict[str, float]] = {k: {} for k in trees}
     for tie in sorted(ties, key=lambda t: t.id):
+        check_cancelled()
         if not tie.automation_capable:
             continue
         for feeder_key in (tie.feeder_a, tie.feeder_b):

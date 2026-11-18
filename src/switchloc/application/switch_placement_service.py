@@ -46,6 +46,7 @@ from ..reliability.switch_placement import (SWITCH_TYPE_FA,
                                             SwitchPlacementStudy)
 from ..topology.tracing import feeder_id as normalize_feeder_key
 from ..validation.issues import IssueLog
+from ..task_control import check_cancelled, report_progress
 
 #: کلاس‌های «خطای تصادفی» (هم‌ارز OutageRecord.is_random)
 _RANDOM_CLASSES = ("قابل کاهش با کلیدگذاری", "نیازمند تعمیر یا تعویض تجهیز",
@@ -99,6 +100,10 @@ class SwitchPlacementAppSettings:
     backup_kw: dict = dc_field(default_factory=dict)
     #: فیدرهای مطالعه (خالی = همهٔ فیدرهای ردیابی‌شده)
     feeder_keys: tuple = ()
+    #: automatic | manual — گره‌های دستی: feeder_key → node_id
+    placement_mode: str = "automatic"
+    manual_nodes_by_feeder: dict = dc_field(default_factory=dict)
+    manual_location: dict = dc_field(default_factory=dict)
     #: گزارش در این پوشه نوشته شود
     report_dir: str | None = None
 
@@ -142,6 +147,8 @@ class SwitchPlacementService:
     def run(self, db_path: str, *, net=None, topo=None,
             outage_lambda: dict | None = None) -> SwitchPlacementAppResult:
         st = self.settings
+        check_cancelled()
+        report_progress(1, "آماده‌سازی مطالعهٔ جایابی EENS")
         warnings: list[str] = []
         # باگ v1.14: وقتی شبکه از حافظه (رابط کاربری) می‌آمد، store ساخته
         # نمی‌شد و در نتیجه ماتریس λ/r واقعیِ خاموشی هرگز خوانده نمی‌شد؛
@@ -166,7 +173,10 @@ class SwitchPlacementService:
                 from .topology_service import TopologyService, TopologySettings
                 topo = TopologyService(TopologySettings(persist=False)).run(
                     net, issues=issues)
+            check_cancelled()
+            report_progress(4, "ساخت مدل بار و خواندن داده‌های خاموشی")
             study = self._build_study(net, topo, store, outage_lambda, warnings)
+            check_cancelled()
             if st.persist and db_path:
                 ProjectStore(db_path).set_kv(
                     KV_KEY, {
@@ -225,7 +235,10 @@ class SwitchPlacementService:
                 "ورودی بار فیدرها (Load Model) را کامل کنید.")
         lm_settings = LoadModelSettings.from_dict({**load_model,
                                                    "level": level_used})
+        check_cancelled()
         lm = build_node_loads(topo.graph, net, lm_settings)
+        check_cancelled()
+        report_progress(7, "مدل بار آماده شد؛ حل λ/r و مرزهای فیوز")
         node_load_kw = {k: float(v or 0.0) for k, v in lm.node_kw.items()}
         if sum(node_load_kw.values()) <= 0:
             warnings.append(
@@ -324,7 +337,9 @@ class SwitchPlacementService:
                                    for k in self._feeder_keys(net, topo)}
             tmax = float(engine_settings.transient_max_duration_min)
             counts: dict[str, list] = {}
-            for ev in (persisted.get("events") or []):
+            for event_index, ev in enumerate(persisted.get("events") or []):
+                if event_index % 128 == 0:
+                    check_cancelled()
                 try:
                     dur = float(ev.get("duration_min"))
                 except (TypeError, ValueError):
@@ -361,6 +376,12 @@ class SwitchPlacementService:
                     " مقدار r واقعی موجود نیست؛ زمان تعمیر تنظیمات "
                     f"({engine_settings.repair_time_min:g} دقیقه) استفاده شد.")
 
+        zone_of_node = topo.zones.zone_of_node
+        if engine_settings.include_fuse_cutouts:
+            from ..topology.zones import ZoneBuilder, ZonePolicy
+            zone_of_node = ZoneBuilder(
+                topo.graph, net, topo.traces,
+                ZonePolicy(include_fuse_cutout=True)).build(IssueLog()).zone_of_node
         engine = SwitchPlacementEngine(engine_settings)
         study = engine.run(
             topo.graph, topo.traces, node_load_kw, net=net,
@@ -370,8 +391,10 @@ class SwitchPlacementService:
             failure_rate_source=source,
             backup_kw=dict(st.backup_kw or {}) or None,
             feeders=st.feeder_keys or None,
-            zone_of_node=topo.zones.zone_of_node,
-            branch_labels=_branch_labels(net))
+            zone_of_node=zone_of_node,
+            branch_labels=_branch_labels(net),
+            manual_nodes_by_feeder=(st.manual_nodes_by_feeder
+                                    if st.placement_mode == "manual" else None))
         # فیدرهایی که کاندید دارند ولی هیچ کلیدی پیشنهاد نشد — دلیل را
         # صریح بگویید تا کاربر آن را باگ تلقی نکند.
         for feeder in study.feeders or []:
@@ -383,6 +406,8 @@ class SwitchPlacementService:
             if "زمان بازیابی بار سالم" in notes:
                 why = ("زمان بازیابی بار سالم از زمان تعمیر کمتر نیست؛ "
                        "جداسازی خطا سودی در EENS ندارد")
+            elif "گرهٔ دستی" in notes:
+                why = "موقعیت دستی یکی از محدودیت‌های محل کاندید را پاس نکرد"
             elif "بهبود محسوسی" in notes or "بهبود قابل" in notes:
                 why = "بهبود EENS زیر آستانهٔ معنادار بود"
             else:
@@ -394,6 +419,13 @@ class SwitchPlacementService:
                                            for k, v in rates.items()}
         study.settings["method"] = method
         study.settings["method_fa"] = EENS_METHOD_FA[method]
+        study.settings["placement_mode"] = (
+            st.placement_mode if st.placement_mode in {"automatic", "manual"}
+            else "automatic")
+        if st.placement_mode == "manual":
+            study.settings["manual_nodes_by_feeder"] = dict(
+                st.manual_nodes_by_feeder or {})
+            study.settings["manual_location"] = dict(st.manual_location or {})
         study.settings["switch_type"] = engine_settings.switch_type
         study.settings["switch_type_fa"] = SWITCH_TYPE_FA[engine_settings.switch_type]
         study.settings["repair_time_by_feeder"] = {

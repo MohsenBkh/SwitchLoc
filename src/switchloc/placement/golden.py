@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from ..topology.graph import NetworkGraph
 from ..topology.tracing import FeederTrace
+from ..task_control import check_cancelled
 
 
 @dataclass
@@ -70,9 +71,14 @@ def build_feeder_tree(graph: NetworkGraph, trace: FeederTrace,
     t.depth_len[root] = 0.0
     t.order = []
     queue = [root]
+    visited = 0
     while queue:
+        check_cancelled()
         nxt = []
         for n in queue:
+            if visited % 128 == 0:
+                check_cancelled()
+            visited += 1
             t.order.append(n)            # BFS order: parents before children
             for nbr, eid in graph.neighbors(n):
                 if nbr in t.parent or eid not in edge_set:
@@ -83,7 +89,9 @@ def build_feeder_tree(graph: NetworkGraph, trace: FeederTrace,
                 t.depth_len[nbr] = t.depth_len[n] + graph.edges[eid].length_m
                 nxt.append(nbr)
         queue = nxt
-    for n in reversed(t.order):              # post-order accumulation
+    for index, n in enumerate(reversed(t.order)):  # post-order accumulation
+        if index % 128 == 0:
+            check_cancelled()
         t.sub_load[n] = load_kw_at.get(n, 0.0) + sum(
             t.sub_load[c] for c in t.children[n])
         # sub_len = length of the edges strictly BELOW n (its own parent
@@ -213,7 +221,9 @@ def golden_section(graph: NetworkGraph, trace: FeederTrace,
 
     from itertools import combinations
     best = (float("inf"), None)
-    for combo in combinations(range(len(cands)), k - 1):
+    for combo_index, combo in enumerate(combinations(range(len(cands)), k - 1)):
+        if combo_index % 128 == 0:
+            check_cancelled()
         cuts = [cands[i] for i in combo]
         dev = up_deviation(segment_stats(t, cuts))
         if dev < best[0] - 1e-15:

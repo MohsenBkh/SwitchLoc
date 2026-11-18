@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 
 from ..domain.ids import stable_id
 from ..domain.entities import CanonicalNetwork
+from ..task_control import check_cancelled
 from ..topology.graph import NetworkGraph
 from ..topology.tracing import FeederTrace
 from .golden import GoldenSectioning, GoldenSettings, \
@@ -98,6 +99,7 @@ def generate_schemes(graph: NetworkGraph, net: CanonicalNetwork,
     # ---- (الف) sequential NC along the trunk (پیوست ب-۱ / رابطه ۱۰) -----
     ranked = [r.feeder_key for r in ranking_rows][: max(0, st.max_feeders)]
     for key in ranked:
+        check_cancelled()
         trace = trace_of.get(key)
         tree = trees.get(key)
         if trace is None or tree is None:
@@ -166,6 +168,7 @@ def generate_schemes(graph: NetworkGraph, net: CanonicalNetwork,
         return fkey in rated
 
     for tie in auto_ties[: max(0, st.max_tie_schemes)]:
+        check_cancelled()
         a, b = tie.feeder_a, tie.feeder_b
         ta, tb = trees.get(a), trees.get(b)
         if ta is None or tb is None:
@@ -212,6 +215,7 @@ def generate_schemes(graph: NetworkGraph, net: CanonicalNetwork,
 
     # ---- (ج) head-zone ties (سایر طرح‌های مانوری) ------------------------
     for tie in auto_ties[: max(0, st.max_tie_schemes)]:
+        check_cancelled()
         zno_a = zone_no_of.get((tie.feeder_a, tie.node))
         zno_b = zone_no_of.get((tie.feeder_b, tie.node))
         near_head = (zno_a is not None and zno_a <= 1) or \

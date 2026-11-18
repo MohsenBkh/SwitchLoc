@@ -39,6 +39,7 @@ from dataclasses import dataclass, field as dc_field
 
 from ..domain.entities import CanonicalNetwork
 from ..domain.enums import NodeKind
+from ..task_control import check_cancelled
 from ..validation.issues import (IssueLog, ValidationIssue, SEVERITY_INFO,
                                  SEVERITY_WARNING)
 
@@ -70,6 +71,7 @@ class GraphEdge:
     feeder_hint: str
     conductor: str = ""
     section_mm2: float | None = None
+    installation: str = ""
 
     def other(self, node: str) -> str:
         return self.b if node == self.a else self.a
@@ -156,7 +158,9 @@ class NetworkGraph:
             raise ValueError("تلورانس‌های تطبیق باید مثبت باشند.")
 
         # -- 1) nodes ---------------------------------------------------
-        for nd in net.nodes:
+        for index, nd in enumerate(net.nodes):
+            if index % 128 == 0:
+                check_cancelled()
             coord = nd.coord_snapped or nd.coord_original
             g.nodes[nd.id] = GraphNode(
                 id=nd.id, kind=nd.kind, coord=coord,
@@ -179,7 +183,9 @@ class NetworkGraph:
         n_edges = 0
         collapsed = 0
         kept = skipped = 0
-        for br in sorted(net.branches, key=lambda b: b.id):
+        for branch_index, br in enumerate(sorted(net.branches, key=lambda b: b.id)):
+            if branch_index % 64 == 0:
+                check_cancelled()
             if br.excluded_with_issue:
                 skipped += 1
                 continue
@@ -206,6 +212,8 @@ class NetworkGraph:
             vertices = [seg.a for seg in br.segments] + [br.segments[-1].b]
             node_path: list[tuple[int, str]] = []
             for vi, pt in enumerate(vertices):
+                if vi % 128 == 0:
+                    check_cancelled()
                 hit = junction_index.nearest(pt, match_tol_m, kind_rank)
                 if hit is None:
                     issues.add(ValidationIssue(
@@ -340,7 +348,7 @@ class NetworkGraph:
                 id=eid, branch_id=br.id, seq=k, a=na, b=nb,
                 length_m=float(length), kind=br.kind.value,
                 feeder_hint=br.feeder_name, conductor=br.conductor,
-                section_mm2=br.section_mm2)
+                section_mm2=br.section_mm2, installation=br.installation)
             self.adj[na].append((nb, eid))
             self.adj[nb].append((na, eid))
             self.edges_of_branch[br.id].append(eid)

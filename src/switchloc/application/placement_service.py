@@ -21,6 +21,7 @@ from ..persistence.store import ProjectStore
 from ..placement.service import EngineSettings, PlacementEngine, \
     PlacementResult
 from ..logging_setup import get_logger
+from ..task_control import check_cancelled, report_progress
 
 _log = get_logger("placement")
 
@@ -90,16 +91,21 @@ class PlacementService:
     # ------------------------------------------------------------------
     def run(self, db_path: str) -> PlacementRunResult:
         st = self.settings
+        check_cancelled()
+        report_progress(0, "شروع جایابی و رتبه‌بندی")
         store = ProjectStore(db_path)
         net, _issues = store.load_network()
+        check_cancelled()
         if net is None:
             store.close()
             raise ValueError(
                 f"پروژه قابل بارگذاری نیست (شبکه‌ای در {db_path} نیست).")
 
+        report_progress(12, "تحلیل توپولوژی برای مطالعهٔ جایابی")
         topo = TopologyService(TopologySettings(
             user=st.user, persist=st.persist)).run(
             net, out_db=db_path if st.persist else None)
+        check_cancelled()
         source_run_id = ""
         try:
             runs = store.runs()
@@ -129,12 +135,16 @@ class PlacementService:
             feeder_capacity = {}
 
         engine = PlacementEngine(st.engine)
+        check_cancelled()
+        report_progress(48, "ارزیابی طرح‌ها و محدودیت‌های مهندسی")
         result = engine.run(topo.graph, net, topo.traces, topo.zones,
-                            topo.ties, lam_matrix=lam_matrix,
+                           topo.ties, lam_matrix=lam_matrix,
                             traces_strict=topo.traces_strict,
                             feeder_capacity=feeder_capacity,
                             scope_feeder=st.scope_feeder,
                             scope_feeders=st.scope_feeders)
+        check_cancelled()
+        report_progress(88, "ذخیره و تهیهٔ گزارش جایابی")
 
         run_id = db_out = None
         snapshot = result.to_dict()
@@ -150,8 +160,10 @@ class PlacementService:
 
         md = js = None
         if st.report_dir:
+            check_cancelled()
             md, js = self.write_report(result, st.report_dir,
                                        run_id=run_id)
+        report_progress(100, "جایابی و رتبه‌بندی کامل شد")
         return PlacementRunResult(result=result, run_id=run_id,
                                   db_path=db_out, report_md=md,
                                   report_json=js, topo=topo)

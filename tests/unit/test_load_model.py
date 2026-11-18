@@ -140,6 +140,8 @@ def test_scaled_level_distributes_feeder_load_by_rated_capacity():
     # F2: S_load=√(30²+40²)=50، ΣS_rated=100 → K=0.5، cosφ=30/50=0.6
     #      P_T3 = 0.5 × 100 × 0.6 = 30 kW == P واردشده ✓
     assert res.node_kw["n3"] == pytest.approx(30.0)
+    assert res.node_kvar["n3"] == pytest.approx(40.0)
+    assert res.node_kvar["n2"] == pytest.approx(0.0)
     plan = res.scaling_plan
     assert plan["F1"]["k_scale"] == pytest.approx(200.0 / 800.0)
     assert plan["F2"]["cos_phi"] == pytest.approx(0.6)

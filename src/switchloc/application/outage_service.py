@@ -23,6 +23,7 @@ from ..reliability.outages import read_outage_workbook
 from ..validation.issues import (IssueLog, SEVERITY_ERROR, SEVERITY_INFO,
                                  SEVERITY_WARNING, ValidationIssue)
 from ..validation.qc import QcReport, run_qc
+from ..task_control import check_cancelled, report_progress
 
 
 @dataclass
@@ -104,6 +105,8 @@ class OutageService:
             report_dir: str | None = None,
             project_name: str = "تحلیل خاموشی‌ها") -> OutageResult:
         st = self.settings
+        check_cancelled()
+        report_progress(0, "شروع تحلیل خاموشی‌ها")
         issues = IssueLog()
 
         # 1) read --------------------------------------------------------
@@ -115,8 +118,12 @@ class OutageService:
         if st.per_feeder_files:
             # ورود per-feeder: هر فایل با نگاشت ثابت فیدر خودش خوانده و
             # ادغام می‌شود (همان پالت ستون‌ها؛ سطرهای خالی همان‌جا حذف می‌شوند)
-            for fkey in sorted(st.per_feeder_files):
+            for file_index, fkey in enumerate(sorted(st.per_feeder_files)):
+                check_cancelled()
                 fpath = st.per_feeder_files[fkey]
+                report_progress(5 + 25 * file_index
+                                / max(1, len(st.per_feeder_files)),
+                                f"خواندن فایل خاموشی فیدر {fkey}")
                 recs, stt = read_outage_workbook(
                     fpath, feeder_mapper=fixed_feeder_mapper(fkey),
                     source_tag=fkey)
@@ -139,8 +146,10 @@ class OutageService:
         else:
             if not workbook:
                 raise ValueError("workbook یا per_feeder_files باید داده شود.")
+            check_cancelled()
             records, reader_stats = read_outage_workbook(
                 workbook, feeder_mapper=default_feeder_mapper(st.model_feeders))
+            check_cancelled()
             if st.workbook_label:
                 reader_stats["file"] = st.workbook_label
 
@@ -161,7 +170,10 @@ class OutageService:
             reader_stats["records"] = len(records)
 
         # 2) classify ----------------------------------------------------
+        check_cancelled()
+        report_progress(35, "طبقه‌بندی رخدادها و محاسبهٔ پوشش")
         rules = classify_all(records)
+        check_cancelled()
 
         # 2b) unmapped causes → Error (an unknown cause must never pass)
         unmapped = [r for r in records if r.rule_id == "R-UNK-99"]
@@ -216,6 +228,7 @@ class OutageService:
             impact_fa="همه رخدادهای باقی‌مانده «تصادفی» فرض شده‌اند."))
 
         # 4) λ/r + four official levels (با زمان مواجهه واقعی — نیاز ۸) ----
+        check_cancelled()
         coverage = compute_coverage(
             records, start=st.coverage_start, end=st.coverage_end,
             force_cover=st.force_cover_months,
@@ -289,6 +302,8 @@ class OutageService:
 
         # 6) persistence ----------------------------------------------------
         if st.persist and out_db:
+            check_cancelled()
+            report_progress(90, "ذخیرهٔ نتیجهٔ تحلیل خاموشی")
             store = ProjectStore(out_db)
             result.outage_run_id = store.save_outages(
                 records=records, lam=lam, settings=result.settings,
@@ -300,7 +315,9 @@ class OutageService:
 
         # 7) report ----------------------------------------------------------
         if report_dir:
+            check_cancelled()
             self.write_report(result, report_dir)
+        report_progress(100, "تحلیل خاموشی‌ها کامل شد")
         return result
 
     # ------------------------------------------------------------------

@@ -96,15 +96,43 @@ def test_two_feeders_meeting_produce_overlap():
     assert by_key["F1"].overlaps and by_key["F2"].overlaps
 
 
-def test_gis_label_mismatch_reported():
+def test_empty_gated_trace_falls_back_to_label_evidence_only():
+    """فیدر بدون خروجی منبع هم‌برچسب نباید کل شبکه را مالک شود."""
+    b = NetBuilder()
+    b.source(0, 0, "F5")
+    b.source(0, 0, "F10")
+    b.source(0, 0, "F4")
+    b.line([(0, 0), (100, 0)], feeder="F4")
+    b.line([(200, 0), (300, 0)], feeder="F5")
+    b.line([(300, 0), (350, 0)])              # unlabeled connector
+    b.line([(350, 0), (400, 0)], feeder="F5")
+    b.line([(500, 0), (600, 0)], feeder="F10")
+    issues = IssueLog()
+    traces = TracingEngine(_graph(b), b.net,
+                           TracingPolicy()).trace_all(issues)
+    by_key = {t.feeder_key: t for t in traces}
+
+    assert by_key["F5"].used_label_fallback is True
+    assert by_key["F10"].used_label_fallback is True
+    assert by_key["F4"].used_label_fallback is False
+    assert len(by_key["F5"].edges) == 3       # only F5 evidence + connector
+    assert len(by_key["F10"].edges) == 1
+    assert len(by_key["F4"].edges) == 1
+    assert issues.by_code("TOPO-POL-05-LABEL-FALLBACK")
+
+
+def test_gis_label_mismatch_is_not_hidden_by_label_fallback():
     b = NetBuilder()
     b.source(0, 0, "F1")
     b.line([(0, 0), (100, 0)], feeder="F9")       # wrong label in GIS
     issues = IssueLog()
-    TracingEngine(_graph(b), b.net, TracingPolicy()).trace_all(issues)
-    mism = issues.by_code("TOPO-FEEDER-MISMATCH")
-    assert len(mism) == 1
-    assert "F9" in mism[0].message_fa
+    traces = TracingEngine(_graph(b), b.net,
+                           TracingPolicy()).trace_all(issues)
+    # TOPO-POL-05 must not guess the F9 branch belongs to F1 and flood it.
+    # The mismatch is surfaced as an empty label-anchored reconstruction.
+    assert traces[0].edges == set()
+    assert traces[0].used_label_fallback is True
+    assert issues.by_code("TOPO-POL-05-EMPTY")
 
 
 def test_fallback_seeds_from_breakers():

@@ -413,6 +413,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     from ..qt.map_canvas import make_map_canvas
     from ..qt.mapping_wizard import MappingWizardPage
     from ..qt.switch_placement_tab import make_sectionalizer_tab
+    from ..qt.level2_placement_tab import make_level2_placement_tab
     from ...application.import_service import ImportService, ImportSettings
     from ...application.outage_service import OutageService, OutageSettings
     from ...application.outage_review import (OutageReviewStore,
@@ -474,6 +475,11 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                    "zone_geometry_topo": None,   # توپولوژی متناظر کش
                    "gazetteer": None,            # بانک آفلاین مکان‌ها (کش)
                    "sectionalizer": None,        # نتیجهٔ موتور EENS
+                   "level2_placement": None,     # نتیجهٔ جایابی سطح ۲
+                   "pf_voltages": {},            # پخش بار: ولتاژ گره‌ها pu
+                   "pf_branch_loading": {},      # پخش بار: بار خطوط ٪
+                   "pf_transformer_loading": {}, # پخش بار: بار ترانس ٪
+                   "pf_last_run": None,          # خلاصهٔ آخرین پخش بار
                    "sectionalizer_settings": {},  # تنظیمات تب (پروژه)
                    "outage_last_save": "",       # پیام آخرین ذخیرهٔ بازبینی
                    "_loading": False, "_loading_kv": False, "dirty": False}
@@ -486,6 +492,7 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
     map_tab = make_map_canvas(win)
     dash_tab = make_dashboard_tab(win)
     sec_tab = make_sectionalizer_tab(win)
+    level2_tab = make_level2_placement_tab(win)
     _default_sectionalizer_settings = sec_tab.settings()
 
     # ---------------- Dashboard refresh ----------------------------------
@@ -3112,17 +3119,111 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                              outage_points=state.get("outage_points") or [],
                              hidden_outage_ids=hidden_outages,
                              sectionalizer_nodes=sec_nodes,
+                             pf_voltages=state.get("pf_voltages") or {},
+                             pf_branch_loading=state.get("pf_branch_loading") or {},
+                             pf_transformer_loading=state.get("pf_transformer_loading") or {},
                              feeder_filter=(state.get("scope")
                                             if isinstance(state.get("scope"), str)
                                             else "__ALL__"))
         state["_map_dirty"] = False
 
+    # ---------------- Power-flow map helpers (پخش بار) -------------------
+    def _store_pf_app_result(pf_result) -> None:
+        try:
+            merged_v: dict = {}
+            merged_loading: dict = {}
+            merged_trafo: dict = {}
+            for r in (getattr(pf_result, "results", []) or []):
+                merged_v.update(dict(getattr(r, "voltages_pu", {}) or {}))
+                merged_loading.update(dict(getattr(r, "branch_loading_pct", {}) or {}))
+                merged_trafo.update(dict(getattr(r, "transformer_loading_pct", {}) or {}))
+            state["pf_voltages"] = merged_v
+            state["pf_branch_loading"] = merged_loading
+            state["pf_transformer_loading"] = merged_trafo
+            state["pf_last_run"] = {
+                "feeders": [str(getattr(r, "feeder_key", "")) for r in (getattr(pf_result, "results", []) or [])],
+                "warnings": list(getattr(pf_result, "warnings", []) or []),
+                "errors": list(getattr(pf_result, "errors", []) or []),
+            }
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("pf store failed: %s", exc)
+        refresh_map()
+
+    def _run_powerflow_for_map_async(feeder_keys=None, power_flow_dict=None, load_model_dict=None) -> None:
+        db = state.get("db")
+        if not db:
+            return
+        fkeys = tuple(feeder_keys) if feeder_keys is not None else tuple(study_feeder_keys() or [])
+        pf_dict = dict(power_flow_dict or {})
+        if not pf_dict:
+            last_level2 = state.get("level2_placement")
+            if last_level2 is not None and isinstance(getattr(last_level2, "settings", None), dict):
+                pf_dict = dict(last_level2.settings.get("power_flow") or {})
+            if not pf_dict:
+                from ...reliability.power_flow import PowerFlowSettings
+                pf_dict = PowerFlowSettings(base_voltage_kv=20.0).as_dict()
+        lm_dict = dict(load_model_dict or state.get("load_model") or {})
+        def work():
+            from ...application.power_flow_service import PowerFlowAppSettings, PowerFlowService
+            from ...reliability.power_flow import PowerFlowSettings as _PFS
+            pfs = _PFS.from_dict(pf_dict)
+            svc = PowerFlowService(PowerFlowAppSettings(power_flow=pfs, load_model=lm_dict, feeder_keys=fkeys))
+            return svc.run(str(db))
+        def done(pf_result):
+            _store_pf_app_result(pf_result)
+            if getattr(pf_result, "warnings", None):
+                _log.info("powerflow warnings: %s", pf_result.warnings[:3])
+        def failed(exc):
+            _log.warning("powerflow for map failed: %s", exc)
+        run_task(win, "محاسبهٔ پخش بار برای نمایش روی نقشه…", work, done, on_error=failed, title="پخش بار")
+
+    # expose for manual triggering / testing
+    state["_pf_helpers"] = {"store": _store_pf_app_result, "run": _run_powerflow_for_map_async}
+
     tabs.addTab(import_tab, "Data Import")
     tabs.addTab(topo_tab, "Topology")
     tabs.addTab(plac_tab, "Placement")
     tabs.addTab(sec_tab, "Switch placement & EENS")
+    tabs.addTab(level2_tab, "Level-2 placement + load flow")
     tabs.addTab(dash_tab, "Dashboard")
     tabs.addTab(map_tab, "Map")
+
+    # ---- Level-2 wiring — run + auto-fill map powerflow -----------------
+    def _level2_run(path: str) -> None:
+        db = state.get("db")
+        if not db:
+            QMessageBox.warning(win, "پروژه باز نیست", "ابتدا پروژه را باز کنید.")
+            return
+        level2_tab.set_busy(True)
+        _pf_dict_holder: dict = {}
+        def work():
+            from ...application.level2_placement_service import Level2PlacementService, load_level2_config
+            cfg = load_level2_config(path)
+            if not cfg.feeder_keys:
+                cfg.feeder_keys = tuple(study_feeder_keys() or [])
+            if not cfg.load_model and state.get("load_model"):
+                cfg.load_model = dict(state.get("load_model") or {})
+            _pf_dict_holder["pf"] = cfg.power_flow.as_dict()
+            _pf_dict_holder["load"] = dict(cfg.load_model or {})
+            _pf_dict_holder["fkeys"] = tuple(cfg.feeder_keys or [])
+            return Level2PlacementService(cfg).run(str(db))
+        def done(result):
+            level2_tab.set_busy(False)
+            state["level2_placement"] = result
+            level2_tab.show_result(result)
+            status_msg(f"جایابی سطح ۲: {sum(result.feasible_plan_count_by_type.values()):,} آرایش مجاز")
+            if result.unresolved:
+                QMessageBox.information(win, "جایابی سطح ۲ — موارد نیازمند بررسی", "تحلیل تمام شد، اما مواردی نیازمند بازبینی است:\n• " + "\n• ".join(result.unresolved[:12]))
+            try:
+                _run_powerflow_for_map_async(feeder_keys=_pf_dict_holder.get("fkeys"), power_flow_dict=_pf_dict_holder.get("pf"), load_model_dict=_pf_dict_holder.get("load"))
+            except Exception as exc:  # noqa: BLE001
+                _log.warning("auto powerflow after Level-2 failed: %s", exc)
+        def failed(exc):
+            level2_tab.set_busy(False, "اجرای جایابی سطح ۲ ناموفق بود.")
+            from .worker import error_box as _eb
+            _eb(win, "جایابی سطح ۲ ناموفق بود")(exc)
+        run_task(win, "در حال جست‌وجوی جایابی سطح دوم…", work, done, on_error=failed, title="جایابی سطح دوم")
+    level2_tab.on_run = _level2_run
 
     def _refresh_visible_map(_index):
         if tabs.currentWidget() is map_tab and state.get("_map_dirty"):

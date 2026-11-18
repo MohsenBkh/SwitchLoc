@@ -64,10 +64,16 @@ def test_topology_once_and_close_cancel_then_discard(tmp_path, monkeypatch):
         assert not save.icon().isNull()
         settings = next(a for a in toolbar.actions() if a.text() == t('Settings'))
         settings.trigger()
-        tabs = next(x for x in win.findChildren(QTabWidget) if x.count() == 6
-                    and x.tabText(5) == 'Map')
-        m = tabs.widget(5)
-        sec = tabs.widget(3)
+        tabs = next(x for x in win.findChildren(QTabWidget)
+                    if any(x.tabText(i) == 'Map' for i in range(x.count()))
+                    and any(x.tabText(i) == 'Switch placement & EENS'
+                            for i in range(x.count())))
+        map_index = next(i for i in range(tabs.count())
+                         if tabs.tabText(i) == 'Map')
+        sec_index = next(i for i in range(tabs.count())
+                         if tabs.tabText(i) == 'Switch placement & EENS')
+        m = tabs.widget(map_index)
+        sec = tabs.widget(sec_index)
         sec.sp_depth.setValue(sec.sp_depth.value() + 1)
         save.trigger()  # flush the pending debounced settings before checkpoint
         from switchloc.persistence.store import ProjectStore

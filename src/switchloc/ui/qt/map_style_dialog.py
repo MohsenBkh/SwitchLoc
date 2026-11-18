@@ -431,6 +431,134 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
 
     tabs.addTab(outage_page, "خاموشی‌ها")
 
+    # (e) پخش بار — نمایش نتایج پخش بار روی فیدرها -------------------------
+    pf_page = QWidget()
+    pfv = QVBoxLayout(pf_page)
+    pfv.addWidget(QLabel(
+        "<b>پخش بار — نمایش نتایج روی فیدرها</b> — وقتی فعّال است، رنگ/ضخامت "
+        "فیدرها از ولتاژ گره‌ها و درصد بار خطوط می‌آید (به‌جای رنگ ثابت هر فیدر). "
+        "لجند نقشه به‌صورت خودکار به مقیاس ولتاژ/بار پخش بار تغییر می‌کند. "
+        "نتایج وقتی نمایش داده می‌شوند که از تب «Level-2 placement + load flow» "
+        "یا دستور CLI پخش بار تولید شده باشند؛ در غیر این‌صورت این تب فقط تنظیمات را ذخیره می‌کند."))
+    pf_info = QLabel(
+        "برای دیدن اثر، ابتدا در تب Level-2 یک مطالعه اجرا کنید (که پخش بار را نیز حساب می‌کند) "
+        "یا با <code>switchloc loadflow</code> نتایج را بسازید؛ سپس این تیک را بزنید.")
+    pf_info.setWordWrap(True)
+    pf_info.setStyleSheet("color:#5d4037;")
+    pfv.addWidget(pf_info)
+    pf_split = QSplitter(Qt.Orientation.Horizontal)
+
+    # -- سمت چپ: ولتاژ + بارگذاری --
+    pf_left = QWidget()
+    pfl = QVBoxLayout(pf_left)
+    pfl.setContentsMargins(2, 2, 2, 2)
+
+    chk_pf_enabled = QCheckBox("نمایش پخش بار روی نقشه (جایگزین رنگ ثابت فیدر)")
+    chk_pf_enabled.setToolTip("وقتی خاموش است، نقشه مثل قبل رنگ ثابت هر فیدر را نشان می‌دهد؛ وقتی روشن و نتایج موجود باشد، رنگ‌ها از پخش بار می‌آیند.")
+    pfl.addWidget(chk_pf_enabled)
+
+    cmb_pf_mode = QComboBox()
+    cmb_pf_mode.addItem("رنگ بر حسب ولتاژ (گرادیان) — ضخامت ثابت", "voltage")
+    cmb_pf_mode.addItem("رنگ و ضخامت بر حسب بار خط", "loading")
+    cmb_pf_mode.addItem("ترکیبی — رنگ ولتاژ، ضخامت بار خط", "combined")
+    mode_row = QHBoxLayout()
+    mode_row.addWidget(QLabel("حالت نمایش:"))
+    mode_row.addWidget(cmb_pf_mode, 1)
+    pfl.addLayout(mode_row)
+
+    # گروه ولتاژ
+    grp_v = QGroupBox("گرادیان ولتاژ (pu) — قرمز = افت، سبز = نامی")
+    form_v = QFormLayout(grp_v)
+    sp_pf_vmin = QDoubleSpinBox(); sp_pf_vmin.setRange(0.80, 1.10); sp_pf_vmin.setDecimals(3); sp_pf_vmin.setSingleStep(0.01)
+    sp_pf_vmin.setToolTip("ولتاژی که با رنگ پایین (قرمز) نمایش داده می‌شود.")
+    sp_pf_vmax = QDoubleSpinBox(); sp_pf_vmax.setRange(0.85, 1.15); sp_pf_vmax.setDecimals(3); sp_pf_vmax.setSingleStep(0.01)
+    sp_pf_vmax.setToolTip("ولتاژی که با رنگ بالا (سبز) نمایش داده می‌شود؛ بین این دو گرادیان خطی است.")
+    form_v.addRow("حد پایین ولتاژ (pu):", sp_pf_vmin)
+    form_v.addRow("حد بالای ولتاژ (pu):", sp_pf_vmax)
+    # ردیف رنگ پایین
+    btn_pf_low = QPushButton(); btn_pf_low.setFixedWidth(84)
+    sw_pf_low = QLabel(); sw_pf_low.setFixedWidth(46); sw_pf_low.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    low_hold = QWidget(); low_lay = QHBoxLayout(low_hold); low_lay.setContentsMargins(0, 0, 0, 0)
+    low_lay.addWidget(btn_pf_low); low_lay.addWidget(sw_pf_low)
+    form_v.addRow("رنگ افت ولتاژ:", low_hold)
+    btn_pf_high = QPushButton(); btn_pf_high.setFixedWidth(84)
+    sw_pf_high = QLabel(); sw_pf_high.setFixedWidth(46); sw_pf_high.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    high_hold = QWidget(); high_lay = QHBoxLayout(high_hold); high_lay.setContentsMargins(0, 0, 0, 0)
+    high_lay.addWidget(btn_pf_high); high_lay.addWidget(sw_pf_high)
+    form_v.addRow("رنگ ولتاژ نامی:", high_hold)
+    pfl.addWidget(grp_v)
+
+    # گروه بارگذاری
+    grp_l = QGroupBox("بارگذاری خطوط (درصد جریان نامی)")
+    form_l = QFormLayout(grp_l)
+    sp_pf_warn = QDoubleSpinBox(); sp_pf_warn.setRange(10.0, 200.0); sp_pf_warn.setDecimals(0); sp_pf_warn.setSingleStep(5.0)
+    sp_pf_warn.setToolTip("زیر این درصد = عادی (سبز)، بین این و حد اضافه‌بار = هشدار (نارنجی).")
+    sp_pf_over = QDoubleSpinBox(); sp_pf_over.setRange(20.0, 300.0); sp_pf_over.setDecimals(0); sp_pf_over.setSingleStep(5.0)
+    sp_pf_over.setToolTip("از این درصد به بالا = اضافه‌بار (قرمز).")
+    form_l.addRow("آستانه هشدار (٪):", sp_pf_warn)
+    form_l.addRow("آستانه اضافه‌بار (٪):", sp_pf_over)
+    # رنگ‌های سه سطح
+    btn_pf_norm = QPushButton(); btn_pf_norm.setFixedWidth(84)
+    sw_pf_norm = QLabel(); sw_pf_norm.setFixedWidth(46); sw_pf_norm.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    norm_hold = QWidget(); norm_lay = QHBoxLayout(norm_hold); norm_lay.setContentsMargins(0, 0, 0, 0)
+    norm_lay.addWidget(btn_pf_norm); norm_lay.addWidget(sw_pf_norm)
+    form_l.addRow("رنگ بار عادی:", norm_hold)
+    btn_pf_warn = QPushButton(); btn_pf_warn.setFixedWidth(84)
+    sw_pf_warn = QLabel(); sw_pf_warn.setFixedWidth(46); sw_pf_warn.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    warn_hold = QWidget(); warn_lay = QHBoxLayout(warn_hold); warn_lay.setContentsMargins(0, 0, 0, 0)
+    warn_lay.addWidget(btn_pf_warn); warn_lay.addWidget(sw_pf_warn)
+    form_l.addRow("رنگ هشدار بار:", warn_hold)
+    btn_pf_over = QPushButton(); btn_pf_over.setFixedWidth(84)
+    sw_pf_over = QLabel(); sw_pf_over.setFixedWidth(46); sw_pf_over.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    over_hold = QWidget(); over_lay = QHBoxLayout(over_hold); over_lay.setContentsMargins(0, 0, 0, 0)
+    over_lay.addWidget(btn_pf_over); over_lay.addWidget(sw_pf_over)
+    form_l.addRow("رنگ اضافه‌بار:", over_hold)
+    sp_pf_w_norm = QDoubleSpinBox(); sp_pf_w_norm.setRange(0.3, 10.0); sp_pf_w_norm.setDecimals(1); sp_pf_w_norm.setSingleStep(0.2)
+    sp_pf_w_warn = QDoubleSpinBox(); sp_pf_w_warn.setRange(0.3, 10.0); sp_pf_w_warn.setDecimals(1); sp_pf_w_warn.setSingleStep(0.2)
+    sp_pf_w_over = QDoubleSpinBox(); sp_pf_w_over.setRange(0.3, 12.0); sp_pf_w_over.setDecimals(1); sp_pf_w_over.setSingleStep(0.2)
+    form_l.addRow("ضخامت بار عادی (pt):", sp_pf_w_norm)
+    form_l.addRow("ضخامت هشدار (pt):", sp_pf_w_warn)
+    form_l.addRow("ضخامت اضافه‌بار (pt):", sp_pf_w_over)
+    pfl.addWidget(grp_l)
+    pfl.addStretch(1)
+    # اسکرول چپ
+    pf_left_scroll = QScrollArea(); pf_left_scroll.setWidgetResizable(True); pf_left_scroll.setWidget(pf_left)
+    pf_split.addWidget(pf_left_scroll)
+
+    # -- سمت راست: شفافیت و برچسب‌ها --
+    pf_right = QWidget()
+    pfr = QVBoxLayout(pf_right)
+    pfr.setContentsMargins(2, 2, 2, 2)
+    grp_r = QGroupBox("نمایش کلی و برچسب‌ها")
+    form_r = QFormLayout(grp_r)
+    sp_pf_opacity = QDoubleSpinBox(); sp_pf_opacity.setRange(0.1, 1.0); sp_pf_opacity.setDecimals(2); sp_pf_opacity.setSingleStep(0.05)
+    sp_pf_opacity.setToolTip("شفافیت خطوط پخش بار (۰٫۱ = کم‌رنگ، ۱ = مات).")
+    form_r.addRow("شفافیت خطوط پخش بار:", sp_pf_opacity)
+    chk_pf_labels = QCheckBox("نمایش برچسب مقدار روی یال‌ها (٪ بار یا pu ولتاژ)")
+    chk_pf_labels.setToolTip("برای جلوگیری از شلوغی، حداکثر ۱۲۰ برچسب پراکنده روی کل شبکه نشان داده می‌شود.")
+    form_r.addRow("", chk_pf_labels)
+    sp_pf_label_size = QDoubleSpinBox(); sp_pf_label_size.setRange(3.0, 14.0); sp_pf_label_size.setDecimals(1); sp_pf_label_size.setSingleStep(0.5)
+    form_r.addRow("سایز برچسب پخش بار (pt):", sp_pf_label_size)
+    sp_pf_tscale = QDoubleSpinBox(); sp_pf_tscale.setRange(0.6, 5.0); sp_pf_tscale.setDecimals(1); sp_pf_tscale.setSingleStep(0.2)
+    sp_pf_tscale.setToolTip("ضریب بزرگ‌نمایی نماد ترانسفورماتورهای دارای اضافه‌بار پخش بار.")
+    form_r.addRow("ضریب بزرگی ترانس اضافه‌بار:", sp_pf_tscale)
+    pfr.addWidget(grp_r)
+    pf_hint2 = QLabel(
+        "نکته: اگر نتایج پخش بار موجود نباشد، نقشه به‌صورت خودکار رنگ معمولی فیدرها را نشان می‌دهد؛ "
+        "با اجرای یک مطالعهٔ Level-2 یا پخش بار و سپس فعال‌کردن این تیک، گرادیان/ضخامت پخش بار ظاهر می‌شود. "
+        "تمام تنظیمات این تب داخل استایل پروژه ذخیره می‌شود.")
+    pf_hint2.setWordWrap(True)
+    pf_hint2.setStyleSheet("color:#616161;")
+    pfr.addWidget(pf_hint2)
+    pfr.addStretch(1)
+    pf_right_scroll = QScrollArea(); pf_right_scroll.setWidgetResizable(True); pf_right_scroll.setWidget(pf_right)
+    pf_split.addWidget(pf_right_scroll)
+    pf_split.setStretchFactor(0, 3)
+    pf_split.setStretchFactor(1, 2)
+    pfv.addWidget(pf_split, 1)
+
+    tabs.addTab(pf_page, "پخش بار")
+
     # -- pull (style → widgets) / events ------------------------------------
     def _paint(lbl: QLabel, color: str) -> None:
         pm = QPixmap(40, 14)
@@ -497,6 +625,33 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
         sp_heat_radius.setValue(float(getattr(st, "outage_heat_radius_m", 5000.0)))
         sp_heat_width.setValue(float(getattr(st, "outage_heat_width", 2.4)))
         _fill_heat_table()
+        # -- پخش بار -------------------------------------------------------
+        chk_pf_enabled.setChecked(bool(getattr(st, "pf_enabled", False)))
+        _idx_pf = cmb_pf_mode.findData(str(getattr(st, "pf_mode", "voltage") or "voltage"))
+        cmb_pf_mode.blockSignals(True)
+        cmb_pf_mode.setCurrentIndex(_idx_pf if _idx_pf >= 0 else 0)
+        cmb_pf_mode.blockSignals(False)
+        sp_pf_vmin.setValue(float(getattr(st, "pf_voltage_min_pu", 0.95)))
+        sp_pf_vmax.setValue(float(getattr(st, "pf_voltage_max_pu", 1.0)))
+        btn_pf_low.setText(str(getattr(st, "pf_voltage_low_color", "#d32f2f")))
+        _paint(sw_pf_low, str(getattr(st, "pf_voltage_low_color", "#d32f2f")))
+        btn_pf_high.setText(str(getattr(st, "pf_voltage_high_color", "#2e7d32")))
+        _paint(sw_pf_high, str(getattr(st, "pf_voltage_high_color", "#2e7d32")))
+        sp_pf_warn.setValue(float(getattr(st, "pf_loading_warn_pct", 70.0)))
+        sp_pf_over.setValue(float(getattr(st, "pf_loading_overload_pct", 100.0)))
+        btn_pf_norm.setText(str(getattr(st, "pf_loading_normal_color", "#2e7d32")))
+        _paint(sw_pf_norm, str(getattr(st, "pf_loading_normal_color", "#2e7d32")))
+        btn_pf_warn.setText(str(getattr(st, "pf_loading_warn_color", "#ef6c00")))
+        _paint(sw_pf_warn, str(getattr(st, "pf_loading_warn_color", "#ef6c00")))
+        btn_pf_over.setText(str(getattr(st, "pf_loading_overload_color", "#c62828")))
+        _paint(sw_pf_over, str(getattr(st, "pf_loading_overload_color", "#c62828")))
+        sp_pf_w_norm.setValue(float(getattr(st, "pf_loading_normal_width", 1.0)))
+        sp_pf_w_warn.setValue(float(getattr(st, "pf_loading_warn_width", 2.2)))
+        sp_pf_w_over.setValue(float(getattr(st, "pf_loading_overload_width", 3.4)))
+        sp_pf_opacity.setValue(float(getattr(st, "pf_opacity", 0.88)))
+        chk_pf_labels.setChecked(bool(getattr(st, "pf_show_labels", False)))
+        sp_pf_label_size.setValue(float(getattr(st, "pf_label_size", 5.0)))
+        sp_pf_tscale.setValue(float(getattr(st, "pf_transformer_scale", 1.6)))
 
     def on_unk() -> None:
         cc = QColorDialog.getColor(QColor(btn_unk.text()), dlg, "انتخاب رنگ")
@@ -556,6 +711,36 @@ def make_map_style_dialog(parent, feeders: list, current: MapStyle,
         lambda v: setattr(work, "outage_heat_radius_m", float(v)))
     sp_heat_width.valueChanged.connect(
         lambda v: setattr(work, "outage_heat_width", float(v)))
+    # -- پخش بار -------------------------------------------------------
+    chk_pf_enabled.toggled.connect(lambda on: setattr(work, "pf_enabled", bool(on)))
+    cmb_pf_mode.currentIndexChanged.connect(
+        lambda idx: setattr(work, "pf_mode", cmb_pf_mode.itemData(idx) or "voltage"))
+    sp_pf_vmin.valueChanged.connect(lambda v: setattr(work, "pf_voltage_min_pu", float(v)))
+    sp_pf_vmax.valueChanged.connect(lambda v: setattr(work, "pf_voltage_max_pu", float(v)))
+    sp_pf_warn.valueChanged.connect(lambda v: setattr(work, "pf_loading_warn_pct", float(v)))
+    sp_pf_over.valueChanged.connect(lambda v: setattr(work, "pf_loading_overload_pct", float(v)))
+    sp_pf_w_norm.valueChanged.connect(lambda v: setattr(work, "pf_loading_normal_width", float(v)))
+    sp_pf_w_warn.valueChanged.connect(lambda v: setattr(work, "pf_loading_warn_width", float(v)))
+    sp_pf_w_over.valueChanged.connect(lambda v: setattr(work, "pf_loading_overload_width", float(v)))
+    sp_pf_opacity.valueChanged.connect(lambda v: setattr(work, "pf_opacity", float(v)))
+    chk_pf_labels.toggled.connect(lambda on: setattr(work, "pf_show_labels", bool(on)))
+    sp_pf_label_size.valueChanged.connect(lambda v: setattr(work, "pf_label_size", float(v)))
+    sp_pf_tscale.valueChanged.connect(lambda v: setattr(work, "pf_transformer_scale", float(v)))
+
+    def _pick_pf(btn, sw, attr):  # pragma: no cover
+        def go(_=False):
+            cur = getattr(work, attr)
+            cc = QColorDialog.getColor(QColor(cur), dlg, "انتخاب رنگ")
+            if cc.isValid():
+                setattr(work, attr, cc.name())
+                btn.setText(cc.name())
+                _paint(sw, cc.name())
+        return go
+    btn_pf_low.clicked.connect(_pick_pf(btn_pf_low, sw_pf_low, "pf_voltage_low_color"))
+    btn_pf_high.clicked.connect(_pick_pf(btn_pf_high, sw_pf_high, "pf_voltage_high_color"))
+    btn_pf_norm.clicked.connect(_pick_pf(btn_pf_norm, sw_pf_norm, "pf_loading_normal_color"))
+    btn_pf_warn.clicked.connect(_pick_pf(btn_pf_warn, sw_pf_warn, "pf_loading_warn_color"))
+    btn_pf_over.clicked.connect(_pick_pf(btn_pf_over, sw_pf_over, "pf_loading_overload_color"))
 
     # ---- سطوح توزیع رنگی: جدول ویرایش‌پذیر ----
     def _heat_rows() -> list:

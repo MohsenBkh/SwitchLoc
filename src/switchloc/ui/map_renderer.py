@@ -43,12 +43,50 @@ def _feeder_selected(feeder: str | None, selection) -> bool:
     return same_feeder(feeder or "", str(selection))
 
 
+def _palette_key_for_label(label: str, palette: dict[str, str]) -> str | None:
+    """Resolve a GIS feeder label to one unambiguous palette key.
+
+    GIS exports sometimes omit separators (``F8SOUTH`` vs ``F8 - SOUTH``).
+    Match those spelling variants only when the compact label is unique; do
+    not collapse distinct full feeder names that merely share a number.
+    """
+    label = str(label or "").strip()
+    if not label:
+        return None
+    if label in palette:
+        return label
+    from ..topology.tracing import feeder_id, same_feeder
+    matches = [key for key in palette if feeder_id(key) == feeder_id(label)]
+    if not matches:
+        matches = [key for key in palette if same_feeder(key, label)]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        return None
+    compact = re.sub(r"[^A-Z0-9\u0600-\u06ff]+", "", label.upper())
+    compact_matches = [key for key in palette
+                       if re.sub(r"[^A-Z0-9\u0600-\u06ff]+", "", key.upper())
+                       == compact]
+    return compact_matches[0] if len(compact_matches) == 1 else None
+
+
 def feeder_palette(traces: list[FeederTrace],
-                   style: MapStyle | None = None) -> dict[str, str]:
-    """feeder → colour — automatic palette overlaid with the user's
-    MapStyle colours (تنظیمات نمایشی — درخواست کاربر). Kept as a module
-    function for backward compatibility with existing callers/tests."""
-    keys = sorted({t.feeder_key for t in traces if t.feeder_key})
+                   style: MapStyle | None = None,
+                   feeder_hints=None) -> dict[str, str]:
+    """feeder → colour for traced feeders and explicit GIS line labels.
+
+    Some GIS projects have incomplete source points, so tracing can fall
+    back to one overlapping whole-network trace. Include branch feeder
+    labels in the map palette so that this fallback cannot paint every
+    conductor with the same feeder colour. Existing two-argument callers
+    remain compatible.
+    """
+    keys = {t.feeder_key for t in traces if t.feeder_key}
+    for hint in feeder_hints or ():
+        hint = str(hint or "").strip()
+        if hint and _palette_key_for_label(hint, {key: "" for key in keys}) is None:
+            keys.add(hint)
+    keys = sorted(keys)
     if style is not None:
         return style.palette_of(feeders=keys)
     from .map_style import auto_palette
@@ -57,12 +95,12 @@ def feeder_palette(traces: list[FeederTrace],
 
 def edge_color_of(graph: NetworkGraph, palette: dict[str, str],
                   unknown_color: str = UNKNOWN_COLOR) -> dict[str, str]:
-    """edge_id → colour (traced feeders win over raw GIS hints).
+    """edge_id → colour, preferring an explicit line feeder label.
 
-    First claim wins — traces arrive sorted by feeder key, so the
-    alphabetically-first feeder keeps the edge when several feeders'
-    normal-state traces overlap (the A-09 flood-through), matching the
-    global zone_of_edge rule in `topology.zones`.
+    The GIS ``feeder_hint`` is the per-line attribution when topology
+    tracing has ambiguous/flood-through overlaps (for example, incomplete
+    feeder-head points). Use the traced feeder as a fallback for unlabeled
+    lines; this changes visualization only, not topology analysis.
     """
     edge_feeder: dict[str, str] = {}
     for t in getattr(graph, "_traces", []):
@@ -70,8 +108,8 @@ def edge_color_of(graph: NetworkGraph, palette: dict[str, str],
             edge_feeder.setdefault(eid, t.feeder_key)
     out = {}
     for eid, e in graph.edges.items():
-        k = edge_feeder.get(eid) or (e.feeder_hint.split(" ")[0]
-                                     if e.feeder_hint else "")
+        k = (_palette_key_for_label(e.feeder_hint, palette)
+             or edge_feeder.get(eid, ""))
         out[eid] = palette.get(k, unknown_color)
     return out
 
@@ -89,13 +127,23 @@ _SWITCH_CODE_LABELS = {
 def switch_display_code(sw) -> str:
     """Resolve the actual GIS device subtype, preferring explicit raw code."""
     from ..domain.enums import SwitchFamily
+    # ELWSEC/ELSEC is the dedicated sectionalizer layer.  Projects imported
+    # before the slot alias existed stored these devices as DISCONNECTOR
+    # (DCS); the layer name is authoritative for display so legacy DBs
+    # render SEC without requiring a re-import.
+    layer = str(getattr(sw, "layer", "") or "").strip().upper()
+    if layer in ("ELWSEC", "ELSEC"):
+        return "SEC"
     raw = str(getattr(sw, "switch_type_raw", "") or "").upper()
     compact = re.sub(r"[^A-Z0-9\u0600-\u06FF]+", "", raw)
     aliases = (("FCT", ("FCT", "فیوز", "کات اوت", "کاتاوت")),
-               ("DCS", ("DCS", "دیسکانکتور", "سکسیونر")),
+               ("SEC", ("SEC", "ELWSEC", "ELSEC", "سکشنالایزر",
+                        "سکشنلایزر", "سکشنالیزر", "سكشنالایزر",
+                        "سكشنلایزر")),
+               ("DCS", ("DCS", "دیسکانکتور", "سکسیونر",
+                        "سکسيونر", "سكسيونر")),
                ("CBR", ("CBR", "دژنکتور", "مدارشکن", "بریکر")),
-               ("REC", ("REC", "ریکلوزر")),
-               ("SEC", ("SEC", "سکشنالایزر", "سکشنالایزر")))
+               ("REC", ("REC", "ریکلوزر")))
     for code, words in aliases:
         if any(re.sub(r"\s+", "", w).upper() in compact for w in words):
             return code
@@ -104,6 +152,61 @@ def switch_display_code(sw) -> str:
             SwitchFamily.BREAKER: "CBR",
             SwitchFamily.RECLOSER: "REC",
             SwitchFamily.SECTIONALIZER: "SEC"}.get(sw.family, "UNK")
+
+
+# ---- power-flow colour helpers (پخش بار) ------------------------------
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    h = str(hex_color or "").strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except Exception:  # noqa: BLE001
+        return 0, 0, 0
+
+
+def _rgb_to_hex(r: int, g: int, b: int) -> str:
+    r = max(0, min(255, int(round(r))))
+    g = max(0, min(255, int(round(g))))
+    b = max(0, min(255, int(round(b))))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _interpolate_hex(low: str, high: str, t: float) -> str:
+    t = max(0.0, min(1.0, float(t)))
+    lr, lg, lb = _hex_to_rgb(low)
+    hr, hg, hb = _hex_to_rgb(high)
+    return _rgb_to_hex(lr + (hr - lr) * t, lg + (hg - lg) * t, lb + (hb - lb) * t)
+
+
+def _pf_voltage_color(pu: float | None, st) -> str | None:
+    if pu is None or not math.isfinite(float(pu)):
+        return None
+    try:
+        lo = float(st.pf_voltage_min_pu)
+        hi = float(st.pf_voltage_max_pu)
+    except Exception:  # noqa: BLE001
+        return None
+    if hi <= lo:
+        return None
+    t = (float(pu) - lo) / (hi - lo)
+    return _interpolate_hex(st.pf_voltage_low_color, st.pf_voltage_high_color, t)
+
+
+def _pf_loading_bucket(pct: float | None, st) -> tuple[str, float]:
+    if pct is None or not math.isfinite(float(pct)):
+        return st.pf_loading_normal_color, float(st.pf_loading_normal_width)
+    p = float(pct)
+    try:
+        warn = float(st.pf_loading_warn_pct)
+        ov = float(st.pf_loading_overload_pct)
+    except Exception:  # noqa: BLE001
+        warn, ov = 70.0, 100.0
+    if p < warn:
+        return st.pf_loading_normal_color, float(st.pf_loading_normal_width)
+    if p < ov:
+        return st.pf_loading_warn_color, float(st.pf_loading_warn_width)
+    return st.pf_loading_overload_color, float(st.pf_loading_overload_width)
 
 
 class NetworkMapRenderer:
@@ -131,6 +234,11 @@ class NetworkMapRenderer:
         self._pending_outage_labels: list = []
         #: افسانهٔ توزیع رنگی: [(color, label, edges)]
         self._heat_legend: list = []
+        #: افسانهٔ پخش بار
+        self._pf_legend: list = []
+        #: دادهٔ پخش بار آخرین رندر (برای برچسب‌ها)
+        self._pf_voltages: dict = {}
+        self._pf_branch_loading: dict = {}
 
     # ------------------------------------------------------------------
     def render(self, path: str, title: str = "",
@@ -143,7 +251,9 @@ class NetworkMapRenderer:
                hidden_switch_ids=None, zone_up_mwh: dict | None = None,
                zone_outage_hours: dict | None = None,
                outage_points=None, sectionalizer_nodes=None,
-               hidden_outage_ids=None) -> str:
+               hidden_outage_ids=None,
+               pf_voltages=None, pf_branch_loading=None,
+               pf_transformer_loading=None) -> str:
         """Render to a PNG file (headless Agg) and return the path."""
         fig = plt.figure(figsize=figsize, constrained_layout=True)
         try:
@@ -160,7 +270,10 @@ class NetworkMapRenderer:
                              zone_outage_hours=zone_outage_hours,
                              outage_points=outage_points,
                              sectionalizer_nodes=sectionalizer_nodes,
-                             hidden_outage_ids=hidden_outage_ids)
+                             hidden_outage_ids=hidden_outage_ids,
+                             pf_voltages=pf_voltages,
+                             pf_branch_loading=pf_branch_loading,
+                             pf_transformer_loading=pf_transformer_loading)
             fig.savefig(path, dpi=dpi)
         finally:
             plt.close(fig)
@@ -197,7 +310,9 @@ class NetworkMapRenderer:
                     zone_outage_hours: dict | None = None,
                     manual_tie_pairs=None, zone_label_positions=None,
                     outage_points=None, sectionalizer_nodes=None,
-                    hidden_outage_ids=None) -> None:
+                    hidden_outage_ids=None,
+                    pf_voltages=None, pf_branch_loading=None,
+                    pf_transformer_loading=None) -> None:
         """Draw onto an existing Matplotlib figure (Qt canvas shares this).
 
         ``proposed_nodes``: node ids of Phase-4 proposed switch locations
@@ -228,8 +343,24 @@ class NetworkMapRenderer:
         self._rotate = False
         st = self.style = (style or self.style or MapStyle())
         self._drawn = set()                # legend = what is actually drawn
-        palette = feeder_palette(self.traces, st)
+        palette = feeder_palette(
+            self.traces, st,
+            feeder_hints=(edge.feeder_hint for edge in self.graph.edges.values()))
         edge_colors = edge_color_of(self.graph, palette, st.unknown_color)
+
+        # ---- power-flow state -----------------------------------------
+        self._pf_legend = []
+        self._pf_voltages = {str(k): float(v) for k, v in (pf_voltages or {}).items()
+                             if v is not None}
+        self._pf_branch_loading = {str(k): float(v) for k, v in (pf_branch_loading or {}).items()
+                                   if v is not None}
+        self._pf_transformer_loading = {str(k): float(v) for k, v in (pf_transformer_loading or {}).items()
+                                        if v is not None}
+        pf_has_data = bool(self._pf_voltages or self._pf_branch_loading)
+        pf_active = bool(getattr(st, "pf_enabled", False) and pf_has_data)
+        pf_alpha = float(getattr(st, "pf_opacity", 0.88)) if pf_active else 0.92
+        # fallback widths when pf not active
+        _base_w = st.feeder_width_filtered if feeder_filter else st.feeder_width
 
         ax = fig.subplots(1, 1) if hasattr(fig, "subplots") else None
         if ax is None:
@@ -242,6 +373,9 @@ class NetworkMapRenderer:
             for trace in self.traces:
                 if _feeder_selected(trace.feeder_key, feeder_filter):
                     selected_edges.update(trace.edges)
+        pf_voltage_min = float(getattr(st, "pf_voltage_min_pu", 0.95) or 0.95)
+        pf_voltage_max = float(getattr(st, "pf_voltage_max_pu", 1.0) or 1.0)
+        pf_mode = str(getattr(st, "pf_mode", "voltage") or "voltage")
         for eid, e in self.graph.edges.items():
             a = self._c(self.graph.nodes[e.a].coord)
             b = self._c(self.graph.nodes[e.b].coord)
@@ -250,13 +384,161 @@ class NetworkMapRenderer:
             if selected_edges is not None and eid not in selected_edges:
                 continue
             segs.append((a, b))
-            colors.append(edge_colors.get(eid, st.unknown_color))
-            widths.append(st.feeder_width_filtered if feeder_filter
-                          else st.feeder_width)
+            if pf_active:
+                col = None
+                w = _base_w
+                # voltage-based colour
+                if pf_mode in ("voltage", "combined"):
+                    pu_a = self._pf_voltages.get(str(e.a))
+                    pu_b = self._pf_voltages.get(str(e.b))
+                    pu = None
+                    if pu_a is not None and pu_b is not None:
+                        pu = min(float(pu_a), float(pu_b))
+                    elif pu_a is not None:
+                        pu = float(pu_a)
+                    elif pu_b is not None:
+                        pu = float(pu_b)
+                    vc = _pf_voltage_color(pu, st)
+                    if vc is not None:
+                        col = vc
+                # loading-based appearance
+                if pf_mode == "loading":
+                    pct = self._pf_branch_loading.get(str(eid))
+                    # also try branch_id fallback (edge.branch_id == eid in many cases)
+                    if pct is None:
+                        pct = self._pf_branch_loading.get(str(getattr(e, "branch_id", "")))
+                    lc, lw = _pf_loading_bucket(pct, st)
+                    if pct is not None:
+                        col = lc
+                        w = lw
+                    elif col is None:
+                        col = edge_colors.get(eid, st.unknown_color)
+                elif pf_mode == "combined":
+                    pct = self._pf_branch_loading.get(str(eid))
+                    if pct is None:
+                        pct = self._pf_branch_loading.get(str(getattr(e, "branch_id", "")))
+                    _lc, lw = _pf_loading_bucket(pct, st)
+                    if pct is not None:
+                        w = lw
+                    if col is None:
+                        # no voltage available → fall back to loading colour
+                        if pct is not None:
+                            col = _lc
+                        else:
+                            col = edge_colors.get(eid, st.unknown_color)
+                else:  # voltage only, width stays base
+                    if col is None:
+                        col = edge_colors.get(eid, st.unknown_color)
+                colors.append(col or edge_colors.get(eid, st.unknown_color))
+                widths.append(float(w))
+            else:
+                colors.append(edge_colors.get(eid, st.unknown_color))
+                widths.append(_base_w)
         if segs:
             ax.add_collection(LineCollection(
-                segs, colors=colors, linewidths=widths, alpha=0.92,
+                segs, colors=colors, linewidths=widths, alpha=pf_alpha,
                 capstyle="round", zorder=1))
+        # pf legend buckets (for loading mode we show three buckets, for
+        # voltage we show gradient endpoints)
+        if pf_active:
+            self._drawn.add("powerflow")
+            if pf_mode in ("loading", "combined"):
+                # count per bucket for legend
+                buckets = {"normal": 0, "warn": 0, "overload": 0}
+                for eid, e in self.graph.edges.items():
+                    if selected_edges is not None and eid not in selected_edges:
+                        continue
+                    pct = self._pf_branch_loading.get(str(eid))
+                    if pct is None:
+                        pct = self._pf_branch_loading.get(str(getattr(e, "branch_id", "")))
+                    if pct is None:
+                        continue
+                    warn = float(getattr(st, "pf_loading_warn_pct", 70.0))
+                    ov = float(getattr(st, "pf_loading_overload_pct", 100.0))
+                    if pct < warn:
+                        buckets["normal"] += 1
+                    elif pct < ov:
+                        buckets["warn"] += 1
+                    else:
+                        buckets["overload"] += 1
+                self._pf_legend = [
+                    (st.pf_loading_normal_color, f"بار خط < {warn:g}٪", buckets["normal"]),
+                    (st.pf_loading_warn_color, f"بار خط {warn:g}–{ov:g}٪", buckets["warn"]),
+                    (st.pf_loading_overload_color, f"بار خط ≥ {ov:g}٪", buckets["overload"]),
+                ]
+            else:
+                self._pf_legend = [
+                    (st.pf_voltage_low_color, f"Vmin ≤ {pf_voltage_min:g} pu", None),
+                    (st.pf_voltage_high_color, f"Vmax ≥ {pf_voltage_max:g} pu", None),
+                ]
+            # optional voltage/loading labels at edge midpoints (sparse for large networks)
+            if getattr(st, "pf_show_labels", False) and segs:
+                max_labels = 120
+                step = max(1, len(segs) // max_labels + 1) if len(segs) > max_labels else 1
+                eids_ordered = [eid for eid, e in self.graph.edges.items()
+                                if self.graph.nodes[e.a].coord is not None and self.graph.nodes[e.b].coord is not None
+                                and (selected_edges is None or eid in selected_edges)]
+                for idx, eid in enumerate(eids_ordered):
+                    if idx % step != 0:
+                        continue
+                    e = self.graph.edges[eid]
+                    a = self._c(self.graph.nodes[e.a].coord)
+                    b = self._c(self.graph.nodes[e.b].coord)
+                    if a is None or b is None:
+                        continue
+                    mx = (a[0] + b[0]) / 2.0
+                    my = (a[1] + b[1]) / 2.0
+                    label = None
+                    if pf_mode == "loading":
+                        pct = self._pf_branch_loading.get(str(eid))
+                        if pct is None:
+                            pct = self._pf_branch_loading.get(str(getattr(e, "branch_id", "")))
+                        if pct is not None:
+                            label = f"{pct:.0f}٪"
+                    elif pf_mode == "voltage":
+                        pu_a = self._pf_voltages.get(str(e.a))
+                        pu_b = self._pf_voltages.get(str(e.b))
+                        pu = None
+                        if pu_a is not None and pu_b is not None:
+                            pu = min(float(pu_a), float(pu_b))
+                        elif pu_a is not None:
+                            pu = float(pu_a)
+                        elif pu_b is not None:
+                            pu = float(pu_b)
+                        if pu is not None:
+                            label = f"{pu:.3f} pu"
+                    else:  # combined → prefer loading pct, fallback to voltage
+                        pct = self._pf_branch_loading.get(str(eid))
+                        if pct is None:
+                            pct = self._pf_branch_loading.get(str(getattr(e, "branch_id", "")))
+                        if pct is not None:
+                            label = f"{pct:.0f}٪"
+                        else:
+                            pu_a = self._pf_voltages.get(str(e.a))
+                            pu_b = self._pf_voltages.get(str(e.b))
+                            pu = None
+                            if pu_a is not None and pu_b is not None:
+                                pu = min(float(pu_a), float(pu_b))
+                            elif pu_a is not None:
+                                pu = float(pu_a)
+                            elif pu_b is not None:
+                                pu = float(pu_b)
+                            if pu is not None:
+                                label = f"{pu:.3f} pu"
+                    if label:
+                        ax.text(mx, my, label, fontsize=float(getattr(st, "pf_label_size", 5.0) or 5.0),
+                                color=getattr(st, "pf_voltage_high_color", "#263238") if pf_mode == "voltage" else "#37474f",
+                                ha="center", va="center", zorder=9,
+                                bbox=dict(boxstyle="round,pad=0.12", fc="white", ec="none", alpha=0.55))
+        elif getattr(st, "pf_enabled", False):
+            # enabled but no results yet
+            self._drawn.add("powerflow_no_data")
+            try:
+                ax.text(0.5, 0.018, "پخش بار فعال است اما نتایج موجود نیست — ابتدا پخش بار/Level-2 را اجرا کنید",
+                        transform=ax.transAxes, ha="center", va="bottom", fontsize=7, color="#b71c1c",
+                        bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="#ef9a9a", alpha=0.85), zorder=30)
+            except Exception:  # noqa: BLE001
+                pass
 
         if show_devices:
             # None = «تصمیم پیش‌فرض رندرر» (فیوزها پنهان)؛ مجموعهٔ صریح
@@ -264,6 +546,44 @@ class NetworkMapRenderer:
             self._draw_devices(ax, feeder_filter,
                                hidden_switch_ids=(None if hidden_switch_ids is None
                                                   else set(hidden_switch_ids)))
+        # ---- transformer loading overlay (pf) -------------------------
+        if pf_active and self._pf_transformer_loading:
+            _tf_pts = {"normal": [], "warn": [], "overload": []}
+            for nid, nd in self.graph.nodes.items():
+                if nd.coord is None:
+                    continue
+                if not self.graph.transformer_ids_at.get(nid):
+                    continue
+                if feeder_filter is not None and not any(self._node_in_feeder(nid, fk) for fk in
+                        (feeder_filter if isinstance(feeder_filter, (set, frozenset, list, tuple)) else [feeder_filter])):
+                    continue
+                pct = self._pf_transformer_loading.get(str(nid))
+                if pct is None:
+                    continue
+                c = self._c(nd.coord)
+                warn = float(getattr(st, "pf_loading_warn_pct", 70.0))
+                ov = float(getattr(st, "pf_loading_overload_pct", 100.0))
+                if pct < warn:
+                    _tf_pts["normal"].append(c)
+                elif pct < ov:
+                    _tf_pts["warn"].append(c)
+                else:
+                    _tf_pts["overload"].append(c)
+            base_t = float(getattr(st, "transformer_size", 3.0) or 3.0)
+            scale = float(getattr(st, "pf_transformer_scale", 1.6) or 1.6)
+            if _tf_pts["overload"]:
+                self._drawn.add("pf_transformer_overload")
+                ax.scatter([p[0] for p in _tf_pts["overload"]], [p[1] for p in _tf_pts["overload"]],
+                           s=base_t * scale * 4.0, marker=st.transformer_marker,
+                           color=st.pf_loading_overload_color, alpha=0.92, zorder=5,
+                           label="Transformer overload (pf)")
+            if _tf_pts["warn"]:
+                self._drawn.add("pf_transformer_warn")
+                ax.scatter([p[0] for p in _tf_pts["warn"]], [p[1] for p in _tf_pts["warn"]],
+                           s=base_t * scale * 2.4, marker=st.transformer_marker,
+                           color=st.pf_loading_warn_color, alpha=0.88, zorder=4,
+                           label="Transformer warn (pf)")
+            # normal transformers already drawn by _draw_devices; no need to redraw
 
         # Highlight the complete selected zone on top of feeder lines. A
         # zone is a set of network edges, not a polygon; use the exact GIS
@@ -905,4 +1225,33 @@ class NetworkMapRenderer:
                                   marker=st.manual_marker,
                                   linestyle="None", markersize=10,
                                   label="Manual switch (evaluated)"))
+        # ---- power-flow legend (پخش بار) -------------------------------
+        if "powerflow" in drawn:
+            pf_mode_legend = getattr(st, "pf_mode", "voltage")
+            if pf_mode_legend == "voltage":
+                handles.append(Line2D([], [], color=st.pf_voltage_low_color, lw=3,
+                                      label=f"PF voltage ≤ {float(getattr(st,'pf_voltage_min_pu',0.95)):g} pu (افت)"))
+                handles.append(Line2D([], [], color=st.pf_voltage_high_color, lw=3,
+                                      label=f"PF voltage ≥ {float(getattr(st,'pf_voltage_max_pu',1.0)):g} pu (نزدیک نامی)"))
+                handles.append(Line2D([], [], color="#9e9e9e", lw=0.8, linestyle="dashed",
+                                      label="PF: گرادیان ولتاژ بین دو رنگ (خط بر حسب پایین‌ترین ولتاژ دو سر)"))
+            else:
+                for color, label, count in (getattr(self, "_pf_legend", []) or []):
+                    suffix = f" ({count} segments)" if count is not None else ""
+                    lw = 3.0 if "≥" in label else 2.0
+                    handles.append(Line2D([], [], color=color, lw=lw,
+                                          label=f"PF {label}{suffix}"))
+                if pf_mode_legend == "combined":
+                    handles.append(Line2D([], [], color=st.pf_voltage_low_color, lw=2,
+                                          label="PF combined: رنگ = ولتاژ، ضخامت = بار خط"))
+            if "pf_transformer_overload" in drawn or "pf_transformer_warn" in drawn:
+                handles.append(Line2D([], [], color=st.pf_loading_overload_color,
+                                      marker=st.transformer_marker, linestyle="None", markersize=8,
+                                      label="PF transformer overload"))
+                handles.append(Line2D([], [], color=st.pf_loading_warn_color,
+                                      marker=st.transformer_marker, linestyle="None", markersize=6,
+                                      label="PF transformer warning"))
+        if "powerflow_no_data" in drawn:
+            handles.append(Line2D([], [], color="#b71c1c", lw=2, linestyle="dashed",
+                                  label="PF enabled — no results yet (run powerflow/Level-2)"))
         return handles

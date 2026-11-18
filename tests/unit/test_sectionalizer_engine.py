@@ -182,6 +182,53 @@ def test_engine_baseline_is_analytic_when_no_existing_switch():
     assert f.best.eens_kwh < f.baseline_eens_kwh
 
 
+def test_fuse_cutouts_are_optional_existing_eens_boundaries():
+    from switchloc.domain.enums import SwitchFamily
+    b = NetBuilder()
+    b.source(0, 0, "F1")
+    b.line([(i * 100.0, 0.0) for i in range(11)], feeder="F1")
+    for i in range(1, 11):
+        if i != 5:
+            b.transformer(i * 100.0, 0.0, 400, feeder="F1")
+    fuse = b.switch(500.0, 0.0, family=SwitchFamily.FUSE_CUTOUT,
+                    feeder="F1", layer="ELWFCT")
+    terminal_fuse = b.switch(1000.0, 0.0, family=SwitchFamily.FUSE_CUTOUT,
+                             feeder="F1", layer="ELWFCT")
+    graph = NetworkGraph.from_network(b.net, IssueLog())
+    traces = TracingEngine(graph, b.net, TracingPolicy()).trace_all(IssueLog())
+    loads = {n: 100.0 for n, ids in graph.transformer_ids_at.items() if ids}
+    ignored = SectionalizerEngine(SectionalizerSettings(
+        include_fuse_cutouts=False)).run(graph, traces, loads, net=b.net)
+    included = SectionalizerEngine(SectionalizerSettings(
+        include_fuse_cutouts=True)).run(graph, traces, loads, net=b.net)
+    assert fuse.node_id not in ignored.feeders[0].existing_cut_nodes
+    assert fuse.node_id in included.feeders[0].existing_cut_nodes
+    assert terminal_fuse.node_id not in included.feeders[0].existing_cut_nodes
+
+
+def test_manual_placement_evaluates_virtual_point_on_selected_line():
+    from switchloc.manual_placement import split_feeder_edge_at_point
+    _net, graph, traces, node_load = line_network(n_nodes=11)
+    original_edge_count = len(graph.edges)
+    manual_graph, manual_traces, chosen, offset, snapped = \
+        split_feeder_edge_at_point(graph, traces, "F1", 250.0, 0.0)
+    assert offset == pytest.approx(0.0)
+    assert snapped == pytest.approx((250.0, 0.0))
+    assert chosen not in graph.nodes
+    assert chosen in manual_graph.nodes
+    assert len(manual_graph.edges) == original_edge_count + 1
+    assert sum(e.length_m for e in manual_graph.edges.values()) == pytest.approx(
+        sum(e.length_m for e in graph.edges.values()))
+    study = SectionalizerEngine(SectionalizerSettings(max_sectionalizers=4)).run(
+        manual_graph, manual_traces, node_load,
+        manual_nodes_by_feeder={"F1": chosen})
+    feeder = study.feeders[0]
+    assert len(feeder.steps) == 1
+    assert [candidate.node for candidate in feeder.best.selected] == [chosen]
+    assert feeder.best.count == 1
+    assert "جایابی دستی" in " ".join(feeder.notes)
+
+
 def test_greedy_steps_are_monotone_and_bounded():
     _net, graph, traces, node_load = line_network()
     study = SectionalizerEngine(SectionalizerSettings(max_sectionalizers=3)) \

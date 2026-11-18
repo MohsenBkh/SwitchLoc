@@ -63,6 +63,9 @@ def _clean_heat_levels(value) -> list[dict]:
 MARKER_CHOICES = ("o", "s", "D", "d", "^", "v", "<", ">", "P", "X", "*",
                   "p", "h", "H", "8", ".")
 
+#: power-flow display modes — «رنگ بر اساس ولتاژ / بارگذاری / هر دو»
+PF_MODE_CHOICES = ("voltage", "loading", "combined")
+
 
 def auto_palette(traces=None, feeders=None) -> dict[str, str]:
     """feeder_key → the automatic deterministic colour (feeder_palette).
@@ -180,6 +183,25 @@ class MapStyle:
     zone_selected_width: float = 4.0
     zone_selected_alpha: float = 0.95
     show_zone_labels: bool = False
+    # -- power flow visualization (پخش بار) -----------------------------
+    pf_enabled: bool = False
+    pf_mode: str = "voltage"  # "voltage" | "loading" | "combined"
+    pf_voltage_min_pu: float = 0.95
+    pf_voltage_max_pu: float = 1.00
+    pf_voltage_low_color: str = "#d32f2f"
+    pf_voltage_high_color: str = "#2e7d32"
+    pf_loading_warn_pct: float = 70.0
+    pf_loading_overload_pct: float = 100.0
+    pf_loading_normal_color: str = "#2e7d32"
+    pf_loading_warn_color: str = "#ef6c00"
+    pf_loading_overload_color: str = "#c62828"
+    pf_loading_normal_width: float = 1.0
+    pf_loading_warn_width: float = 2.2
+    pf_loading_overload_width: float = 3.4
+    pf_opacity: float = 0.88
+    pf_show_labels: bool = False
+    pf_label_size: float = 5.0
+    pf_transformer_scale: float = 1.6
     # -- misc ----------------------------------------------------------
     show_legend: bool = True
 
@@ -286,6 +308,30 @@ class MapStyle:
                      "outage_marker", "opt_sec_marker"):
             if getattr(st, name) not in MARKER_CHOICES:
                 setattr(st, name, MapStyle().__dict__[name])
+        # power-flow sanity
+        if getattr(st, "pf_mode", "") not in PF_MODE_CHOICES:
+            st.pf_mode = MapStyle().__dict__["pf_mode"]
+        # clamp thresholds to sane ranges
+        try:
+            if float(st.pf_voltage_min_pu) >= float(st.pf_voltage_max_pu):
+                st.pf_voltage_min_pu, st.pf_voltage_max_pu = 0.95, 1.0
+        except Exception:  # noqa: BLE001
+            st.pf_voltage_min_pu, st.pf_voltage_max_pu = 0.95, 1.0
+        try:
+            st.pf_opacity = max(0.05, min(1.0, float(st.pf_opacity)))
+        except Exception:  # noqa: BLE001
+            st.pf_opacity = 0.88
+        try:
+            if float(st.pf_loading_warn_pct) >= float(st.pf_loading_overload_pct):
+                st.pf_loading_warn_pct, st.pf_loading_overload_pct = 70.0, 100.0
+        except Exception:  # noqa: BLE001
+            st.pf_loading_warn_pct, st.pf_loading_overload_pct = 70.0, 100.0
+        for attr in ("pf_voltage_low_color", "pf_voltage_high_color",
+                     "pf_loading_normal_color", "pf_loading_warn_color",
+                     "pf_loading_overload_color"):
+            val = str(getattr(st, attr, "") or "").strip()
+            if not val.startswith("#") or len(val) not in (4, 7):
+                setattr(st, attr, MapStyle().__dict__[attr])
         return st
 
 

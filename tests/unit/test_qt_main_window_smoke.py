@@ -29,7 +29,8 @@ pytestmark = pytest.mark.skipif(
     not HAS_QT, reason="PySide6.QtWidgets is not importable")
 
 EXPECTED_TABS = ["Data Import", "Topology", "Placement",
-                 "Switch placement & EENS", "Dashboard", "Map"]
+                 "Switch placement & EENS", "Level-2 placement + load flow",
+                 "Dashboard", "Map"]
 
 
 @pytest.fixture()
@@ -79,3 +80,14 @@ def test_desktop_shell_builds_with_sectionalizer_tab(app, monkeypatch, tmp_path)
     sec = bar.widget(names.index("Switch placement & EENS"))
     assert type(sec).__name__ == "SwitchPlacementTab"
     assert hasattr(sec, "show_result") and hasattr(sec, "apply_settings")
+    assert hasattr(sec, "cmb_placement_mode")
+    assert hasattr(sec, "chk_include_fuses")
+    assert hasattr(sec, "edit_manual_x") and hasattr(sec, "edit_manual_y")
+
+    level2 = bar.widget(names.index("Level-2 placement + load flow"))
+    assert type(level2).__name__ == "Level2PlacementTab"
+    assert hasattr(level2, "show_result") and hasattr(level2, "set_busy")
+    assert hasattr(level2, "settings_data") and hasattr(level2, "feeder_table")
+    assert hasattr(level2, "fill_load_button")
+    assert hasattr(level2, "fill_reliability_button")
+    assert hasattr(level2, "no_candidates_label")
