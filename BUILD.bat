@@ -13,15 +13,22 @@ REM
 REM  Optional: set WITH_GPKG=1 to also install GeoPackage support
 REM  (geopandas/pyogrio -- large; not needed for Shapefile/GeoJSON/Excel).
 REM
-REM  Runtime errors are written to the rotating log
-REM  %LOCALAPPDATA%\SwitchLoc\logs\switchloc.log (and shown in a message box).
+REM  Build command output/errors are streamed to the console and logged to
+REM  build_error.log in this folder. Runtime errors use the app log above.
 REM ==========================================================================
 
 setlocal EnableExtensions
 cd /d "%~dp0"
 title SwitchLoc Build (single-file exe)
 chcp 65001 >nul 2>&1
+set "BUILD_LOG=%~dp0build_error.log"
+> "%BUILD_LOG%" echo SwitchLoc build log started %DATE% %TIME%
+>> "%BUILD_LOG%" echo Project: %CD%
+>> "%BUILD_LOG%" echo.
 
+echo Build output and errors are being recorded in:
+echo   "%BUILD_LOG%"
+echo.
 echo ============================================================
 echo   SwitchLoc -- One-Click Build  ^(single-file desktop exe^)
 echo ============================================================
@@ -32,15 +39,18 @@ set "SYSPY=python"
 "%SYSPY%" --version >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Python was not found on PATH.
+    >> "%BUILD_LOG%" echo ERROR: Python was not found on PATH.
     echo Install Python 3.10+ from https://www.python.org/downloads/
     echo and check "Add python.exe to PATH" during install.
     pause
     exit /b 1
 )
 "%SYSPY%" --version
-"%SYSPY%" -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)"
+"%SYSPY%" --version >> "%BUILD_LOG%" 2>&1
+"%SYSPY%" -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >> "%BUILD_LOG%" 2>&1
 if errorlevel 1 (
     echo ERROR: Python 3.10 or newer is required.
+    >> "%BUILD_LOG%" echo ERROR: Python 3.10 or newer is required.
     pause
     exit /b 1
 )
@@ -48,10 +58,10 @@ if errorlevel 1 (
 echo.
 echo [2/6] Installing dependencies into the current Python ^(a few minutes^)...
 set "PY=%SYSPY%"
-"%PY%" -m pip install --disable-pip-version-check -r requirements-dev.txt -q
+"%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -m pip install --disable-pip-version-check -r requirements-dev.txt -q
 if errorlevel 1 goto :fail_deps
 if "%WITH_GPKG%"=="1" (
-    "%PY%" -m pip install --disable-pip-version-check -r requirements-gpkg.txt -q
+    "%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -m pip install --disable-pip-version-check -r requirements-gpkg.txt -q
     if errorlevel 1 goto :fail_deps
 )
 echo   Dependencies OK.
@@ -59,10 +69,10 @@ echo   Dependencies OK.
 echo.
 echo [3/6] Import + GUI smoke test...
 set "PYTHONPATH=%~dp0src"
-"%PY%" -c "import switchloc, switchloc.ui.qt.main_window; print('imports OK')"
+"%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -c "import switchloc, switchloc.ui.qt.main_window; print('imports OK')"
 if errorlevel 1 goto :fail_import
 set "QT_QPA_PLATFORM=offscreen"
-"%PY%" -m pytest tests\unit\test_ui_chrome.py -q --disable-warnings
+"%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -m pytest tests\unit\test_ui_chrome.py -q --disable-warnings
 if errorlevel 1 goto :fail_import
 set "QT_QPA_PLATFORM="
 
@@ -70,7 +80,7 @@ echo.
 echo [4/6] Engineering test suite...
 if "%SKIP_TESTS%"=="1" goto :skip_tests
 set "QT_QPA_PLATFORM=offscreen"
-"%PY%" -m pytest tests -q --disable-warnings
+"%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -m pytest tests -q --disable-warnings
 if errorlevel 1 goto :fail_tests
 set "QT_QPA_PLATFORM="
 echo   All tests passed.
@@ -81,52 +91,76 @@ echo   Skipped ^(SKIP_TESTS=1^).
 
 echo.
 echo [5/6] Building dist\SwitchLoc.exe ...
-if exist "build" rmdir /s /q "build"
-if exist "dist" rmdir /s /q "dist"
+if exist "build" (
+    rmdir /s /q "build" >> "%BUILD_LOG%" 2>&1
+    if errorlevel 1 goto :fail_build
+)
+if exist "dist" (
+    rmdir /s /q "dist" >> "%BUILD_LOG%" 2>&1
+    if errorlevel 1 goto :fail_build
+)
 set "EXTRA="
 if "%WITH_GPKG%"=="1" set "EXTRA=--collect-submodules=geopandas --collect-submodules=pyogrio"
-"%PY%" -m PyInstaller --noconfirm --clean --onefile --windowed --name SwitchLoc --icon build_assets\icon.ico --add-data "build_assets\splash.png;build_assets" --add-data "build_assets\logo.png;build_assets" --add-data "build_assets\icon.png;build_assets" --add-data "build_assets\fonts;build_assets\fonts" --add-data "build_assets\help;build_assets\help" --collect-all arabic_reshaper --collect-all bidi --paths src --hidden-import=shapefile --hidden-import=PySide6.QtSvg --hidden-import=matplotlib.backends.backend_qtagg --hidden-import=switchloc.ui.osm_tiles --hidden-import=switchloc.ui.qt.splash --hidden-import=switchloc.ui.qt.settings_dialog --hidden-import=switchloc.ui.qt.chrome --hidden-import=switchloc.ui.qt.theme --hidden-import=switchloc.ui.qt.icons --hidden-import=switchloc.ui.qt.i18n --hidden-import=switchloc.ui.qt.worker %EXTRA% --exclude-module IPython --exclude-module switchloc.cli build_tools\entry_gui.py
+"%PY%" build_tools\run_logged.py "%BUILD_LOG%" -- "%PY%" -m PyInstaller --noconfirm --clean --onefile --windowed --name SwitchLoc --icon build_assets\icon.ico --add-data "build_assets\splash.png;build_assets" --add-data "build_assets\logo.png;build_assets" --add-data "build_assets\icon.png;build_assets" --add-data "build_assets\fonts;build_assets\fonts" --add-data "build_assets\help;build_assets\help" --add-data "data\catalog\types_override.xlsx;data\catalog" --collect-all arabic_reshaper --collect-all bidi --paths src --hidden-import=shapefile --hidden-import=PySide6.QtSvg --hidden-import=matplotlib.backends.backend_qtagg --hidden-import=switchloc.ui.osm_tiles --hidden-import=switchloc.ui.qt.splash --hidden-import=switchloc.ui.qt.settings_dialog --hidden-import=switchloc.ui.qt.chrome --hidden-import=switchloc.ui.qt.theme --hidden-import=switchloc.ui.qt.icons --hidden-import=switchloc.ui.qt.i18n --hidden-import=switchloc.ui.qt.worker %EXTRA% --exclude-module IPython --exclude-module switchloc.cli build_tools\entry_gui.py
 if errorlevel 1 goto :fail_build
 if not exist "dist\SwitchLoc.exe" goto :fail_build
 
 echo.
 echo [6/6] Making dist\ self-contained...
 if exist "projects" (
-    xcopy /e /i /y "projects" "dist\projects\" >nul
+    xcopy /e /i /y "projects" "dist\projects\" >> "%BUILD_LOG%" 2>&1
+    if errorlevel 1 goto :fail_copy
     echo   Copied projects\ next to the exe.
 )
 if exist "data" (
-    xcopy /e /i /y "data" "dist\data\" >nul
+    xcopy /e /i /y "data" "dist\data\" >> "%BUILD_LOG%" 2>&1
+    if errorlevel 1 goto :fail_copy
     echo   Copied data\ next to the exe.
 )
-if exist "README.md" copy /y "README.md" "dist\" >nul
+if exist "README.md" (
+    copy /y "README.md" "dist\" >> "%BUILD_LOG%" 2>&1
+    if errorlevel 1 goto :fail_copy
+)
 
 echo.
 echo ============================================================
 echo   BUILD SUCCEEDED   -^>  dist\SwitchLoc.exe
 echo   RUN.bat starts it; no Python needed on the target machine.
+echo   Build log: "%BUILD_LOG%"
 echo ============================================================
-echo.
+echo BUILD SUCCEEDED: dist\SwitchLoc.exe >> "%BUILD_LOG%"
 pause
 endlocal
 exit /b 0
 
 :fail_deps
 echo ERROR: failed to install dependencies.
+set "FAIL_REASON=dependency installation failed"
 goto :fail_end
 :fail_import
 echo ERROR: smoke test failed (see messages above).
+set "FAIL_REASON=import/GUI smoke test failed"
 goto :fail_end
 :fail_tests
 echo ERROR: unit tests failed -- build stopped. Fix the tests or run
 echo       with SKIP_TESTS=1 to skip them.
+set "FAIL_REASON=engineering tests failed"
+goto :fail_end
+:fail_copy
+echo ERROR: failed while copying runtime files into dist.
+set "FAIL_REASON=copying runtime files failed"
 goto :fail_end
 :fail_build
 echo.
 echo ============================================================
 echo   BUILD FAILED -- see the errors above.
 echo ============================================================
+set "FAIL_REASON=PyInstaller build failed or dist\SwitchLoc.exe is missing"
 :fail_end
+>> "%BUILD_LOG%" echo BUILD FAILED: %FAIL_REASON% at %DATE% %TIME%
 echo.
+echo Build log saved to:
+echo   "%BUILD_LOG%"
+echo Copy this file when reporting a build problem.
 pause
 exit /b 1

@@ -24,10 +24,10 @@ from __future__ import annotations
 
 import math
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .domain.entities import CanonicalNetwork, SwitchDev
-from .domain.enums import SwitchFamily, SwitchState
+from .domain.enums import NodeKind, SwitchFamily, SwitchState
 from .level1.n_minus_1 import run_n_minus_one
 from .placement.economics import (SegTree, build_seg_tree,
                                    ens_of_configuration, existing_cut_nodes)
@@ -35,7 +35,7 @@ from .placement.golden import build_feeder_tree, owned_edges
 from .placement.service import EngineSettings, _spare_map
 from .reliability.load_model import build_node_loads
 from .reliability.lambdar import FeederLambdaR
-from .topology.graph import NetworkGraph
+from .topology.graph import GraphNode, NetworkGraph
 from .topology.tracing import FeederTrace
 from .topology.zones import ZoneResult, ZoneBuilder, ZonePolicy
 from .validation.issues import IssueLog
@@ -91,6 +91,101 @@ def nearest_node(graph: NetworkGraph, x: float, y: float,
     if best is None or (max_dist_m is not None and best_d > max_dist_m):
         return None, float("inf")
     return best, best_d
+
+
+def split_feeder_edge_at_point(graph: NetworkGraph, traces: list,
+                               feeder_key: str, x: float, y: float,
+                               max_dist_m: float = 50.0
+                               ) -> tuple[NetworkGraph, list, str, float, tuple]:
+    """Snap a manual point to the nearest in-feeder line and split that edge.
+
+    Unlike ``nearest_node``, this preserves the user-selected position along
+    a span: a virtual junction is inserted in a private graph copy and the
+    registered edge length is split proportionally. The project network is
+    never modified. Return ``(graph, traces, node_id, offset_m, coord)``.
+    """
+    from .topology.tracing import same_feeder
+
+    trace = next((tr for tr in traces
+                  if same_feeder(tr.feeder_key, feeder_key)), None)
+    if trace is None:
+        raise ValueError(f"فیدر {feeder_key} در توپولوژی جاری پیدا نشد.")
+    px, py = float(x), float(y)
+    best = None
+    for edge_id in sorted(trace.edges):
+        edge = graph.edges.get(edge_id)
+        if edge is None:
+            continue
+        a = graph.nodes.get(edge.a)
+        b = graph.nodes.get(edge.b)
+        if a is None or b is None or a.coord is None or b.coord is None:
+            continue
+        ax, ay = map(float, a.coord)
+        bx, by = map(float, b.coord)
+        dx, dy = bx - ax, by - ay
+        denom = dx * dx + dy * dy
+        if denom <= 0:
+            continue
+        t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / denom))
+        qx, qy = ax + t * dx, ay + t * dy
+        distance = math.hypot(px - qx, py - qy)
+        candidate = (distance, edge_id, t, (qx, qy))
+        if best is None or candidate[:2] < best[:2]:
+            best = candidate
+    if best is None:
+        raise ValueError(f"فیدر {feeder_key} یال هندسی قابل استفاده ندارد.")
+    distance, edge_id, fraction, snapped = best
+    if distance > float(max_dist_m):
+        raise ValueError(
+            f"مختصات بیش از {max_dist_m:g} متر از نزدیک‌ترین خط فیدر "
+            f"فاصله دارد ({distance:.1f} متر).")
+
+    original_edge = graph.edges[edge_id]
+    if fraction <= 1e-8:
+        return graph, traces, original_edge.a, distance, tuple(snapped)
+    if fraction >= 1.0 - 1e-8:
+        return graph, traces, original_edge.b, distance, tuple(snapped)
+
+    work_graph = copy.deepcopy(graph)
+    work_traces = copy.deepcopy(traces)
+    edge = work_graph.edges.pop(edge_id)
+    work_graph.adj[edge.a] = [(n, eid) for n, eid in work_graph.adj[edge.a]
+                              if eid != edge_id]
+    work_graph.adj[edge.b] = [(n, eid) for n, eid in work_graph.adj[edge.b]
+                              if eid != edge_id]
+    branch_edges = work_graph.edges_of_branch[edge.branch_id]
+    branch_edges[:] = [eid for eid in branch_edges if eid != edge_id]
+
+    import hashlib
+    token = hashlib.sha1(
+        f"{feeder_key}|{edge_id}|{fraction:.9f}".encode("utf-8")
+    ).hexdigest()[:12]
+    node_id = f"MANUAL-{token}"
+    work_graph.nodes[node_id] = GraphNode(
+        id=node_id, kind=NodeKind.JUNCTION, coord=tuple(snapped),
+        feeder_hint=str(feeder_key), cluster_key="")
+    edge_a, edge_b = f"{edge_id}@{token}a", f"{edge_id}@{token}b"
+    first = replace(edge, id=edge_a, seq=edge.seq * 2,
+                    a=edge.a, b=node_id,
+                    length_m=float(edge.length_m) * fraction)
+    second = replace(edge, id=edge_b, seq=edge.seq * 2 + 1,
+                     a=node_id, b=edge.b,
+                     length_m=float(edge.length_m) * (1.0 - fraction))
+    for split in (first, second):
+        work_graph.edges[split.id] = split
+        work_graph.adj[split.a].append((split.b, split.id))
+        work_graph.adj[split.b].append((split.a, split.id))
+        branch_edges.append(split.id)
+    for i, tr in enumerate(work_traces):
+        if tr is trace or (tr.feeder_key == trace.feeder_key
+                           and edge_id in tr.edges):
+            tr.edges = (set(tr.edges) - {edge_id}) | {edge_a, edge_b}
+            tr.nodes = set(tr.nodes) | {node_id}
+    work_graph.stats["nodes"] = len(work_graph.nodes)
+    work_graph.stats["edges"] = len(work_graph.edges)
+    work_graph.stats["branches_kept"] = work_graph.stats.get("branches_kept", 0)
+    work_graph._traces = work_traces
+    return work_graph, work_traces, node_id, distance, tuple(snapped)
 
 
 # ---------------------------------------------------------------------------

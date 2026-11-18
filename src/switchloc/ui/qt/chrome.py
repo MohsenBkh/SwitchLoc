@@ -89,6 +89,16 @@ class Chrome:
         self._open_project: Callable | None = None
         self._nav_buttons: list = []
         self._theme_actions: dict = {}
+        self.stop_action = None
+        self.menu_bar = None
+        self._busy_actions: list = []
+
+    def set_busy(self, busy: bool) -> None:
+        """Keep the universal Stop action usable while a task is running."""
+        for action in self._busy_actions:
+            action.setEnabled(not busy)
+        if self.menu_bar is not None:
+            self.menu_bar.setEnabled(not busy)
 
     # -- settings ------------------------------------------------------
     @staticmethod
@@ -290,6 +300,14 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
     a_exit = act("Exit", "exit", win.close, "Ctrl+Q")
     a_log = act("Open log folder", "log", lambda: _open_log_folder())
     a_theme = act("Toggle theme", "moon", ch.toggle_theme, "Ctrl+D")
+    a_stop = act("Stop current process", "x-circle",
+                 H.get("cancel_task", lambda: None), "Esc")
+    a_stop.setEnabled(False)
+    ch.stop_action = a_stop
+    ch._busy_actions = [a for a in (
+        a_new, a_open, a_close, a_save, a_save_as, a_import, a_outage,
+        a_perf, a_topo, a_plac, a_set, a_exp, a_appr, a_style, a_help,
+        a_about, a_exit, a_log, a_theme) if a is not a_stop]
 
     def _open_log_folder():
         p = log_path()
@@ -298,6 +316,7 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
 
     # ---------------- menus ----------------
     mbar = win.menuBar()
+    ch.menu_bar = mbar
     m_file = mbar.addMenu(t("&File"))
     for a in (a_new, a_open, a_close, a_save, a_save_as):
         m_file.addAction(a)
@@ -374,6 +393,8 @@ def install_chrome(win, app, tabs, workflow_label, handlers: dict,
     tb.addSeparator()
     for a in (a_topo, a_plac):
         tb.addAction(a)
+    tb.addSeparator()
+    tb.addAction(a_stop)
     tb.addSeparator()
     for a in (a_set, a_exp, a_appr, a_style):
         tb.addAction(a)

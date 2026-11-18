@@ -55,6 +55,7 @@ FA: dict[str, str] = {
     "Per-feeder outages": "خاموشی هر فیدر",
     "Run topology": "اجرای توپولوژی",
     "Run placement": "اجرای جایابی",
+    "Stop current process": "توقف فرایند جاری",
     "Settings": "تنظیمات",
     "Exports…": "خروجی‌ها…",
     "Approve plan": "تأیید طرح",

@@ -27,6 +27,7 @@ from ..topology.zones import ZoneBuilder, ZonePolicy, ZoneResult
 from ..validation.issues import (IssueLog, ValidationIssue, SEVERITY_ERROR,
                                  SEVERITY_INFO, SEVERITY_WARNING)
 from ..validation.qc import QcReport, run_qc
+from ..task_control import check_cancelled, report_progress
 
 
 @dataclass
@@ -71,6 +72,8 @@ class TopologyService:
             source_run_id: str = "", out_db: str | None = None,
             zone_of_edge_hint: dict | None = None) -> TopologyResult:
         st = self.settings
+        check_cancelled()
+        report_progress(0, "ساخت گراف توپولوژی")
         topo_issues = issues if issues is not None else IssueLog()
 
         # 1) graph -------------------------------------------------------
@@ -78,6 +81,8 @@ class TopologyService:
             net, issues=topo_issues,
             match_tol_m=st.match_tol_m,
             source_attach_tol_m=st.source_attach_tol_m)
+        check_cancelled()
+        report_progress(25, "ردیابی فیدرها و کلیدها")
 
         # 2) normal-state tracing ----------------------------------------
         policy = TracingPolicy(unknown_switch_pass=st.unknown_switch_pass,
@@ -85,6 +90,8 @@ class TopologyService:
                                hint_gated=st.hint_gated_tracing)
         tracing = TracingEngine(graph, net, policy)
         traces = tracing.trace_all(topo_issues)
+        check_cancelled()
+        report_progress(55, "تحلیل مسیرهای قطعی و کاندیدهای NO")
 
         # 2b) strict-core diagnostic (unknown switches = open) — a second
         # look that shows the *guaranteed* core of each feeder while the
@@ -107,6 +114,8 @@ class TopologyService:
         ties_svc = TieDetectionService(graph, net, traces, tracing)
         ties = ties_svc.detect(topo_issues)
 
+        check_cancelled()
+        report_progress(72, "زون‌بندی و محاسبهٔ پیوستگی")
         # 4) زون‌بندی ------------------------------------------------------
         zbuilder = ZoneBuilder(graph, net, traces, ZonePolicy(
             include_fuse_cutout=st.include_fuse_cutout_as_boundary))
@@ -140,6 +149,8 @@ class TopologyService:
 
         # 7) persistence -----------------------------------------------------
         if st.persist and out_db:
+            check_cancelled()
+            report_progress(92, "ذخیرهٔ نتایج توپولوژی")
             store = ProjectStore(out_db)
             topo_run_id = store.save_topology(
                 source_run_id=source_run_id,
@@ -157,6 +168,7 @@ class TopologyService:
                 }])
             result.topo_run_id = topo_run_id
             store.close()
+        report_progress(100, "تحلیل توپولوژی کامل شد")
         return result
 
     # ------------------------------------------------------------------

@@ -14,3 +14,4 @@ dist/
 # Local scratch / reports
 .arena-scratch/
 reports/
+build_error.log

@@ -32,6 +32,7 @@ from ..level1.ranking import RankingResult, RankingSettings, rank_feeders
 from ..reliability.lambdar import FeederLambdaR
 from ..reliability.load_model import LoadModelSettings, build_node_loads
 from ..topology.graph import NetworkGraph
+from ..task_control import check_cancelled
 from .acceptance import (AcceptanceCriteria, SchemeDecision,
                          evaluate_scheme, select_plans)
 from .capacity import CapacityCheck, FeederCapacity, check_scheme_capacity
@@ -220,6 +221,7 @@ class PlacementEngine:
         همان فیدر گزارش می‌شوند.
         """
         st = self.settings
+        check_cancelled()
         issues: list = []
         cap_map = dict(feeder_capacity or {})
         if not cap_map and st.placement.feeder_capacity:
@@ -306,7 +308,9 @@ class PlacementEngine:
         # so N-1 zone aggregation uses the same kW basis as ENS/ranking.
         transformer_load_kw: dict[str, float] = {}
         transformers_by_id = {t.id: t for t in net.transformers}
-        for node, transformer_ids in graph.transformer_ids_at.items():
+        for node_index, (node, transformer_ids) in enumerate(graph.transformer_ids_at.items()):
+            if node_index % 128 == 0:
+                check_cancelled()
             ids = [tid for tid in transformer_ids if tid in transformers_by_id]
             if not ids:
                 continue
@@ -369,9 +373,11 @@ class PlacementEngine:
                 f"عضو هیچ‌یک از زون‌های مطالعه نیستند؛ بار متناظر "
                 f"{unzoned_transformer_kw:,.1f} kW از جمع بار زون‌ها خارج "
                 "مانده است. این مقدار به زون دیگری منتقل یا پنهان نشده است."))
+        check_cancelled()
         n1 = run_n_minus_one(graph, net, area_traces, zones_by_feeder,
                              study_ties, settings=st.n1,
                              transformer_load_kw=transformer_load_kw)
+        check_cancelled()
         issues.extend(n1.issues)
 
         # ---- گام ۶: رتبه‌بندی (فرمول ۱ + جدول ۱۶) --------------------------
@@ -415,6 +421,7 @@ class PlacementEngine:
         # ظرفیت اضطراری/نامی به تولید طرح ۱٫۵ کلیدی (رابطه ۱۱) تزریق می‌شود
         if cap_map:
             st.placement.feeder_capacity = dict(cap_map)
+        check_cancelled()
         schemes, golden_of, sch_issues = generate_schemes(
             graph, net, area_traces, n1.trees, ranking.rows, study_ties,
             zone_no_of, node_load, lam_of, r_of, cut_nodes_of, edge_set_of,

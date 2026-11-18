@@ -118,6 +118,59 @@ def _cmd_topology(args) -> int:
     return 0 if topo.verdict == "PASS" else 1
 
 
+def _cmd_loadflow(args) -> int:
+    """Balanced radial power flow (MVP; explicit R/X/ampacity config)."""
+    from .application.equipment_types import DEFAULT_TYPES_CATALOG
+    from .application.power_flow_service import (
+        PowerFlowAppSettings, PowerFlowService, load_power_flow_config)
+    try:
+        settings = load_power_flow_config(args.config)
+        feeders = tuple(f.strip() for f in (args.feeders or "").split(",")
+                        if f.strip())
+        result = PowerFlowService(PowerFlowAppSettings(
+            power_flow=settings, feeder_keys=feeders,
+            equipment_types_path=str(args.types_catalog or DEFAULT_TYPES_CATALOG)
+        )).run(args.db)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ERROR: {exc}")
+        return 2
+    print(result.markdown)
+    if args.out_dir:
+        out = Path(args.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "power_flow_report.md").write_text(result.markdown,
+                                                   encoding="utf-8")
+        (out / "power_flow_report.json").write_text(
+            json.dumps(result.as_dict(), ensure_ascii=False, indent=2,
+                       default=str), encoding="utf-8")
+        print(f"\nReport → {out / 'power_flow_report.md'}")
+    return 0 if (result.results and not result.errors
+                 and all(r.feasible for r in result.results)) else 1
+
+
+def _cmd_level2(args) -> int:
+    """Exhaustive Level-2 placement with hard load-flow constraints."""
+    from .application.level2_placement_service import (
+        Level2PlacementService, load_level2_config)
+    try:
+        settings = load_level2_config(args.config)
+        result = Level2PlacementService(settings).run(args.db)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ERROR: {exc}")
+        return 2
+    print(result.markdown)
+    if args.out_dir:
+        out = Path(args.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "level2_placement_report.md").write_text(
+            result.markdown, encoding="utf-8")
+        (out / "level2_placement_report.json").write_text(
+            json.dumps(result.as_dict(), ensure_ascii=False, indent=2,
+                       default=str), encoding="utf-8")
+        print(f"\nReport → {out / 'level2_placement_report.md'}")
+    return 0 if result.status == "ok" else 1
+
+
 def _cmd_report(args) -> int:
     """Phase 5 — Excel / Word / PDF / GIS exports of a completed study."""
     from switchloc.reporting.service import ExportSettings, ReportService
@@ -542,6 +595,26 @@ def main(argv=None) -> int:
     pp.add_argument("--no-persist", action="store_true",
                     help="Do not write the placement run into the DB")
     pp.set_defaults(func=_cmd_placement)
+
+    pfl = sub.add_parser(
+        "loadflow", help="Balanced radial power flow with explicit line R/X/limits")
+    pfl.add_argument("db", help="SQLite project")
+    pfl.add_argument("--config", required=True,
+                     help="Engineer-verified JSON: source voltage, limits, and type_ampacity_a")
+    pfl.add_argument("--types-catalog",
+                     help="DigSILENT XLSX type catalog (default: bundled data/catalog/types_override.xlsx)")
+    pfl.add_argument("--feeders", help="Comma-separated feeder names; default all")
+    pfl.add_argument("--out-dir", help="Write Markdown and JSON reports to this folder")
+    pfl.set_defaults(func=_cmd_loadflow)
+
+    p2 = sub.add_parser(
+        "optimize-level2",
+        help="Exhaustive placement search constrained by balanced power flow")
+    p2.add_argument("db", help="SQLite project")
+    p2.add_argument("--config", required=True,
+                    help="JSON: per-feeder NC budgets, NO budget, reliability and load-flow inputs")
+    p2.add_argument("--out-dir", help="Write Markdown and JSON reports to this folder")
+    p2.set_defaults(func=_cmd_level2)
 
     pr = sub.add_parser("report",
                         help="Phase 5 — Excel/Word/PDF/GIS exports of a "

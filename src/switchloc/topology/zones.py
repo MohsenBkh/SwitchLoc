@@ -44,6 +44,7 @@ from ..domain.enums import SwitchFamily, SwitchState
 from ..domain.ids import stable_id
 from ..validation.issues import (IssueLog, ValidationIssue, SEVERITY_INFO,
                                  SEVERITY_WARNING)
+from ..task_control import check_cancelled
 from .graph import NetworkGraph
 from .tracing import FeederTrace
 
@@ -173,13 +174,19 @@ class ZoneBuilder:
     def _components(self, edges: set[str]) -> list[list[str]]:
         comp_of_edge: dict[str, int] = {}
         comps: list[list[str]] = []
-        for seed in sorted(edges):
+        for seed_index, seed in enumerate(sorted(edges)):
+            if seed_index % 128 == 0:
+                check_cancelled()
             if seed in comp_of_edge:
                 continue
             comp: list[str] = []
             comp_of_edge[seed] = len(comps)
             queue = deque([seed])
+            visited_count = 0
             while queue:
+                if visited_count % 128 == 0:
+                    check_cancelled()
+                visited_count += 1
                 eid = queue.popleft()
                 comp.append(eid)
                 e = self.graph.edges[eid]
@@ -203,7 +210,9 @@ class ZoneBuilder:
         length = 0.0
         trafos: set = set()
         loads: set = set()
-        for eid in comp_edges:
+        for edge_index, eid in enumerate(comp_edges):
+            if edge_index % 128 == 0:
+                check_cancelled()
             e = graph.edges[eid]
             znodes.update((e.a, e.b))
             branches.add(e.branch_id)
@@ -228,7 +237,9 @@ class ZoneBuilder:
 
         zones: list[SwitchZone] = []
         claimed_by: dict[str, list[str]] = defaultdict(list)   # edge → feeders
-        for tr in self.traces:
+        for trace_index, tr in enumerate(self.traces):
+            if trace_index % 16 == 0:
+                check_cancelled()
             comps = self._components(set(tr.edges))
             comp_of_edge_tr: dict[str, int] = {}
             for i, comp in enumerate(comps):
@@ -253,7 +264,9 @@ class ZoneBuilder:
 
             # adjacency between comps of THIS feeder across cut nodes
             comp_adj: dict[int, set] = defaultdict(set)
-            for node in cut_nodes:
+            for node_index, node in enumerate(cut_nodes):
+                if node_index % 128 == 0:
+                    check_cancelled()
                 incident = sorted({comp_of_edge_tr[eid]
                                    for nbr, eid in self.graph.neighbors(node)
                                    if eid in comp_of_edge_tr})

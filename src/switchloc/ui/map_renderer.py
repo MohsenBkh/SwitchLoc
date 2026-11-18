@@ -43,12 +43,50 @@ def _feeder_selected(feeder: str | None, selection) -> bool:
     return same_feeder(feeder or "", str(selection))
 
 
+def _palette_key_for_label(label: str, palette: dict[str, str]) -> str | None:
+    """Resolve a GIS feeder label to one unambiguous palette key.
+
+    GIS exports sometimes omit separators (``F8SOUTH`` vs ``F8 - SOUTH``).
+    Match those spelling variants only when the compact label is unique; do
+    not collapse distinct full feeder names that merely share a number.
+    """
+    label = str(label or "").strip()
+    if not label:
+        return None
+    if label in palette:
+        return label
+    from ..topology.tracing import feeder_id, same_feeder
+    matches = [key for key in palette if feeder_id(key) == feeder_id(label)]
+    if not matches:
+        matches = [key for key in palette if same_feeder(key, label)]
+    if len(matches) == 1:
+        return matches[0]
+    if matches:
+        return None
+    compact = re.sub(r"[^A-Z0-9\u0600-\u06ff]+", "", label.upper())
+    compact_matches = [key for key in palette
+                       if re.sub(r"[^A-Z0-9\u0600-\u06ff]+", "", key.upper())
+                       == compact]
+    return compact_matches[0] if len(compact_matches) == 1 else None
+
+
 def feeder_palette(traces: list[FeederTrace],
-                   style: MapStyle | None = None) -> dict[str, str]:
-    """feeder → colour — automatic palette overlaid with the user's
-    MapStyle colours (تنظیمات نمایشی — درخواست کاربر). Kept as a module
-    function for backward compatibility with existing callers/tests."""
-    keys = sorted({t.feeder_key for t in traces if t.feeder_key})
+                   style: MapStyle | None = None,
+                   feeder_hints=None) -> dict[str, str]:
+    """feeder → colour for traced feeders and explicit GIS line labels.
+
+    Some GIS projects have incomplete source points, so tracing can fall
+    back to one overlapping whole-network trace. Include branch feeder
+    labels in the map palette so that this fallback cannot paint every
+    conductor with the same feeder colour. Existing two-argument callers
+    remain compatible.
+    """
+    keys = {t.feeder_key for t in traces if t.feeder_key}
+    for hint in feeder_hints or ():
+        hint = str(hint or "").strip()
+        if hint and _palette_key_for_label(hint, {key: "" for key in keys}) is None:
+            keys.add(hint)
+    keys = sorted(keys)
     if style is not None:
         return style.palette_of(feeders=keys)
     from .map_style import auto_palette
@@ -57,12 +95,12 @@ def feeder_palette(traces: list[FeederTrace],
 
 def edge_color_of(graph: NetworkGraph, palette: dict[str, str],
                   unknown_color: str = UNKNOWN_COLOR) -> dict[str, str]:
-    """edge_id → colour (traced feeders win over raw GIS hints).
+    """edge_id → colour, preferring an explicit line feeder label.
 
-    First claim wins — traces arrive sorted by feeder key, so the
-    alphabetically-first feeder keeps the edge when several feeders'
-    normal-state traces overlap (the A-09 flood-through), matching the
-    global zone_of_edge rule in `topology.zones`.
+    The GIS ``feeder_hint`` is the per-line attribution when topology
+    tracing has ambiguous/flood-through overlaps (for example, incomplete
+    feeder-head points). Use the traced feeder as a fallback for unlabeled
+    lines; this changes visualization only, not topology analysis.
     """
     edge_feeder: dict[str, str] = {}
     for t in getattr(graph, "_traces", []):
@@ -70,8 +108,8 @@ def edge_color_of(graph: NetworkGraph, palette: dict[str, str],
             edge_feeder.setdefault(eid, t.feeder_key)
     out = {}
     for eid, e in graph.edges.items():
-        k = edge_feeder.get(eid) or (e.feeder_hint.split(" ")[0]
-                                     if e.feeder_hint else "")
+        k = (_palette_key_for_label(e.feeder_hint, palette)
+             or edge_feeder.get(eid, ""))
         out[eid] = palette.get(k, unknown_color)
     return out
 
@@ -228,7 +266,9 @@ class NetworkMapRenderer:
         self._rotate = False
         st = self.style = (style or self.style or MapStyle())
         self._drawn = set()                # legend = what is actually drawn
-        palette = feeder_palette(self.traces, st)
+        palette = feeder_palette(
+            self.traces, st,
+            feeder_hints=(edge.feeder_hint for edge in self.graph.edges.values()))
         edge_colors = edge_color_of(self.graph, palette, st.unknown_color)
 
         ax = fig.subplots(1, 1) if hasattr(fig, "subplots") else None
