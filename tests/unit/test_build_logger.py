@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 
 LOGGER = Path(__file__).resolve().parents[2] / "build_tools" / "run_logged.py"
+UTF8_ENV = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
 
 
 def test_build_logger_streams_and_records_stdout_and_stderr(tmp_path):
@@ -16,7 +18,7 @@ def test_build_logger_streams_and_records_stdout_and_stderr(tmp_path):
     )
     result = subprocess.run(
         [sys.executable, str(LOGGER), str(log), "--", sys.executable, "-c", child],
-        capture_output=True, check=False)
+        capture_output=True, check=False, env=UTF8_ENV)
 
     assert result.returncode == 0
     assert "build output" in result.stdout.decode(errors="replace")

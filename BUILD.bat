@@ -21,6 +21,8 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 title SwitchLoc Build (single-file exe)
 chcp 65001 >nul 2>&1
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
 set "BUILD_LOG=%~dp0build_error.log"
 > "%BUILD_LOG%" echo SwitchLoc build log started %DATE% %TIME%
 >> "%BUILD_LOG%" echo Project: %CD%
