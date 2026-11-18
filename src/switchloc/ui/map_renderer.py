@@ -127,13 +127,23 @@ _SWITCH_CODE_LABELS = {
 def switch_display_code(sw) -> str:
     """Resolve the actual GIS device subtype, preferring explicit raw code."""
     from ..domain.enums import SwitchFamily
+    # ELWSEC/ELSEC is the dedicated sectionalizer layer.  Projects imported
+    # before the slot alias existed stored these devices as DISCONNECTOR
+    # (DCS); the layer name is authoritative for display so legacy DBs
+    # render SEC without requiring a re-import.
+    layer = str(getattr(sw, "layer", "") or "").strip().upper()
+    if layer in ("ELWSEC", "ELSEC"):
+        return "SEC"
     raw = str(getattr(sw, "switch_type_raw", "") or "").upper()
     compact = re.sub(r"[^A-Z0-9\u0600-\u06FF]+", "", raw)
     aliases = (("FCT", ("FCT", "فیوز", "کات اوت", "کاتاوت")),
-               ("DCS", ("DCS", "دیسکانکتور", "سکسیونر")),
+               ("SEC", ("SEC", "ELWSEC", "ELSEC", "سکشنالایزر",
+                        "سکشنلایزر", "سکشنالیزر", "سكشنالایزر",
+                        "سكشنلایزر")),
+               ("DCS", ("DCS", "دیسکانکتور", "سکسیونر",
+                        "سکسيونر", "سكسيونر")),
                ("CBR", ("CBR", "دژنکتور", "مدارشکن", "بریکر")),
-               ("REC", ("REC", "ریکلوزر")),
-               ("SEC", ("SEC", "سکشنالایزر", "سکشنالایزر")))
+               ("REC", ("REC", "ریکلوزر")))
     for code, words in aliases:
         if any(re.sub(r"\s+", "", w).upper() in compact for w in words):
             return code

@@ -22,9 +22,12 @@ Method (docs/TAV122_TRACEABILITY.md تعریف ۵-۱۵/۵-۱۹ + ARCHITECTURE.md
            confirmed wrong: the feeders are separate networks with very
            different sizes).  The GIS feeder label IS the utility's
            normal-state partition of the conductors, so the label gates
-           the traversal; unlabeled branches stay traversable and an
-           empty gated trace falls back to the ungated pass (explicit
-           WARNING, never silent).
+           the traversal; unlabeled branches stay traversable.  If an
+           otherwise empty gated trace is all the source situation can
+           prove, SwitchLoc falls back to an explicit **label-anchored
+           trace** (the feeder's GIS-labelled branches plus unlabeled
+           branches connected to them) — never to an ungated flood of
+           every feeder in the network.
 * output : one `FeederTrace` per source, plus
              - feeder-key overlap detection  (two sources reach the same
                node → the missing NO point, A-09 rule R1 input);
@@ -176,6 +179,11 @@ class FeederTrace:
     switch_nodes: set = dc_field(default_factory=set)
     overlaps: dict = dc_field(default_factory=dict)   # node → [other feeder keys]
     gated_blocked: int = 0               # TOPO-POL-05 crossings refused
+    #: True when the source-seeded gated traversal was empty and this
+    #: trace was reconstructed from explicit GIS feeder labels instead.
+    #: The map can show these branches, but topology QC must treat them
+    #: as label evidence, not as a proven electrical path from the source.
+    used_label_fallback: bool = False
 
     def as_dict(self) -> dict:
         return {
@@ -188,6 +196,7 @@ class FeederTrace:
             "loads": len(self.load_ids),
             "switch_nodes": len(self.switch_nodes),
             "gated_blocked": self.gated_blocked,
+            "used_label_fallback": self.used_label_fallback,
             "overlaps": {k: v for k, v in self.overlaps.items()},
         }
 
@@ -296,6 +305,71 @@ class TracingEngine:
                     queue.append(nbr)
         return tr
 
+    def _label_anchored_trace(self, gated_trace: FeederTrace) -> FeederTrace:
+        """Reconstruct an empty gated trace from GIS-label evidence only.
+
+        An ungated BFS from the same source would silently adopt every
+        other feeder connected through unknown-state switches.  Instead,
+        seed from the branches that GIS explicitly labels with this feeder
+        and walk only through unlabeled branches connected to them (or
+        through same-feeder labels).  Other feeder labels remain hard
+        boundaries.  The result is auditable via ``used_label_fallback``.
+        """
+        fb = FeederTrace(
+            feeder=gated_trace.feeder,
+            feeder_key=gated_trace.feeder_key,
+            source_node="",
+            gated_blocked=gated_trace.gated_blocked,
+            used_label_fallback=True,
+        )
+        # Anchor on explicit label evidence.  All split segments of a
+        # polyline carry the same branch label, so this necessarily starts
+        # with the complete GIS-labelled feeder.
+        label_edges = {
+            eid for eid, edge in self.graph.edges.items()
+            if edge.feeder_hint and same_feeder(edge.feeder_hint, fb.feeder)
+        }
+        for eid in sorted(label_edges):
+            edge = self.graph.edges[eid]
+            fb.edges.add(eid)
+            fb.branches.add(edge.branch_id)
+            fb.length_m += edge.length_m
+            fb.nodes.update((edge.a, edge.b))
+
+        queue = deque(sorted(fb.nodes))
+        visited: set[str] = set()
+        while queue:
+            if len(visited) % 64 == 0:
+                check_cancelled()
+            node = queue.popleft()
+            if node in visited:
+                continue
+            visited.add(node)
+            if not self.node_passable(node):
+                continue                 # keep labelled edges; do not walk through
+            for nbr, eid in self.graph.neighbors(node):
+                if eid in fb.edges:
+                    fb.nodes.add(nbr)
+                    continue
+                edge = self.graph.edges[eid]
+                hint = edge.feeder_hint
+                if hint and not same_feeder(hint, fb.feeder):
+                    fb.gated_blocked += 1     # label of another feeder
+                    continue
+                fb.edges.add(eid)
+                fb.branches.add(edge.branch_id)
+                fb.length_m += edge.length_m
+                fb.nodes.add(nbr)
+                if self.node_passable(nbr):
+                    queue.append(nbr)
+
+        for node in fb.nodes:
+            fb.transformer_ids.update(self.graph.transformer_ids_at.get(node, ()))
+            fb.load_ids.update(self.graph.load_ids_at.get(node, ()))
+            if self.graph.switch_ids_at.get(node):
+                fb.switch_nodes.add(node)
+        return fb
+
     # -- full pass ---------------------------------------------------------
     def trace_all(self, issues: IssueLog, quiet: bool = False) -> list[FeederTrace]:
         """Trace every seed; `quiet=True` returns traces without Issues
@@ -326,18 +400,21 @@ class TracingEngine:
             traces.append(self.trace_from(fname, key, node))
 
         # TOPO-POL-05 safety net: a feeder fully enclosed by other feeders'
-        # labels (its gated trace is empty) falls back to the ungated pass
-        # — explicitly, never silently.
+        # labels (its gated trace is empty) falls back to explicit GIS-label
+        # evidence — explicitly, never silently, and never to an ungated
+        # flood of the whole network.
         fallback_feeders: list[str] = []
+        unresolved_feeders: list[str] = []
         if self.policy.hint_gated:
-            from dataclasses import replace as dc_replace
             for i, tr in enumerate(traces):
-                if not tr.edges:
-                    ungated = TracingEngine(
-                        self.graph, self.net,
-                        dc_replace(self.policy, hint_gated=False))
-                    traces[i] = ungated.trace_from(*seeds[i])
-                    fallback_feeders.append(seeds[i][1])
+                if tr.edges:
+                    continue
+                reconstructed = self._label_anchored_trace(tr)
+                traces[i] = reconstructed
+                if reconstructed.edges:
+                    fallback_feeders.append(traces[i].feeder_key)
+                else:
+                    unresolved_feeders.append(traces[i].feeder_key)
 
         # overlap detection (A-09 / R1): same node reached by 2+ feeders.
         # Only PASSABLE nodes count — two traces touching opposite sides of
@@ -383,7 +460,34 @@ class TracingEngine:
                 meta={"blocked_total": blocked_total,
                       "blocked_by_feeder": {
                           t.feeder_key: t.gated_blocked for t in traces},
-                      "fallback_feeders": fallback_feeders}))
+                      "fallback_feeders": fallback_feeders,
+                      "unresolved_feeders": unresolved_feeders}))
+            if fallback_feeders:
+                issues.add(ValidationIssue(
+                    code="TOPO-POL-05-LABEL-FALLBACK",
+                    severity=SEVERITY_WARNING,
+                    message_fa=("بخشی از فیدرها از منبع تا نخستین قطعهٔ GIS "
+                                "هم‌برچسب متصل نشد؛ به‌جای غرق‌کردن کل شبکه، "
+                                "فقط شواهد برچسب GIS همان فیدر نمایش داده شد: "
+                                + "، ".join(fallback_feeders)),
+                    suggestion_fa=("برچسب فیدر قطعه‌های ابتدایی خروجی پست یا "
+                                  "نقطه‌های منبع/ELWFWT بازبینی شود."),
+                    impact_fa=("برای این فیدرها مسیر الکتریکی قطعی از منبع "
+                               "بازسازی نشد؛ نمایش نقشه بر اساس برچسب GIS "
+                               "است، نه اثبات اتصال."),
+                    meta={"feeders": fallback_feeders}))
+            if unresolved_feeders:
+                issues.add(ValidationIssue(
+                    code="TOPO-POL-05-EMPTY", severity=SEVERITY_WARNING,
+                    message_fa=("برای این فیدرها هیچ قطعهٔ GIS هم‌برچسب "
+                                "یافت نشد و مسیر نمایش داده نمی‌شود: "
+                                + "، ".join(unresolved_feeders)),
+                    suggestion_fa=("برچسب فیدر لایه‌های خط/منبع GIS و نگاشت "
+                                  "ELWFWT بازبینی شود."),
+                    impact_fa=("این فیدرها از نقشه/تحلیل توپولوژی حذف "
+                               "نمی‌شوند، ولی هیچ یالی برای آن‌ها حدس زده "
+                               "نمی‌شود."),
+                    meta={"feeders": unresolved_feeders}))
 
         # GIS-label mismatch: branch feeder_hint vs traced feeder identity
         mismatch_count: dict[tuple, int] = defaultdict(int)

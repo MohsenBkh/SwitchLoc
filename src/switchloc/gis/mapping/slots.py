@@ -50,7 +50,7 @@ SLOTS: dict[str, EquipmentSlot] = {s.key: s for s in [
     EquipmentSlot("recloser", "ریکلوژر", "switch", "point",
                   ("ELWREC", "ELREC"), 24),
     EquipmentSlot("sectionalizer", "سکشنلایزر", "switch", "point",
-                  (), 25, "لایه اختصاصی در صورت وجود"),
+                  ("ELWSEC", "ELSEC"), 25, "لایه اختصاصی سکشنالایزر ELWSEC/ELSEC"),
     EquipmentSlot("source_feeder", "منبع/کلید سرخط فیدر (پست)", "source", "point",
                   ("ELWFWT", "ELFWT"), 26),
     EquipmentSlot("booster", "اتوبوستر/تنظیم‌کننده ولتاژ", "other", "point",
