@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v1.26.0 — جایابی سطح دوم با ورود مستقیم + پخش بار روی نقشه
+
+- **Level-2: ورود مستقیم به‌جای JSON** — تمام پارامترهای `level2/power_flow/reliability` مستقیم در فرم وارد می‌شوند؛ بودجه NC per-feeder در جدول، تنظیمات پخش بار (ولتاژ مبنا/حدود/حد ترانس/ضریب توان) و جدول λ/r/پشتیبان per-feeder (خالی = خودکار از پروژه). `level2_placement_tab` از `QVBox` عمودی (فایل JSON) به **دو پنل کنار هم** با `QSplitter` افقی (ورودی ←→ نتایج) تبدیل شد.
+- **دکمه‌های فشرده با آیکون** — `▶ اجرا`، `↻ تازه‌سازی`، `💾 ذخیره`، `↻ بار`، `↻ قابلیت` با `minimumWidth` و `toolTip` کامل؛ متن‌های طولانی که در دکمه بریده می‌شدند کوتاه و با نماد جایگزین شدند.
+- **پخش بار روی نقشه** — `MapStyle` فیلدهای `pf_enabled/pf_mode/pf_voltage_low/high/pf_loading_* /pf_opacity/pf_show_labels/pf_transformer_scale` + اعتبارسنجی و ماندگاری در `project_kv`. `NetworkMapRenderer` گرادیان ولتاژ (low→high)، سطوح بار خط (۰–۷۰/۷۰–۱۰۰/≥۱۰۰ با رنگ و ضخامت قابل تنظیم)، شفافیت، برچسب پراکنده (≤۱۲۰)، اورلی اضافه‌بار ترانس، لجند و بنر `powerflow_no_data`. تب جدید «پخش بار» در `map_style_dialog` با `QSplitter` و `ColorPicker`.
+- **سرویس‌های پخش بار/سطح دوم مقاوم به GIS واقعی** — `EquipmentTypeCatalog` با fallback نصب خالی `ACSR 35/70 → bare`، `PowerFlowSettings.allow_meshed=True` با حل روی spanning tree + هشدار، fallback R/X به `70-Al_St` عمومی، و `load_model` جایگزین خودکار؛ Level-2 نیز همان انعطاف را دارد (Kosar F4، Ardabil F10، ParsAbad F1 اکنون موفق).
+- **یکپارچه‌سازی Level-2 ↔ نقشه** — پس از هر اجرای موفق Level-2، پخش بار خودکار برای فیدرهای مطالعه اجرا و `pf_voltages/pf_branch_loading/pf_transformer_loading` در `refresh_map` روی نقشه نمایش داده می‌شود.
+- **مستندات** — `README` به `v1.26.0` و ۷ تب به‌روز شد، درخت کد `src/` با `level2.py/power_flow.py/level2_placement_service.py/power_flow_service.py/equipment_types.py` تکمیل شد، و `docs/LEVEL2_PLACEMENT_FA.md`/`POWER_FLOW_MVP_FA.md` اضافه شد.
+- **سازگاری تست** — `Level2PlacementTab` ویژگی‌های `feeder_table/no_candidates_label/fill_load_button/fill_reliability_button/settings_data` را برای `test_qt_main_window_smoke` حفظ می‌کند.
+
 ## v1.25.0 — جایابی دستی EENS، گروه‌بندی لایه‌های نقشه و اثر فیوزها
 
 - افزودن انتخاب بین جایابی خودکار و دستی در تحلیل EENS؛ محل دستی با مختصات UTM یا کلیک روی نقشه تعیین می‌شود، روی نزدیک‌ترین یال فیدر گرهٔ مجازی می‌سازد و EENS پیش/پس از نصب همان کلید را گزارش می‌کند.
