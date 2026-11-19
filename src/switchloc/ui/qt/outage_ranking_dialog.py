@@ -77,8 +77,12 @@ def show_outage_ranking_dialog(parent, points, *, title: str = "",
     split.setSizes([380, 150])
 
     btns = QHBoxLayout()
-    btn_csv = QPushButton("ذخیرهٔ CSV")
-    btn_close = QPushButton("بستن")
+    btn_csv = QPushButton("💾 CSV")
+    btn_csv.setToolTip("ذخیرهٔ CSV")
+    btn_csv.setMinimumWidth(60)
+    btn_close = QPushButton("✖ بستن")
+    btn_close.setToolTip("بستن")
+    btn_close.setMinimumWidth(60)
 
     def _save_csv() -> None:
         path, _ = QFileDialog.getSaveFileName(

@@ -222,7 +222,9 @@ def make_dashboard_tab(parent=None):
             lay.addWidget(self.canvas)
             self.chart_box, self.charts = _build_chart_section()()
             lay.addWidget(self.chart_box)
-            self.btn_export_indices = QPushButton("خروجی اکسل شاخص‌های فیدرها…")
+            self.btn_export_indices = QPushButton("📊 اکسل شاخص‌ها")
+            self.btn_export_indices.setToolTip("خروجی اکسل شاخص‌های فیدرها…")
+            self.btn_export_indices.setMinimumWidth(100)
             self.btn_export_indices.clicked.connect(self._export_indices)
             lay.addWidget(self.btn_export_indices)
             lay.addWidget(QLabel("<b>Feeder matrix — trace, λ/r, EP/TL, "

@@ -70,7 +70,9 @@ def make_inputs_confirm_dialog(parent, rows: list[InputRow],
     tbl.setColumnWidth(4, 280)
 
     btns_row = QHBoxLayout()
-    btn_revert = QPushButton("بازگرداندن مقادیر اصلی")
+    btn_revert = QPushButton("↩ بازگردانی")
+    btn_revert.setToolTip("بازگرداندن مقادیر اصلی")
+    btn_revert.setMinimumWidth(80)
     btn_revert.clicked.connect(lambda: _reload())
     btns_row.addWidget(btn_revert)
     btns_row.addStretch(1)

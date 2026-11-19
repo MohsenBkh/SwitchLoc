@@ -307,7 +307,9 @@ def run_task(parent, label: str, work: Callable[[], Any],
                 self.dialog.show()
                 req.done.set()
 
-    cancel_button = QPushButton("لغو فرایند")
+    cancel_button = QPushButton("✖ لغو")
+    cancel_button.setToolTip("لغو فرایند")
+    cancel_button.setMinimumWidth(60)
     dialog = QProgressDialog(label, None, 0, 0, parent)
     dialog.setWindowTitle(title)
     # The main window is temporarily locked except for its universal Stop

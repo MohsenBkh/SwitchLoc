@@ -316,8 +316,12 @@ def make_outage_review_dialog(parent, *, records, plans, geometries=None,
     layout.addWidget(table, 1)
 
     bulk = QHBoxLayout()
-    btn_all_confirm = QPushButton("همه: تأیید مهندسی")
-    btn_all_pending = QPushButton("همه: در انتظار بررسی")
+    btn_all_confirm = QPushButton("✅ همه تأیید")
+    btn_all_confirm.setToolTip("همه: تأیید مهندسی")
+    btn_all_confirm.setMinimumWidth(80)
+    btn_all_pending = QPushButton("⏳ همه انتظار")
+    btn_all_pending.setToolTip("همه: در انتظار بررسی")
+    btn_all_pending.setMinimumWidth(90)
 
     def _bulk(status: str) -> None:
         for i in range(table.rowCount()):

@@ -103,7 +103,9 @@ def show_saved_workbooks(parent, db_path):  # pragma: no cover - Qt
             cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
             table.setItem(i, col, cell)
     layout.addWidget(table)
-    button = QPushButton('استخراج فایل انتخاب‌شده…', dialog)
+    button = QPushButton('📤 استخراج', dialog)
+    button.setToolTip('استخراج فایل انتخاب‌شده…')
+    button.setMinimumWidth(80)
     layout.addWidget(button)
     def extract():
         row = table.currentRow()
