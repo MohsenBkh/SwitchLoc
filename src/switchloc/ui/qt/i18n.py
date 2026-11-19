@@ -74,6 +74,11 @@ FA: dict[str, str] = {
     "Approve selected plan": "تأیید طرح انتخاب‌شده",
     "Run placement & ranking": "اجرای جایابی و رتبه‌بندی",
     "Import GIS data": "ورود داده GIS",
+    "Import GIS…": "ورود GIS…",
+    "Outage single…": "خاموشی تکی…",
+    "Outage per-feeder": "خاموشی هر فیدر",
+    "Proposals": "پیشنهادها",
+    "Settings…": "تنظیمات…",
     "Per-feeder outage files": "فایل‌های خاموشی هر فیدر",
     # status bar
     "Ready": "آماده",
