@@ -39,6 +39,75 @@ _log = get_logger("reporting")
 FORMATS = ("xlsx", "docx", "pdf", "gis")
 
 
+def _find_template_files() -> dict[str, Path]:
+    """Robust locate of the two Word templates at repo root or beside exe."""
+    import sys
+    names = ["نمونه دفترچه مطالعات ریکلوزر.docx", "نمونه دفترچه مطالعات سکسیونر.docx"]
+    candidates: list[Path] = []
+    try:
+        cur = Path.cwd().resolve()
+        for _ in range(8):
+            candidates.append(cur)
+            if cur.parent == cur:
+                break
+            cur = cur.parent
+    except Exception:
+        pass
+    try:
+        if getattr(sys, "frozen", False):
+            exe_dir = Path(sys.executable).resolve().parent
+            cur = exe_dir
+            for _ in range(8):
+                candidates.append(cur)
+                if cur.parent == cur:
+                    break
+                cur = cur.parent
+            mp = getattr(sys, "_MEIPASS", None)
+            if mp:
+                candidates.append(Path(mp).resolve())
+    except Exception:
+        pass
+    try:
+        cur = Path(__file__).resolve()
+        for _ in range(8):
+            cur = cur.parent
+            candidates.append(cur)
+    except Exception:
+        pass
+    try:
+        import switchloc as _sw
+        candidates.append(Path(_sw.__file__).resolve().parents[1])
+    except Exception:
+        pass
+    # dedup
+    seen: set[Path] = set()
+    uniq: list[Path] = []
+    for r in candidates:
+        try:
+            rp = r.resolve()
+        except Exception:
+            rp = r
+        if rp not in seen:
+            seen.add(rp)
+            uniq.append(r)
+    out: dict[str, Path] = {}
+    for name in names:
+        for root in uniq:
+            for sub in ("", "data", "build_assets", "templates"):
+                base = root / sub if sub else root
+                p = base / name
+                if p.is_file():
+                    out[name] = p
+                    break
+            if name in out:
+                break
+        if name not in out:
+            p = Path(name)
+            if p.is_file():
+                out[name] = p.resolve()
+    return out
+
+
 @dataclass
 class ExportSettings:
     out_dir: str = "reports/exports"
@@ -179,23 +248,19 @@ class ReportService:
             tmpl = getattr(st, "template_path", None)
             tvars = dict(getattr(st, "template_vars", None) or {})
             extra = dict(getattr(st, "extra_images", None) or {})
-            # auto-detect template if not explicitly set but files exist at repo root
+            # auto-detect template if not explicitly set (robust search)
             if not tmpl:
                 try:
-                    from pathlib import Path as _P
-                    cand_recl = _P("نمونه دفترچه مطالعات ریکلوزر.docx")
-                    cand_sec = _P("نمونه دفترچه مطالعات سکسیونر.docx")
-                    # also try cwd + parent
-                    for cand in (cand_recl, cand_sec):
-                        if cand.is_file():
-                            # choose based on study type
-                            if m.has_eens_study and cand_sec.is_file():
-                                tmpl = str(cand_sec.resolve())
-                            elif cand_recl.is_file():
-                                tmpl = str(cand_recl.resolve())
-                            else:
-                                tmpl = str(cand.resolve())
-                            break
+                    found = _find_template_files()
+                    cand_recl = found.get("نمونه دفترچه مطالعات ریکلوزر.docx")
+                    cand_sec = found.get("نمونه دفترچه مطالعات سکسیونر.docx")
+                    if cand_recl or cand_sec:
+                        if m.has_eens_study and cand_sec is not None:
+                            tmpl = str(cand_sec.resolve())
+                        elif cand_recl is not None:
+                            tmpl = str(cand_recl.resolve())
+                        elif cand_sec is not None:
+                            tmpl = str(cand_sec.resolve())
                 except Exception:
                     tmpl = None
             paths["docx"] = export_docx(

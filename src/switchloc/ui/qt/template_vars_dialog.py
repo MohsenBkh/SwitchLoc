@@ -18,25 +18,113 @@ TEMPLATE_SEC = "نمونه دفترچه مطالعات سکسیونر.docx"
 
 
 def _find_templates() -> dict[str, Path]:
-    roots = [Path.cwd(), Path(__file__).resolve().parents[4]]
-    # also try import
+    import sys
+    candidates_roots: list[Path] = []
+    # cwd and ancestors
     try:
-        import switchloc
-        roots.append(Path(switchloc.__file__).resolve().parents[1])
+        cur = Path.cwd().resolve()
+        for _ in range(8):
+            candidates_roots.append(cur)
+            if cur.parent == cur:
+                break
+            cur = cur.parent
     except Exception:
         pass
+    # exe / frozen
+    try:
+        if getattr(sys, "frozen", False):
+            exe_dir = Path(sys.executable).resolve().parent
+            cur = exe_dir
+            for _ in range(8):
+                candidates_roots.append(cur)
+                if cur.parent == cur:
+                    break
+                cur = cur.parent
+            meipass = getattr(sys, "_MEIPASS", None)
+            if meipass:
+                candidates_roots.append(Path(meipass).resolve())
+                # _MEIPASS parent may contain templates when datas copied to root
+                try:
+                    candidates_roots.append(Path(meipass).resolve().parent)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    # __file__ ancestors
+    try:
+        cur = Path(__file__).resolve()
+        for _ in range(8):
+            cur = cur.parent
+            candidates_roots.append(cur)
+    except Exception:
+        pass
+    # switchloc package
+    try:
+        import switchloc
+        candidates_roots.append(Path(switchloc.__file__).resolve().parents[1])
+        candidates_roots.append(Path(switchloc.__file__).resolve().parents[2])
+    except Exception:
+        pass
+    # argv 0
+    try:
+        candidates_roots.append(Path(sys.argv[0]).resolve().parent)
+        candidates_roots.append(Path(sys.argv[0]).resolve().parent.parent)
+    except Exception:
+        pass
+    # deduplicate
+    seen: set[Path] = set()
+    uniq_roots: list[Path] = []
+    for r in candidates_roots:
+        try:
+            rp = r.resolve()
+        except Exception:
+            rp = r
+        if rp not in seen:
+            seen.add(rp)
+            uniq_roots.append(r)
+    extra_subdirs = ["", "data", "build_assets", "assets", "templates", "resources"]
     out: dict[str, Path] = {}
     for name in (TEMPLATE_RECL, TEMPLATE_SEC):
-        for r in roots:
-            p = r / name
-            if p.is_file():
-                out[name] = p
+        found: Path | None = None
+        for root in uniq_roots:
+            for sub in extra_subdirs:
+                base = root / sub if sub else root
+                p = base / name
+                if p.is_file():
+                    found = p
+                    break
+            if found:
                 break
-        # also direct root
+        if found:
+            out[name] = found
+    # final direct check and rglob fallback
+    for name in (TEMPLATE_RECL, TEMPLATE_SEC):
         if name not in out:
             p = Path(name)
             if p.is_file():
                 out[name] = p.resolve()
+            else:
+                try:
+                    for cand in Path.cwd().rglob(name):
+                        if cand.is_file():
+                            out[name] = cand
+                            break
+                except Exception:
+                    pass
+                if name not in out:
+                    # also search via importlib.resources
+                    try:
+                        import importlib.resources as _ir
+                        # try package data
+                        for pkg in ("switchloc", "switchloc.data", "build_assets"):
+                            try:
+                                if _ir.files(pkg).joinpath(name).is_file():  # type: ignore[attr-defined]
+                                    # extract to temp is complex; skip
+                                    pass
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
     return out
 
 
@@ -76,12 +164,36 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     rb_recl.setEnabled(has_recl)
     rb_sec.setEnabled(has_sec)
     if not has_recl and not has_sec:
-        QMessageBox.warning(parent, "تمپلیت یافت نشد",
-                            "فایل‌های تمپلیت در ریشه پروژه یافت نشدند:\n"
-                            f"{TEMPLATE_RECL}\n{TEMPLATE_SEC}")
-        return None
-    # default selection
-    if selected_template == "recloser" and has_recl:
+        resp = QMessageBox.question(
+            parent, "تمپلیت یافت نشد",
+            "فایل‌های تمپلیت در ریشه پروژه یافت نشدند:\n"
+            f"{TEMPLATE_RECL}\n{TEMPLATE_SEC}\n\n"
+            "آیا می‌خواهید فایل تمپلیت را دستی انتخاب کنید؟\n"
+            "در صورت انتخاب «No»، گزارش عمومی (بدون تمپلیت) ساخته می‌شود.\n"
+            "«Cancel» انصراف کامل گزارش‌گیری است.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+        )
+        if resp == QMessageBox.StandardButton.Cancel:
+            return None
+        if resp == QMessageBox.StandardButton.Yes:
+            path, _ = QFileDialog.getOpenFileName(
+                parent, "انتخاب فایل تمپلیت Word", str(Path.cwd()),
+                "Word (*.docx);;All (*.*)")
+            if path and Path(path).is_file():
+                low = Path(path).name.lower()
+                if "سکسیونر" in low or "sectionalizer" in low or low == TEMPLATE_SEC.lower():
+                    templates[TEMPLATE_SEC] = Path(path)
+                    has_sec = True
+                elif "ریکلووزر" in low or "recloser" in low or low == TEMPLATE_RECL.lower():
+                    templates[TEMPLATE_RECL] = Path(path)
+                    has_recl = True
+                else:
+                    templates[TEMPLATE_RECL] = Path(path)
+                    has_recl = True
+            else:
+                return (None, {}, {})
+        else:  # No -> generic report
+            return (None, {}, {})
         rb_recl.setChecked(True)
     elif selected_template == "sectionalizer" and has_sec:
         rb_sec.setChecked(True)
