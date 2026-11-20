@@ -58,6 +58,15 @@ class ExportSettings:
     #: در حالت auto، اگر مطالعهٔ جایابی کلید/EENS در پروژه ذخیره شده باشد،
     #: گزارش نهایی فقط همان مطالعه را مستند می‌کند (درخواست کاربر v1.15).
     study_type: str = "auto"
+    #: فیدرهای انتخاب‌شده برای مطالعه (scope) — فقط همین‌ها در feeder_indices.png
+    #: و جدول‌های مرتبط نمایش داده می‌شوند (task 3).
+    selected_feeders: list = field(default_factory=list)
+    #: تمپلیت گزارش Word (ریکلووزر / سکسیونر) — مسیر فایل .docx
+    template_path: str | None = None
+    #: مقادیر متغیرهای تمپلیت (کلیدهای داخل {} و قطعات قرمز)
+    template_vars: dict = field(default_factory=dict)
+    #: تصاویر اضافی کاربر برای محل‌های «منحنی توسط کاربر …»
+    extra_images: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -154,7 +163,8 @@ class ReportService:
             if rows_idx:
                 charts_png = indices_figure(
                     rows_idx,
-                    str(Path(st.out_dir) / "feeder_indices.png"))
+                    str(Path(st.out_dir) / "feeder_indices.png"),
+                    selected_feeders=list(st.selected_feeders or []))
         except Exception as exc:                       # noqa: BLE001
             issues.append(("PHASE5-CHART-FAIL", "Warning",
                            f"ترسیم نمودار شاخص‌ها ناموفق بود: {exc}"))
@@ -165,10 +175,35 @@ class ReportService:
             paths["xlsx"] = export_workbook(
                 m, str(_out(st.out_dir, "SwitchLoc_study.xlsx")))
         if "docx" in st.formats:
+            # template_vars may have been collected via UI dialog (task 4)
+            tmpl = getattr(st, "template_path", None)
+            tvars = dict(getattr(st, "template_vars", None) or {})
+            extra = dict(getattr(st, "extra_images", None) or {})
+            # auto-detect template if not explicitly set but files exist at repo root
+            if not tmpl:
+                try:
+                    from pathlib import Path as _P
+                    cand_recl = _P("نمونه دفترچه مطالعات ریکلوزر.docx")
+                    cand_sec = _P("نمونه دفترچه مطالعات سکسیونر.docx")
+                    # also try cwd + parent
+                    for cand in (cand_recl, cand_sec):
+                        if cand.is_file():
+                            # choose based on study type
+                            if m.has_eens_study and cand_sec.is_file():
+                                tmpl = str(cand_sec.resolve())
+                            elif cand_recl.is_file():
+                                tmpl = str(cand_recl.resolve())
+                            else:
+                                tmpl = str(cand.resolve())
+                            break
+                except Exception:
+                    tmpl = None
             paths["docx"] = export_docx(
                 build_report(m, map_note=_MAP_NOTE if map_png else ""),
                 str(_out(st.out_dir, "SwitchLoc_report.docx")),
-                map_png=map_png, charts_png=charts_png)
+                map_png=map_png, charts_png=charts_png,
+                template_path=tmpl, template_vars=tvars,
+                extra_images=extra, study_model=m)
         if "pdf" in st.formats:
             try:
                 paths["pdf"] = export_pdf(

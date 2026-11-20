@@ -24,7 +24,9 @@ from docx.shared import Cm, Pt, RGBColor
 
 from .content import ReportDoc
 
-FONT = "Vazirmatn"          # falls back gracefully when not installed
+FONT = "B Nazanin"          # body font (task 5)
+FONT_BODY = "B Nazanin"
+FONT_TITLE = "B Titr"
 _NAVY = RGBColor(0x1F, 0x4E, 0x79)
 
 
@@ -40,9 +42,10 @@ def _p_bidi(p) -> None:
 
 
 def _run_fa(run, size: float = 11, bold: bool = False,
-            color: RGBColor | None = None) -> None:
+            color: RGBColor | None = None, font: str | None = None) -> None:
     """Persian run: complex-script font + size + rtl."""
-    run.font.name = FONT
+    fn = font or FONT_BODY
+    run.font.name = fn
     run.font.size = Pt(size)
     run.font.bold = bold
     if color is not None:
@@ -52,9 +55,9 @@ def _run_fa(run, size: float = 11, bold: bool = False,
     if rFonts is None:
         rFonts = OxmlElement("w:rFonts")
         rPr.append(rFonts)
-    rFonts.set(qn("w:ascii"), FONT)
-    rFonts.set(qn("w:hAnsi"), FONT)
-    rFonts.set(qn("w:cs"), FONT)
+    rFonts.set(qn("w:ascii"), fn)
+    rFonts.set(qn("w:hAnsi"), fn)
+    rFonts.set(qn("w:cs"), fn)
     szCs = rPr.find(qn("w:szCs"))
     if szCs is None:
         szCs = OxmlElement("w:szCs")
@@ -73,12 +76,25 @@ def _run_fa(run, size: float = 11, bold: bool = False,
 
 def _fa_para(doc, text: str, size: float = 11, bold: bool = False,
              align=WD_ALIGN_PARAGRAPH.JUSTIFY, color=None,
-             space_after: float = 6) -> object:
+             space_after: float = 6, font: str | None = None) -> object:
     p = doc.add_paragraph()
     _p_bidi(p)
     p.alignment = align
     p.paragraph_format.space_after = Pt(space_after)
-    _run_fa(p.add_run(text), size=size, bold=bold, color=color)
+    # Titles (bold >=14) use B Titr
+    fn = font or (FONT_TITLE if bold and size >= 13 else FONT_BODY)
+    _run_fa(p.add_run(text), size=size, bold=bold, color=color, font=fn)
+    return p
+
+
+def _fa_para_font(doc, text: str, font: str, size: float = 11, bold: bool = False,
+                  align=WD_ALIGN_PARAGRAPH.JUSTIFY, color=None,
+                  space_after: float = 6) -> object:
+    p = doc.add_paragraph()
+    _p_bidi(p)
+    p.alignment = align
+    p.paragraph_format.space_after = Pt(space_after)
+    _run_fa(p.add_run(text), size=size, bold=bold, color=color, font=font)
     return p
 
 
@@ -120,8 +136,34 @@ def _cell_fa(cell, text: str, bold: bool = False, size: float = 9) -> None:
 # ---------------------------------------------------------------------------
 def export_docx(doc_content: ReportDoc, path: str,
                 map_png: str | None = None,
-                charts_png: str | None = None) -> str:
-    """Write the Word report and return the path."""
+                charts_png: str | None = None,
+                template_path: str | None = None,
+                template_vars: dict | None = None,
+                extra_images: dict | None = None,
+                study_model=None) -> str:
+    """Write the Word report and return the path.
+
+    If ``template_path`` points to a ``.docx`` template (red/{…} variables),
+    the report is produced by filling that template (verbatim non-red
+    sections, B Nazanin / B Titr fonts).  Otherwise the neutral
+    ``ReportDoc`` tree is rendered as before.
+    """
+    # Template-based branch (task 4)
+    if template_path and Path(template_path).exists():
+        try:
+            from .docx_template import apply_template
+            return apply_template(
+                template_path, path,
+                vars_dict=template_vars,
+                map_png=map_png,
+                charts_png=charts_png,
+                extra_images=extra_images,
+                study_model=study_model,
+            )
+        except Exception as exc:
+            # fall back to generic rendering, but log
+            from ..logging_setup import get_logger
+            get_logger("reporting.docx").warning("template render failed (%s), fallback to generic: %s", template_path, exc)
     doc = Document()
     sec = doc.sections[0]
     sec.page_width, sec.page_height = Cm(21.0), Cm(29.7)     # A4 portrait
@@ -129,10 +171,38 @@ def export_docx(doc_content: ReportDoc, path: str,
         setattr(sec, attr, Cm(2.0))
     sec.top_margin, sec.bottom_margin = Cm(2.2), Cm(2.0)
 
-    # normal style → Persian default
+    # normal style → Persian default (B Nazanin)
     st = doc.styles["Normal"]
-    st.font.name = FONT
+    st.font.name = FONT_BODY
     st.font.size = Pt(11)
+    # enforce rFonts for Normal and Headings (B Nazanin / B Titr)
+    try:
+        rPr = st.element.find(qn("w:rPr"))
+        if rPr is not None:
+            rFonts = rPr.find(qn("w:rFonts"))
+            if rFonts is None:
+                rFonts = OxmlElement("w:rFonts")
+                rPr.append(rFonts)
+            rFonts.set(qn("w:ascii"), FONT_BODY)
+            rFonts.set(qn("w:hAnsi"), FONT_BODY)
+            rFonts.set(qn("w:cs"), FONT_BODY)
+        for hname in ("Heading 1", "Heading 2", "Heading 3", "Heading 4", "Heading 5", "Title"):
+            try:
+                hs = doc.styles[hname]
+                hs.font.name = FONT_TITLE
+                hrPr = hs.element.find(qn("w:rPr"))
+                if hrPr is not None:
+                    hr = hrPr.find(qn("w:rFonts"))
+                    if hr is None:
+                        hr = OxmlElement("w:rFonts")
+                        hrPr.append(hr)
+                    hr.set(qn("w:ascii"), FONT_TITLE)
+                    hr.set(qn("w:hAnsi"), FONT_TITLE)
+                    hr.set(qn("w:cs"), FONT_TITLE)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     # ---------------- title page -----------------------------------------
     for _ in range(4):

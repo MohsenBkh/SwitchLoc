@@ -2726,6 +2726,40 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         net, topo, db = state.get("net"), state.get("topo"), state["db"]
         manual = list(state.get("manual_evals") or [])
 
+        # Task 3: selected feeders for filtered indices figure
+        selected_feeders = study_feeder_keys() or list(state.get("scope") or [])
+
+        # Task 4: template variables dialog when docx requested
+        template_path = None
+        template_vars: dict = {}
+        extra_images: dict = {}
+        if "docx" in formats:
+            try:
+                # Build a lightweight StudyModel for auto defaults when possible
+                _tmpl_model = None
+                if net is not None and topo is not None and plc is not None:
+                    from ...reporting.model import StudyModel as _SM
+                    try:
+                        _tmpl_model = _SM(net=net, topo=topo, placement=plc.result,
+                                          db_path=str(db or ""), placement_run_id=getattr(plc, "run_id", "") or "",
+                                          project_name=name, manual_evals=manual,
+                                          study_type=("eens" if state.get("sectionalizer") else "auto"),
+                                          outage_lambda=_lam_rows_of(state.get("outage")),
+                                          feeder_indices=(getattr(state.get("outage"), "indices", None).as_dict()
+                                                          if state.get("outage") and hasattr(getattr(state.get("outage"), "indices", None), "as_dict") else {}))
+                    except Exception:
+                        _tmpl_model = None
+                from .template_vars_dialog import get_template_vars
+                tv = get_template_vars(win, study_model=_tmpl_model,
+                                       defaults={"نام پروژه": name})
+                if tv is None:
+                    return  # user cancelled template dialog
+                template_path, template_vars, extra_images = tv
+            except Exception as exc:
+                from ...logging_setup import get_logger as _gl
+                _gl("ui.exports").warning("template dialog failed: %s", exc)
+                template_path, template_vars, extra_images = None, {}, {}
+
         def work():
             if formats == ("eens_json",):
                 from ...reporting.eens_report import export_eens_json
@@ -2765,7 +2799,11 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
                                       project_name=name, manual_evals=manual,
                                       study_type=study_type,
                                       outage_lambda=lam_rows,
-                                      feeder_indices=idx_payload)
+                                      feeder_indices=idx_payload,
+                                      selected_feeders=selected_feeders,
+                                      template_path=template_path,
+                                      template_vars=template_vars,
+                                      extra_images=extra_images)
             if plc is not None and net is not None and topo is not None:
                 return ReportService(settings).run(
                     db_path=db, net=net, topo=topo, placement=plc.result,
@@ -2777,6 +2815,22 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             QMessageBox.information(
                 win, "Exports ready",
                 f"{res.summary_fa}\n\nOutputs are under:\n{out_dir}")
+            # Task 1: auto-open export folder after report
+            try:
+                from PySide6.QtCore import QUrl
+                from PySide6.QtGui import QDesktopServices as _QDS
+                _QDS.openUrl(QUrl.fromLocalFile(str(out_dir)))
+            except Exception:
+                try:
+                    import os, subprocess, sys
+                    if sys.platform.startswith("win"):
+                        os.startfile(out_dir)  # type: ignore[attr-defined]
+                    elif sys.platform.startswith("darwin"):
+                        subprocess.Popen(["open", out_dir])
+                    else:
+                        subprocess.Popen(["xdg-open", out_dir])
+                except Exception:
+                    pass
 
         run_task(win, "Building exports…", work, done,
                  error_box(win, "Exports failed"), title="Exports")

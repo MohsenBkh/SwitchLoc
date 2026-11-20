@@ -718,6 +718,9 @@ def make_map_canvas(parent=None, osm_fetch=None):
             # دستی او را در بازسازی فهرست از بین نبرد)
             self._switch_user_shown: set[str] = set()
             self._switch_user_hidden: set[str] = set()
+            # کلیدهای پیشنهادی جایابی (task 2 — نمایش/عدم نمایش هر کلید)
+            self._hidden_proposed_ids: set[str] = set()
+            self._proposed_count_total = 0
             # لایهٔ خاموشی‌های دارای مختصات (درخواست کاربر)
             self._outage_points: list = []
             self._hidden_outage_ids: set[str] = set()
@@ -788,6 +791,37 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.left_split.setChildrenCollapsible(True)
             self.left_split.addWidget(switch_box)
 
+            # --- کلیدهای پیشنهادی جایابی (task 2) ----------------------
+            proposed_box = QGroupBox("کلیدهای پیشنهادی — نمایش/عدم نمایش")
+            proposed_box.setMinimumWidth(220)
+            proposed_box.setMaximumWidth(340)
+            pv = QVBoxLayout(proposed_box)
+            self.proposed_count = QLabel("0 پیشنهادی")
+            pv.addWidget(self.proposed_count)
+            pbtn = QHBoxLayout()
+            self.btn_proposed_all = QPushButton("👁️ همه")
+            self.btn_proposed_all.setToolTip("نمایش همه کلیدهای پیشنهادی")
+            self.btn_proposed_all.setMinimumWidth(60)
+            self.btn_proposed_none = QPushButton("🚫 هیچ")
+            self.btn_proposed_none.setToolTip("پنهان کردن همه پیشنهادی‌ها")
+            self.btn_proposed_none.setMinimumWidth(60)
+            self.btn_proposed_all.clicked.connect(lambda: self._set_all_proposed(True))
+            self.btn_proposed_none.clicked.connect(lambda: self._set_all_proposed(False))
+            pbtn.addWidget(self.btn_proposed_all)
+            pbtn.addWidget(self.btn_proposed_none)
+            pv.addLayout(pbtn)
+            self.proposed_list = QTreeWidget()
+            self.proposed_list.setHeaderHidden(True)
+            self.proposed_list.setToolTip(
+                "هر سطر یک مکان پیشنهادی است (گره شبکه). با برداشتن تیک، "
+                "فقط نماد آن از نقشه حذف می‌شود؛ محاسبات بدون تغییر می‌مانند. "
+                "وقتی چند کلید برای جایابی انتخاب می‌شود همه نمایش داده می‌شود و "
+                "از همین‌جا می‌توانید تک‌تک آن‌ها را پنهان/آشکار کنید.")
+            self.proposed_list.itemChanged.connect(self._proposed_item_changed)
+            pv.addWidget(self.proposed_list, 1)
+            self.proposed_panel = proposed_box
+            self.left_split.addWidget(proposed_box)
+
             # --- لایهٔ خاموشی‌های دارای مختصات --------------------------
             outage_box = QGroupBox("لایهٔ خاموشی‌ها — دارای مختصات")
             outage_box.setMinimumWidth(220)
@@ -832,7 +866,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._outage_update_timer.timeout.connect(self._flush_outage_updates)
             ov.addWidget(self.outage_list, 1)
             self.left_split.addWidget(outage_box)
-            self.left_split.setSizes([320, 280])
+            self.left_split.setSizes([260, 220, 240])
             left_col.addWidget(self.left_split, 1)
             self.outage_panel = outage_box
             self.layer_panel = left_col_holder
@@ -998,6 +1032,12 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._hidden_switch_ids.clear()
             self._switch_user_shown.clear()
             self._switch_user_hidden.clear()
+            self._hidden_proposed_ids.clear()
+            self._proposed_count_total = 0
+            self.proposed_list.blockSignals(True)
+            self.proposed_list.clear()
+            self.proposed_list.blockSignals(False)
+            self.proposed_count.setText("0 پیشنهادی")
             self._osm_img = self._osm_extent = None
             self._osm_note = ""
             self._osm_tried = False
@@ -1192,6 +1232,50 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self.switch_count.setText(
                 f"{len(switch_rows)} کلید | {len(switch_rows)-len(self._hidden_switch_ids)} قابل نمایش")
 
+            # --- پیشنهادی‌ها (task 2) -----------------------------------------
+            self.proposed_list.blockSignals(True)
+            self.proposed_list.clear()
+            prop_nodes = list(self._proposed or [])
+            prop_sorted = sorted({str(n) for n in prop_nodes})
+            valid_prop = set(prop_sorted)
+            self._hidden_proposed_ids.intersection_update(valid_prop)
+            self._proposed_count_total = len(prop_sorted)
+            for node_id in prop_sorted:
+                fk = "?"
+                try:
+                    nd = self._renderer.graph.nodes.get(node_id)
+                    if nd is not None:
+                        fk = getattr(nd, "feeder_name", "") or "?"
+                        if not fk or fk == "?":
+                            for t in getattr(self._renderer, "traces", []):
+                                # trace nodes/edges may contain node_id
+                                zone_nodes = set()
+                                for z in getattr(t, "zones", []) or []:
+                                    zone_nodes.update(getattr(z, "nodes", []))
+                                if node_id in zone_nodes or node_id in getattr(t, "node_ids", []) or node_id in getattr(t, "nodes", []):
+                                    fk = t.feeder_key
+                                    break
+                    if not fk or fk == "?":
+                        # fallback: inferred from switch if exists
+                        for sid, nids in getattr(self._renderer.graph, "switch_ids_at", {}).items():
+                            if node_id in nids:
+                                sw = self._renderer.switches.get(sid)
+                                if sw is not None:
+                                    fk = getattr(sw, "feeder_name", "") or fk
+                                    break
+                except Exception:
+                    pass
+                if not fk or fk == "?":
+                    fk = "فیدر نامشخص"
+                item = QTreeWidgetItem([f"{fk} | {node_id}"])
+                item.setData(0, Qt.ItemDataRole.UserRole, node_id)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(0, Qt.CheckState.Unchecked if node_id in self._hidden_proposed_ids else Qt.CheckState.Checked)
+                self.proposed_list.addTopLevelItem(item)
+            self.proposed_list.blockSignals(False)
+            self.proposed_count.setText(
+                f"{len(prop_sorted)} پیشنهادی | {len(prop_sorted)-len(self._hidden_proposed_ids)} قابل نمایش")
+
             if self._selected_zone is not None and renderer.zones is not None:
                 if renderer.zones.zone_by_id(self._selected_zone) is None:
                     self._selected_zone = None
@@ -1303,11 +1387,18 @@ def make_map_canvas(parent=None, osm_fetch=None):
                     self._fetch_osm()
                 if self._osm_img is not None:
                     osm_img, osm_ext, note = self._osm_img, self._osm_extent, self._osm_note
+            # Task 2: filter proposed nodes by per-switch visibility
+            visible_proposed = None
+            if self._proposed is not None:
+                try:
+                    visible_proposed = [n for n in self._proposed if str(n) not in self._hidden_proposed_ids]
+                except Exception:
+                    visible_proposed = self._proposed
             self.canvas.show_network(
                 self._renderer, title=self._title,
                 feeder_key=self._current_feeder(),
                 zone_labels=self.zone_labels.isChecked(),
-                proposed_nodes=self._proposed,
+                proposed_nodes=visible_proposed,
                 rotate=False, osm_image=osm_img, osm_extent=osm_ext,
                 osm_note=note, manual_nodes=self._manual,
                 highlight_point=self._highlight,
@@ -1582,6 +1673,38 @@ def make_map_canvas(parent=None, osm_fetch=None):
             self._switch_count_total = total
             self.switch_count.setText(f"{total} کلید | {total-len(hidden)} قابل نمایش")
             self._switch_redraw_timer.start(0)
+
+        def _proposed_item_changed(self, item, column=0) -> None:
+            node_id = item.data(0, Qt.ItemDataRole.UserRole)
+            if not node_id:
+                return
+            node_id = str(node_id)
+            if item.checkState(0) == Qt.CheckState.Checked:
+                self._hidden_proposed_ids.discard(node_id)
+            else:
+                self._hidden_proposed_ids.add(node_id)
+            total = self._proposed_count_total
+            self.proposed_count.setText(
+                f"{total} پیشنهادی | {total-len(self._hidden_proposed_ids)} قابل نمایش")
+            self._apply()
+
+        def _set_all_proposed(self, visible: bool) -> None:
+            self.proposed_list.blockSignals(True)
+            hidden = set()
+            target_state = Qt.CheckState.Checked if visible else Qt.CheckState.Unchecked
+            for i in range(self.proposed_list.topLevelItemCount()):
+                item = self.proposed_list.topLevelItem(i)
+                item.setCheckState(0, target_state)
+                nid = str(item.data(0, Qt.ItemDataRole.UserRole) or "")
+                if nid:
+                    if not visible:
+                        hidden.add(nid)
+            self.proposed_list.blockSignals(False)
+            self._hidden_proposed_ids = hidden
+            total = self._proposed_count_total
+            self.proposed_count.setText(
+                f"{total} پیشنهادی | {total-len(hidden)} قابل نمایش")
+            self._apply()
 
         def _on_zone_picked(self, zone_id: str) -> None:
             if self._renderer is None or self._renderer.zones is None:
