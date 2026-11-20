@@ -243,28 +243,29 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     tg_lay.addStretch(1)
     lay.addWidget(tmpl_group)
 
-    # Main feeder picker — only shown when multi-feeder
+    # Main feeder picker — for technical lookup (English key), separate from display name (Persian)
+    # Display name (نمایش) is from QLineEdit "نام فیدر" (Persian typed by user); lookup key is from this combo.
     feeder_combo: QComboBox | None = None
     if len(_feeder_choices) > 1:
-        fg = QGroupBox("فیدر اصلی برای متغیر {نام فیدر} — پارامترهای گزارش بر اساس همین فیدر پر می‌شود")
+        fg = QGroupBox("فیدر اصلی برای پارامترهای فنی — انتخاب کلید فنی (انگلیسی)؛ نام نمایشی از فیلد «نام فیدر» برداشته می‌شود")
         fl = QHBoxLayout(fg)
         feeder_combo = QComboBox()
         for fk in _feeder_choices:
             feeder_combo.addItem(fk)
-        # select current
         if _current_main in _feeder_choices:
             feeder_combo.setCurrentText(_current_main)
         feeder_combo.setMinimumWidth(320)
-        hint = QLabel("فیدر اصلی را انتخاب کنید — جریان، EENS و مختصات فقط برای این فیدر محاسبه می‌شود.")
-        hint.setWordWrap(True)
-        fl.addWidget(QLabel("نام فیدر اصلی :"))
+        fl.addWidget(QLabel("فیدر مرجع فنی :"))
         fl.addWidget(feeder_combo, 1)
-        # also add hint below? keep compact
         lay.addWidget(fg)
-        # tooltip
-        feeder_combo.setToolTip("در صورت چندفیدری بودن پروژه، دفترچه فقط برای یک فیدر اصلی تهیه می‌شود — پارامترهای محاسباتی بر همان فیدر اعمال می‌گردد.")
+        feeder_combo.setToolTip("این انتخاب فقط برای استخراج پارامترهای فنی (جریان، EENS، طول، λ، r) استفاده می‌شود؛ نام نمایشی در دفترچه از فیلد «نام فیدر» (فارسی) برداشته می‌شود.")
     elif _feeder_choices:
-        # single feeder — no picker, show label
+        # single feeder — still need lookup key but no picker UI
+        feeder_combo = QComboBox()
+        for fk in _feeder_choices:
+            feeder_combo.addItem(fk)
+        feeder_combo.setCurrentText(_feeder_choices[0])
+        # keep hidden; no widget added
         pass
 
     # Resolve current template path for preview variables
@@ -395,11 +396,13 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
 
     vars_dict = {k: e.text().strip() for k, e in edits.items()}
     vars_dict = {k: v for k, v in vars_dict.items() if v != ""}
-    # main feeder override (requirement 12)
+    # Store technical lookup key separately (English), keep display name as typed (Persian)
     if feeder_combo is not None:
         sel = feeder_combo.currentText().strip() if feeder_combo.currentText() else ""
         if sel:
-            vars_dict["نام فیدر"] = sel
+            vars_dict["__main_feeder_key"] = sel
+            # Also store under a Persian key for debugging? Keep
+            vars_dict["_main_feeder_key"] = sel
     # Ensure dedup synonyms are unified already via _canonical filter in extract_variables,
     # but if dialog returned canonical, we also ensure synonyms are not duplicated separately.
     # _auto_fill will expand, so leaving canonical is fine.

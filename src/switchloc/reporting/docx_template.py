@@ -55,7 +55,6 @@ _AUTO_VARS = {
     "سایر فیدر1", "سایر فیدر2", "سایر فیدر3", "سایر فیدر4",
     "سایر فیدر1 ", "سایر فیدر2 ", "سایر فیدر3 ", "سایر فیدر4 ",
     "رتبه فیدر از نظرعارضه بندی",
-    "نام پرعارضه ترین فیدر", "نام کم عارضه ترین فیدر",
     "مقدار EENS پایه", "مقدار EENS نهایی", "درصد کاهش",
     "EENS پایه", "EENS نهایی", "درصد کاهش EENS",
     "عدد نرخ خرابی", "زمان تعمیر",
@@ -442,6 +441,59 @@ def apply_template(template_path: str, output_path: str,
     for p in list(doc.paragraphs):
         _replace_red_fragments_in_para(p)
 
+    # Per new spec: enforce specific paragraph sizes/spacings
+    for p in doc.paragraphs:
+        txt = p.text.strip()
+        if not txt:
+            continue
+        # Fixed cover title always 20 B Titr
+        if txt == "دفترچه مطالعات جایابی تجهیزات و هماهنگی حفاظتی" or "دفترچه مطالعات جایابی تجهیزات و هماهنگی حفاظتی" in txt and len(txt) < 80 and p.alignment == WD_ALIGN_PARAGRAPH.CENTER:
+            for r in p.runs:
+                _run_set_font(r, FONT_TITLE, size_pt=20, bold=True, color=_NAVY)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            # keep original space_after (30) as is
+        # Month-year (e.g., آبان 1405, آذر 1405) -> 12 and space_after 18 (was 60)
+        _months = ("فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند")
+        is_month = (txt in ("آبان 1405", "آذر 1405", "دی 1405") or any(m in txt for m in _months) and any(y in txt for y in ("1404", "1405", "1406", "1403", "1407")) and len(txt) < 30)
+        if txt == "آبان 1405" or is_month or (len(txt) < 20 and ("1405" in txt or "1406" in txt) and any(m in txt for m in _months)):
+            for r in p.runs:
+                _run_set_font(r, FONT_BODY, size_pt=12, bold=True, color=RGBColor(0, 0, 0))
+            p.paragraph_format.space_after = Pt(18)
+            p.paragraph_format.space_before = Pt(0)
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            # also ensure if txt is like "آذر 1405" we still catch it
+        # Fallback generic: any short centered paragraph containing year
+        elif len(txt) < 25 and ("1405" in txt or "1406" in txt) and p.alignment == WD_ALIGN_PARAGRAPH.CENTER:
+            for r in p.runs:
+                _run_set_font(r, FONT_BODY, size_pt=12, bold=True, color=RGBColor(0, 0, 0))
+            p.paragraph_format.space_after = Pt(18)
+        # Also handle any red "آبان" fragmented? The paragraph may be "آبان 1405" split across runs but text is that
+        # Doc number PD-... -> 12
+        if "PD-" in txt and ("شماره گزارش" in txt or txt.startswith("PD-")):
+            for r in p.runs:
+                # doc number is red, make black 12
+                sz = 12
+                # preserve bold
+                _run_set_font(r, FONT_BODY, size_pt=sz, bold=r.bold if r.bold is not None else True, color=RGBColor(0, 0, 0) if _is_red(r) else None)
+            p.paragraph_format.space_after = Pt(4)  # keep small
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        # Headings that must be B Titr 12 per spec — exact subheadings only (not the main Heading 1 "3- تحلیل ...")
+        _is_param_heading = txt.strip() in ("پارامترهای مؤثر فیدر (نرخ خرابی و زمان تعمیر)", "پارامترهای موثر فیدر (نرخ خرابی و زمان تعمیر)", "پارامترهای موثر فیدر") or txt.strip().startswith("پارامترهای مؤثر فیدر") and not txt.strip().startswith("پارامترهای تأثیرگذار")
+        _is_spec_heading = txt.strip() == "مشخصات فنی و نتایج بهینه‌سازی فیدر"
+        _is_indices_heading = txt.strip() in ("شاخص‌های قابلیت اطمینان:", "شاخص\u200cهای قابلیت اطمینان:")
+        if txt.strip() in ("پارامترهای مؤثر فیدر (نرخ خرابی و زمان تعمیر)", "پارامترهای موثر فیدر (نرخ خرابی و زمان تعمیر)", "پارامترهای موثر فیدر", "مشخصات فنی و نتایج بهینه‌سازی فیدر", "شاخص‌های قابلیت اطمینان:", "شاخص\u200cهای قابلیت اطمینان:") or _is_param_heading or _is_spec_heading or _is_indices_heading:
+            for r in p.runs:
+                _run_set_font(r, FONT_TITLE, size_pt=12, bold=True, color=RGBColor(0, 0, 0))
+            # keep original alignment but ensure right for these headings (they are Heading 4 left? but spec says right)
+            # Our templates have them as Heading 4 with no explicit alignment; keep as is but ensure not centered
+            if p.alignment == WD_ALIGN_PARAGRAPH.CENTER:
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            # also override style size if needed
+            try:
+                p.style.font.size = Pt(12)
+            except Exception:
+                pass
+
     # Process tables: replace brace placeholders and red cell values
     for t in doc.tables:
         # detect header row (first row) — keep as is but enforce fonts
@@ -498,11 +550,24 @@ def apply_template(template_path: str, output_path: str,
         except Exception:
             pass
 
-    # Post-process: if template has tables that should be auto-filled with real data,
-    # do it now (overwrite placeholder red rows).
+    # Post-process: fill tables with main feeder data (use hidden lookup key for technical, display for name)
     if study_model is not None:
         try:
-            _fill_tables_from_model(doc, study_model)
+            # derive primary lookup and display for tables
+            _tbl_primary = None
+            _tbl_display = None
+            for hk in ("__main_feeder_key", "_main_feeder_key", "__selected_feeder_key"):
+                if hk in vars_dict and str(vars_dict[hk]).strip():
+                    _tbl_primary = str(vars_dict[hk]).strip()
+                    break
+            _tbl_display = str(vars_dict.get("نام فیدر") or "").strip() or _tbl_primary
+            # fallback to first feeder if still none
+            if not _tbl_primary:
+                try:
+                    _tbl_primary = [t.feeder_key for t in getattr(study_model.topo, "traces", [])][:1][0]
+                except Exception:
+                    _tbl_primary = _tbl_display
+            _fill_tables_from_model(doc, study_model, primary_key=_tbl_primary, display_name=_tbl_display)
         except Exception as e:
             # not fatal
             from ...logging_setup import get_logger
@@ -566,22 +631,52 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
     """
     try:
         import math
-        # --- primary feeder (respect already chosen main feeder) ---
+        # --- primary feeder: separate display (Persian) vs technical lookup (English) ---
         feeders = [t.feeder_key for t in getattr(m.topo, "traces", [])] if getattr(m, "topo", None) else []
-        # if vars_dict already has نام فیدر (chosen via dialog), respect it
-        if "نام فیدر" in vars_dict and str(vars_dict["نام فیدر"]).strip():
-            primary = str(vars_dict["نام فیدر"]).strip()
-        else:
-            primary = feeders[0] if feeders else "نامشخص"
-            # if placement has ranking, use top ranked feeder as default primary? But for multi-feeder, dialog will ask.
-            # Keep first as fallback
+        # Lookup key (English feeder_key) for all technical params — from hidden __main_feeder_key
+        # Display name (Persian) for {نام فیدر} is vars_dict["نام فیدر"] as typed by user
+        display_name = str(vars_dict.get("نام فیدر") or "").strip()
+        lookup_key = ""
+        for hk in ("__main_feeder_key", "_main_feeder_key", "__selected_feeder_key", "_selected_feeder_key"):
+            if hk in vars_dict and str(vars_dict[hk]).strip():
+                lookup_key = str(vars_dict[hk]).strip()
+                break
+        # Also try selected_feeders from model if no hidden key
+        if not lookup_key:
+            # try to infer from display_name if it looks like English key and matches a feeder
+            if display_name:
+                # exact match or same_feeder
+                for fk in feeders:
+                    if display_name == fk:
+                        lookup_key = fk
+                        break
+                    try:
+                        from ..topology.tracing import same_feeder
+                        if same_feeder(display_name, fk):
+                            lookup_key = fk
+                            break
+                    except Exception:
+                        pass
+                # if display_name is Persian (no match), keep lookup empty to fallback to first/feeders or ranking
+        if not lookup_key:
+            if feeders:
+                # if multi-feeder but no hidden key, use first as fallback but this is now considered bug case — should be hidden
+                # Prefer ranking top if single? Keep first
+                lookup_key = feeders[0]
+            else:
+                lookup_key = display_name or "نامشخص"
             try:
                 rank_rows = getattr(m.placement.ranking, "rows", [])
                 if rank_rows and len(feeders) == 1:
                     top = sorted(rank_rows, key=lambda r: getattr(r, "rank", 0) or 999)[0]
-                    primary = getattr(top, "feeder_key", primary) or primary
+                    lookup_key = getattr(top, "feeder_key", lookup_key) or lookup_key
             except Exception:
                 pass
+        # primary for technical lookups
+        primary = lookup_key
+        # keep display_name for UI: if no display, fallback to lookup
+        if not display_name:
+            display_name = primary
 
         # --- EENS values: try placement economics first, then sectionalizer study, then fallback ---
         eb = ea = pct = None
@@ -747,9 +842,10 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
 
         # --- fill brace keys if not present (auto) ---
 
-        # primary feeder (only if not already chosen via dialog)
-        if "نام فیدر" not in vars_dict:
-            vars_dict["نام فیدر"] = str(primary)
+        # Display name: only if not already typed by user, fallback to lookup key
+        if "نام فیدر" not in vars_dict or not str(vars_dict["نام فیدر"]).strip():
+            # if user typed Persian display, keep it; else use lookup key or display_name
+            vars_dict["نام فیدر"] = str(display_name or primary)
 
         # موقعیت / موقعیت نصب unify (requirement 9)
         if "موقعیت نصب" not in vars_dict and "موقعیت" not in vars_dict:
@@ -999,7 +1095,7 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
         pass
 
 
-def _fill_tables_from_model(doc, m) -> None:
+def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name: str | None = None) -> None:
     """If template contains data tables with red placeholder values, replace with real numbers.
     Requirement 6: all table values to two decimals.
     Requirement 8: header 12 bold, body 12 (handled via font patch).
@@ -1050,12 +1146,26 @@ def _fill_tables_from_model(doc, m) -> None:
                         _run_set_font(run, FONT_BODY, size_pt=12, color=RGBColor(0, 0, 0))
                 continue
             elif "EENS پایه" in header_joined and "EENS نهایی" in header_joined:
-                # Table2 recloser or Table1 sectionalizer with EENS summary
-                # Determine primary feeder (respect vars? Use first in rows_table)
-                primary_rows = rows_table[:1]
-                if not primary_rows:
-                    continue
-                r = primary_rows[0]
+                # Use main feeder (lookup key) if provided, else first
+                r = None
+                if primary_key:
+                    for cand in rows_table:
+                        if str(cand.get("feeder_key") or "") == primary_key:
+                            r = cand
+                            break
+                        try:
+                            from ..topology.tracing import same_feeder
+                            if same_feeder(str(cand.get("feeder_key") or ""), primary_key):
+                                r = cand
+                                break
+                        except Exception:
+                            pass
+                if r is None:
+                    # fallback to first
+                    primary_rows = rows_table[:1]
+                    if not primary_rows:
+                        continue
+                    r = primary_rows[0]
                 # Try to get EENS before/after from economics or eens_study (consistent with _auto_fill)
                 eb = ea = pct = None
                 try:
@@ -1114,7 +1224,7 @@ def _fill_tables_from_model(doc, m) -> None:
                 # Fill first data row
                 row_cells = t.rows[1].cells
                 vals = {}
-                vals[0] = str(r.get("feeder_key") or "")
+                vals[0] = str(display_name or r.get("feeder_key") or "")
                 if len(row_cells) >= 2:
                     vals[1] = f"{float(r.get('km') or 0):.2f}"
                 if len(row_cells) >= 3:
@@ -1187,9 +1297,23 @@ def _fill_tables_from_model(doc, m) -> None:
                         run = p_.add_run(str(v))
                         _run_set_font(run, FONT_BODY, size_pt=12, color=RGBColor(0, 0, 0))
             elif "فیدر" in header_joined and "پست فوق توزیع" in header_joined:
-                # Table0 feeder spec (recloser & sectionalizer) — 2x6 with brace placeholders
+                # Use main feeder for spec table
                 if rows_table:
-                    r = rows_table[0]
+                    r = None
+                    if primary_key:
+                        for cand in rows_table:
+                            if str(cand.get("feeder_key") or "") == primary_key:
+                                r = cand
+                                break
+                            try:
+                                from ..topology.tracing import same_feeder
+                                if same_feeder(str(cand.get("feeder_key") or ""), primary_key):
+                                    r = cand
+                                    break
+                            except Exception:
+                                pass
+                    if r is None:
+                        r = rows_table[0]
                     row_cells = t.rows[1].cells
                     # compute current/P/Q as in auto_fill — check model first then db (requirements 4,6)
                     try:
@@ -1231,18 +1355,20 @@ def _fill_tables_from_model(doc, m) -> None:
                             p_mw = f"{float(p_kw)/1000.0:.2f}"
                             q_mvar = f"{float(q_kvar)/1000.0:.2f}"
                         # also keep raw kW for sectionalizer's P_load (kW) variant
+                        _disp = str(display_name or r.get("feeder_key") or "")
                         vals = [
-                            str(r.get("feeder_key") or ""),
-                            (str(r.get("feeder_key")).split(" - ",1)[1] if " - " in str(r.get("feeder_key")) else "—"),
+                            _disp,
+                            (str(display_name or r.get("feeder_key") or "").split(" - ",1)[1] if " - " in str(display_name or r.get("feeder_key") or "") else (str(r.get("feeder_key") or "").split(" - ",1)[1] if " - " in str(r.get("feeder_key") or "") else "—")),
                             s_current,
                             p_mw,
                             q_mvar,
                             f"{float(r.get('km') or 0):.2f}",
                         ]
                     except Exception as e:
+                        _disp = str(display_name or r.get("feeder_key") or "")
                         vals = [
-                            str(r.get("feeder_key") or ""),
-                            (str(r.get("feeder_key")).split(" - ",1)[1] if " - " in str(r.get("feeder_key")) else "—"),
+                            _disp,
+                            (str(display_name or r.get("feeder_key") or "").split(" - ",1)[1] if " - " in str(display_name or r.get("feeder_key") or "") else (str(r.get("feeder_key") or "").split(" - ",1)[1] if " - " in str(r.get("feeder_key") or "") else "—")),
                             "—",
                             "—",
                             "—",
