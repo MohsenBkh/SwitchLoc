@@ -939,8 +939,8 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                     coord_txt = f"{ps.x:.0f}, {ps.y:.0f}" if ps.x and ps.y else ps.node
                     vars_dict["موقعیت نصب"] = coord_txt
                     vars_dict["موقعیت"] = coord_txt
-                else:
-                    # fallback to feeder name?
+                elif "موقعیت" not in vars_dict and "موقعیت نصب" not in vars_dict:
+                    # fallback to feeder name only if not already set from eens_study
                     vars_dict["موقعیت نصب"] = str(primary)
                     vars_dict["موقعیت"] = str(primary)
             except Exception:
