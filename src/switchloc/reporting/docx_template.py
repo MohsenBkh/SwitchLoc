@@ -388,19 +388,12 @@ def apply_template(template_path: str, output_path: str,
         # For each red run text that is a key in vars_dict, replace that substring
         # Since runs are split, easiest to do on full paragraph text: replace occurrences of red keys
         for key, val in vars_dict.items():
-            # avoid replacing parts of braces already handled
             if "{" + key + "}" in original_text:
                 continue
-            # only replace if key appears as standalone substring (often whole paragraph)
-            # To avoid over-replacing common words, require exact or with boundaries
-            if key in new_text and key not in ("", " "):
-                # For table placeholders like "توسط کاربر تکمیل می شود" etc., whole cell will be checked elsewhere
-                # For para, check
-                if new_text.strip() == key.strip():
-                    new_text = str(val)
-                elif key in new_text and len(key) > 3:
-                    # cautious: only replace if key length >3 to avoid single-char
-                    new_text = new_text.replace(key, str(val))
+            # Only replace when the whole paragraph exactly equals the key (for red non-brace vars like "آبان 1405", "PD-...")
+            # Do not do substring replacement to avoid corrupting normal text containing words like "موقعیت"
+            if new_text.strip() == key.strip():
+                new_text = str(val)
 
         if new_text != original_text:
             # Rebuild paragraph runs — enforce 18 for titles, 13 for body (requirements 2,3)
@@ -689,29 +682,55 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                     return None
                 if key in mapping:
                     return mapping[key]
-                from ..topology.tracing import same_feeder
-                for k, v in mapping.items():
-                    if same_feeder(k, key):
-                        return v
-                return None
-            eb = _find(ens_before, primary)
-            if eb is None and ens_before:
+                # Try normalized and same_feeder and feeder_key matching
                 try:
-                    # fallback to first available when primary not found
-                    eb = next(iter(ens_before.values()))
+                    from ..topology.tracing import same_feeder, feeder_key
+                except Exception:
+                    same_feeder = None
+                    feeder_key = lambda x: x
+                # 1) same_feeder (handles short vs full)
+                if same_feeder is not None:
+                    for k, v in mapping.items():
+                        try:
+                            if same_feeder(k, key):
+                                return v
+                        except Exception:
+                            pass
+                # 2) feeder_key short token match
+                try:
+                    kkey = feeder_key(key) if callable(feeder_key) else None
+                    if kkey:
+                        for k, v in mapping.items():
+                            if feeder_key(k) == kkey:
+                                return v
                 except Exception:
                     pass
+                # 3) case-insensitive normalized (upper, dash)
+                try:
+                    import re
+                    def _norm(s):
+                        s = (s or "").strip().upper()
+                        s = re.sub(r"\s+", " ", s)
+                        s = re.sub(r"\s*-\s*", " - ", s)
+                        return s
+                    nk = _norm(key)
+                    for k, v in mapping.items():
+                        if _norm(k) == nk:
+                            return v
+                except Exception:
+                    pass
+                return None
+            eb = _find(ens_before, primary)
+            # No unconditional fallback to first — keep None to try other sources (feeder_table, eens_study)
+            # Only fallback if mapping has single entry and primary was not specified (i.e., primary is fallback itself)
+            # So do not fallback here.
             if ens_after_map:
                 for sid, d in ens_after_map.items():
                     v = _find(d, primary)
                     if v is not None:
                         ea = v
                         break
-                if ea is None:
-                    for d in ens_after_map.values():
-                        if d:
-                            ea = next(iter(d.values()))
-                            break
+                # Do not fallback to first when primary specified — keep None
         except Exception:
             pass
         # fallback to sectionalizer/EENS study if placement EENS missing (requirement 10-11)
@@ -722,8 +741,25 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                 study_data = eens_study.get("study") if isinstance(eens_study, dict) else None
                 if study_data and isinstance(study_data, dict):
                     feeders_eens = study_data.get("feeders") or []
+                    # try robust match for primary
+                    def _match_feeder(a,b):
+                        if not a or not b:
+                            return False
+                        if str(a).strip() == str(b).strip():
+                            return True
+                        try:
+                            from ..topology.tracing import same_feeder, feeder_key
+                            if same_feeder(str(a), str(b)):
+                                return True
+                            if feeder_key(str(a)) == feeder_key(str(b)):
+                                return True
+                        except Exception:
+                            pass
+                        import re
+                        def _n(s): return re.sub(r"\s*-\s*", " - ", re.sub(r"\s+", " ", str(s).strip().upper()))
+                        return _n(a) == _n(b)
                     for f in feeders_eens:
-                        if str(f.get("feeder_key") or "") == primary:
+                        if _match_feeder(f.get("feeder_key"), primary):
                             eb = f.get("baseline_eens_kwh")
                             # best may be under f["best"] or f["best_eens_kwh"]
                             best = f.get("best") or {}
@@ -732,12 +768,9 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                             if ea is None:
                                 ea = f.get("best_eens_kwh")
                             break
-                    if eb is None and feeders_eens:
-                        # fallback first feeder
-                        f0 = feeders_eens[0]
-                        eb = f0.get("baseline_eens_kwh")
-                        best0 = f0.get("best") or {}
-                        ea = best0.get("eens_kwh") if isinstance(best0, dict) else f0.get("best_eens_kwh")
+                    # Do not fallback to first feeder when primary not found — keep None to avoid mixing
+                    # (previous code incorrectly used first feeder's data for wrong feeder)
+                    pass
                 # also try top-level baseline/best
                 if eb is None and isinstance(eens_study, dict):
                     # study might be directly at top level? Check m.eens_study["study"]["baseline_eens_kwh"]
@@ -751,17 +784,34 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
             except Exception:
                 pass
         # also try feeder_table fallback for EENS (indices)
-        if eb is None or ea is None:
+        if eb is None or ea is None or (eb is not None and eb == 0):
             try:
                 rows_ft = m.feeder_table()
+                def _match(a,b):
+                    if str(a).strip() == str(b).strip():
+                        return True
+                    try:
+                        from ..topology.tracing import same_feeder, feeder_key
+                        if same_feeder(str(a), str(b)):
+                            return True
+                        if feeder_key(str(a)) == feeder_key(str(b)):
+                            return True
+                    except Exception:
+                        pass
+                    import re
+                    def _n(s): return re.sub(r"\s*-\s*", " - ", re.sub(r"\s+", " ", str(s).strip().upper()))
+                    return _n(a) == _n(b)
                 for r in rows_ft:
-                    if str(r.get("feeder_key") or "") == primary:
-                        # ens_before maybe in "ens_before_kwh"??? Check feeder_table row: it has ens_before_kwh ?
-                        if r.get("ens_before_kwh") is not None:
-                            eb = r.get("ens_before_kwh")
-                        if r.get("ens_per_year_kwh") is not None and ea is None:
-                            # not ideal, but placeholder
-                            pass
+                    if _match(r.get("feeder_key"), primary):
+                        # Try economics first, then outage indices ens
+                        if r.get("ens_before_kwh") is not None and (eb is None or eb == 0):
+                            # Only use if non-zero or if no other source
+                            if r.get("ens_before_kwh") not in (None, 0) or eb is None:
+                                eb = r.get("ens_before_kwh")
+                        # Fallback to outage indices ens_per_year_kwh (in kWh) if still missing/zero
+                        if (eb is None or eb == 0) and r.get("ens_per_year_kwh") not in (None, 0):
+                            eb = r.get("ens_per_year_kwh")
+                        # No after value in feeder_table, so keep ea as is (will show dash)
                         break
             except Exception:
                 pass
@@ -819,8 +869,22 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
         lambda_val = r_val = None
         try:
             rows = m.feeder_table()
+            def _km_match(a,b):
+                if str(a).strip() == str(b).strip():
+                    return True
+                try:
+                    from ..topology.tracing import same_feeder, feeder_key
+                    if same_feeder(str(a), str(b)):
+                        return True
+                    if feeder_key(str(a)) == feeder_key(str(b)):
+                        return True
+                except Exception:
+                    pass
+                import re
+                def _n(s): return re.sub(r"\s*-\s*", " - ", re.sub(r"\s+", " ", str(s).strip().upper()))
+                return _n(a) == _n(b)
             for r in rows:
-                if str(r.get("feeder_key") or "") == primary:
+                if _km_match(r.get("feeder_key"), primary):
                     km_val = r.get("km")
                     lambda_val = r.get("lambda_per_year")
                     r_val = r.get("r_minutes")
@@ -943,31 +1007,44 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
             vars_dict.setdefault("طول فیدر", "—")
 
         # EENS auto - handle both naming variants, formatted to 2 decimals (requirement 6 + 5 +10)
-        if eb is not None:
-            val_eb = f"{eb/1000.0:.2f}" if eb > 1000 else f"{eb:.2f}"  # template expects MWh, but eb in kWh? In placement economics ens is kWh, template expects MWh
-            # Check template: recloser uses MWh (small numbers like 21.354) which is kWh/1000? Let's see earlier: 21.354 MWh from kWh? In sample, 21.354 MWh corresponds to maybe kWh/1000. Our eb from economics is kWh (e.g., 21354 kWh -> 21.354 MWh). So divide by 1000 if value large?
-            # For consistency, if eb > 2000, assume kWh and convert; else assume already MWh.
-            # Safer: if eb > 1000, divide by 1000 and format.
-            # But for sectionalizer, eb also kWh? In sectionalizer dump: 109.6664 MWh already divided? Let's check: In sectionalizer study baseline 109.6664 MWh - that value is already MWh? Actually baseline_eens_kwh would be 109666 kWh -> 109.666 MWh. So conversion needed.
-            # We'll detect: if eb > 1000, convert; else keep.
-            # Use detection: if eb > 5000, likely kWh, divide.
-            # To simplify, always provide both: if eb is large, convert to MWh.
+        # Always ensure brace vars are filled (with dash if missing) to avoid leftover { } in docx
+        try:
+            eb_mwh = None
+            ea_mwh = None
+            pct_val = None
             if eb is not None:
-                try:
-                    eb_mwh = eb/1000.0 if eb > 500 else eb
-                    ea_mwh = ea/1000.0 if ea is not None and ea > 500 else ea
-                    pct_val = pct
-                    for k in ("مقدار EENS پایه", "EENS پایه"):
-                        if k not in vars_dict:
-                            vars_dict[k] = f"{eb_mwh:.2f}"
-                    for k in ("مقدار EENS نهایی", "EENS نهایی"):
-                        if k not in vars_dict and ea_mwh is not None:
-                            vars_dict[k] = f"{ea_mwh:.2f}"
-                    for k in ("درصد کاهش", "درصد کاهش EENS"):
-                        if k not in vars_dict and pct_val is not None:
-                            vars_dict[k] = f"{pct_val:.2f}"
-                except Exception:
-                    pass
+                eb_mwh = eb/1000.0 if eb > 500 else eb
+                pct_val = pct
+            if ea is not None:
+                ea_mwh = ea/1000.0 if ea > 500 else ea
+            # If eb present, set پایه; else set dash if not already provided
+            for k in ("مقدار EENS پایه", "EENS پایه"):
+                if k not in vars_dict:
+                    if eb_mwh is not None:
+                        vars_dict[k] = f"{eb_mwh:.2f}"
+                    else:
+                        vars_dict[k] = "—"
+            for k in ("مقدار EENS نهایی", "EENS نهایی"):
+                if k not in vars_dict:
+                    if ea_mwh is not None:
+                        vars_dict[k] = f"{ea_mwh:.2f}"
+                    else:
+                        vars_dict[k] = "—"
+            for k in ("درصد کاهش", "درصد کاهش EENS"):
+                if k not in vars_dict:
+                    if pct_val is not None and eb_mwh is not None and ea_mwh is not None:
+                        vars_dict[k] = f"{pct_val:.2f}"
+                    elif eb_mwh is not None and ea_mwh is not None:
+                        # fallback compute
+                        try:
+                            _pct = (eb - ea)/eb*100.0 if eb else 0
+                            vars_dict[k] = f"{_pct:.2f}"
+                        except Exception:
+                            vars_dict[k] = "—"
+                    else:
+                        vars_dict[k] = "—"
+        except Exception:
+            pass
         # also handle mixed: if only one of each pair missing
         if "EENS پایه" not in vars_dict and "مقدار EENS پایه" in vars_dict:
             vars_dict["EENS پایه"] = vars_dict["مقدار EENS پایه"]
@@ -1149,19 +1226,53 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                 # Use main feeder (lookup key) if provided, else first
                 r = None
                 if primary_key:
+                    # robust match: exact -> same_feeder -> feeder_key -> normalized
+                    try:
+                        from ..topology.tracing import same_feeder, feeder_key
+                    except Exception:
+                        same_feeder = None
+                        feeder_key = lambda x: x
+                    import re
+                    def _norm(s):
+                        s = (s or "").strip().upper()
+                        s = re.sub(r"\s+", " ", s)
+                        s = re.sub(r"\s*-\s*", " - ", s)
+                        return s
+                    nk = _norm(primary_key)
                     for cand in rows_table:
-                        if str(cand.get("feeder_key") or "") == primary_key:
+                        ck = str(cand.get("feeder_key") or "")
+                        if ck == primary_key:
                             r = cand
                             break
                         try:
-                            from ..topology.tracing import same_feeder
-                            if same_feeder(str(cand.get("feeder_key") or ""), primary_key):
+                            if same_feeder is not None and same_feeder(ck, primary_key):
                                 r = cand
                                 break
                         except Exception:
                             pass
+                        try:
+                            if feeder_key is not None and feeder_key(ck) == feeder_key(primary_key):
+                                # Only if one is short? But still prefer if same_feeder failed due to different suffix?
+                                # Use short match only if one is short token?
+                                # For safety, allow short match when normalized full not equal but short equal and one is short?
+                                # We already have same_feeder handling short cases; keep short match as fallback for case like F4 vs F4 - South?
+                                if _norm(ck) == nk:
+                                    r = cand
+                                    break
+                                # Also check short token equality as last resort
+                                if feeder_key(ck) == feeder_key(primary_key):
+                                    # Ensure not mixing F2-MESHKIN vs F2-KOLOOR (different full): same_feeder would have rejected, but short token matches incorrectly
+                                    # So only allow if one is exactly short token
+                                    if _norm(ck) == feeder_key(primary_key) or nk == feeder_key(ck):
+                                        r = cand
+                                        break
+                        except Exception:
+                            pass
+                        if _norm(ck) == nk:
+                            r = cand
+                            break
                 if r is None:
-                    # fallback to first
+                    # fallback to first only if single feeder or no primary
                     primary_rows = rows_table[:1]
                     if not primary_rows:
                         continue
@@ -1173,33 +1284,65 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                     if econ:
                         eb_dict = getattr(econ, "ens_before_kwh", {}) or {}
                         ea_dict = getattr(econ, "ens_after_kwh", {}) or {}
-                        from ..topology.tracing import same_feeder
+                        from ..topology.tracing import same_feeder, feeder_key
+                        import re
+                        def _norm(s):
+                            s = (s or "").strip().upper()
+                            s = re.sub(r"\s+", " ", s)
+                            s = re.sub(r"\s*-\s*", " - ", s)
+                            return s
+                        def _match(a,b):
+                            if not a or not b:
+                                return False
+                            if str(a).strip() == str(b).strip():
+                                return True
+                            try:
+                                if same_feeder(str(a), str(b)):
+                                    return True
+                                if feeder_key(str(a)) == feeder_key(str(b)):
+                                    return True
+                            except Exception:
+                                pass
+                            return _norm(a) == _norm(b)
                         for k, v in (eb_dict or {}).items():
-                            if same_feeder(k, str(r.get("feeder_key") or "")):
+                            if _match(k, str(r.get("feeder_key") or "")):
                                 eb = v
                                 break
-                        if eb is None and eb_dict:
-                            eb = next(iter(eb_dict.values()))
+                        # do not fallback to first when primary specified
                         for d in (ea_dict or {}).values():
                             if isinstance(d, dict):
                                 for k2, v2 in d.items():
-                                    if same_feeder(k2, str(r.get("feeder_key") or "")):
+                                    if _match(k2, str(r.get("feeder_key") or "")):
                                         ea = v2
                                         break
                                 if ea is not None:
                                     break
-                        if ea is None and ea_dict:
-                            for d in ea_dict.values():
-                                if d:
-                                    ea = next(iter(d.values()))
-                                    break
-                    # fallback to eens_study
+                        # no fallback to first
+                    # fallback to eens_study with robust matching
                     if eb is None or ea is None:
                         eens = getattr(m, "eens_study", {}) or {}
                         study = eens.get("study") if isinstance(eens, dict) else None
                         if study:
+                            import re
+                            def _norm2(s):
+                                s = (s or "").strip().upper()
+                                s = re.sub(r"\s+", " ", s)
+                                s = re.sub(r"\s*-\s*", " - ", s)
+                                return s
+                            def _match2(a,b):
+                                if str(a).strip() == str(b).strip():
+                                    return True
+                                try:
+                                    from ..topology.tracing import same_feeder, feeder_key
+                                    if same_feeder(str(a), str(b)):
+                                        return True
+                                    if feeder_key(str(a)) == feeder_key(str(b)):
+                                        return True
+                                except Exception:
+                                    pass
+                                return _norm2(a) == _norm2(b)
                             for f in (study.get("feeders") or []):
-                                if str(f.get("feeder_key") or "") == str(r.get("feeder_key") or ""):
+                                if _match2(f.get("feeder_key"), str(r.get("feeder_key") or "")):
                                     eb = f.get("baseline_eens_kwh") if eb is None else eb
                                     best = f.get("best") or {}
                                     if isinstance(best, dict):
@@ -1207,8 +1350,13 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                                     break
                 except Exception:
                     pass
-                # also try fallback from feeder_table's ens if still None
-                # compute pct
+                # Fallback to feeder_table's outage EENS if still missing or zero (for recloser where economics is 0)
+                if (eb is None or eb == 0) and r.get("ens_per_year_kwh") not in (None, 0):
+                    eb = r.get("ens_per_year_kwh")
+                if (eb is None or eb == 0) and r.get("ens_before_kwh") not in (None, 0):
+                    eb = r.get("ens_before_kwh")
+                # If ea still None, keep dash (do not use total kpis as per-feeder)
+                # compute pct and display conversion (always convert kWh->MWh when >500)
                 if eb is not None and ea is not None:
                     try:
                         pct = (eb - ea) / eb * 100.0 if eb else 0
@@ -1218,9 +1366,13 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                     except Exception:
                         eb_disp, ea_disp, pct = eb, ea, 0
                 else:
-                    eb_disp = eb
-                    ea_disp = ea
-                    pct = 0
+                    # keep dash for missing; still convert eb if present
+                    try:
+                        eb_disp = eb/1000.0 if eb is not None and eb > 500 else eb
+                        ea_disp = ea/1000.0 if ea is not None and ea > 500 else ea
+                    except Exception:
+                        eb_disp, ea_disp = eb, ea
+                    pct = None
                 # Fill first data row
                 row_cells = t.rows[1].cells
                 vals = {}
@@ -1297,17 +1449,38 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                         run = p_.add_run(str(v))
                         _run_set_font(run, FONT_BODY, size_pt=12, color=RGBColor(0, 0, 0))
             elif "فیدر" in header_joined and "پست فوق توزیع" in header_joined:
-                # Use main feeder for spec table
+                # Use main feeder for spec table (robust)
                 if rows_table:
                     r = None
                     if primary_key:
+                        try:
+                            from ..topology.tracing import same_feeder, feeder_key
+                        except Exception:
+                            same_feeder = None
+                            feeder_key = lambda x: x
+                        import re
+                        def _norm2(s):
+                            s = (s or "").strip().upper()
+                            s = re.sub(r"\s+", " ", s)
+                            s = re.sub(r"\s*-\s*", " - ", s)
+                            return s
+                        nk2 = _norm2(primary_key)
                         for cand in rows_table:
-                            if str(cand.get("feeder_key") or "") == primary_key:
+                            ck2 = str(cand.get("feeder_key") or "")
+                            if ck2 == primary_key:
                                 r = cand
                                 break
                             try:
-                                from ..topology.tracing import same_feeder
-                                if same_feeder(str(cand.get("feeder_key") or ""), primary_key):
+                                if same_feeder is not None and same_feeder(ck2, primary_key):
+                                    r = cand
+                                    break
+                            except Exception:
+                                pass
+                            if _norm2(ck2) == nk2:
+                                r = cand
+                                break
+                            try:
+                                if feeder_key is not None and feeder_key(ck2) == feeder_key(primary_key) and (_norm2(ck2) == feeder_key(primary_key) or nk2 == feeder_key(ck2)):
                                     r = cand
                                     break
                             except Exception:
