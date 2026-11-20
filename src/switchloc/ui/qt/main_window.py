@@ -2737,21 +2737,44 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             try:
                 # Build a lightweight StudyModel for auto defaults when possible
                 _tmpl_model = None
-                if net is not None and topo is not None and plc is not None:
+                if net is not None and topo is not None:
                     from ...reporting.model import StudyModel as _SM
                     try:
-                        _tmpl_model = _SM(net=net, topo=topo, placement=plc.result,
-                                          db_path=str(db or ""), placement_run_id=getattr(plc, "run_id", "") or "",
-                                          project_name=name, manual_evals=manual,
-                                          study_type=("eens" if state.get("sectionalizer") else "auto"),
-                                          outage_lambda=_lam_rows_of(state.get("outage")),
-                                          feeder_indices=(getattr(state.get("outage"), "indices", None).as_dict()
-                                                          if state.get("outage") and hasattr(getattr(state.get("outage"), "indices", None), "as_dict") else {}))
+                        # Load EENS study for template auto-fill (requirements 10-11)
+                        _eens_for_tmpl = {}
+                        try:
+                            _sec_live = state.get("sectionalizer")
+                            if _sec_live is not None and hasattr(_sec_live, "study"):
+                                _eens_for_tmpl = {"study": _sec_live.study.as_dict() if hasattr(_sec_live.study, "as_dict") else dict(_sec_live.study or {})}
+                            elif state.get("db"):
+                                from ...application.switch_placement_service import KV_KEY as _KVK2
+                                from ...persistence.store import ProjectStore as _PS2
+                                _store2 = _PS2(str(state.get("db")))
+                                try:
+                                    _eens_for_tmpl = _store2.get_kv(_KVK2) or {}
+                                finally:
+                                    _store2.close()
+                        except Exception:
+                            _eens_for_tmpl = {}
+                        _plc_result = plc.result if plc is not None else None
+                        # Fallback minimal placement stub if plc is None but sectionalizer exists: create empty placement
+                        if _plc_result is None and _eens_for_tmpl:
+                            from types import SimpleNamespace as _SNS
+                            _plc_result = _SNS(ranking=_SNS(rows=[]), economics=_SNS(ens_before_kwh={}, ens_after_kwh={}, comparisons=[]), n1=_SNS(eptl=[], rows15=[]), schemes=[], recommendation=[], to_dict=lambda: {"zone_register": []})
+                        if _plc_result is not None:
+                            _tmpl_model = _SM(net=net, topo=topo, placement=_plc_result,
+                                              db_path=str(db or ""), placement_run_id=getattr(plc, "run_id", "") if plc is not None else "",
+                                              project_name=name, manual_evals=manual,
+                                              eens_study=dict(_eens_for_tmpl) if isinstance(_eens_for_tmpl, dict) else {},
+                                              study_type=("eens" if (state.get("sectionalizer") or _eens_for_tmpl) else "auto"),
+                                              outage_lambda=_lam_rows_of(state.get("outage")),
+                                              feeder_indices=(getattr(state.get("outage"), "indices", None).as_dict()
+                                                              if state.get("outage") and hasattr(getattr(state.get("outage"), "indices", None), "as_dict") else {}))
                     except Exception:
                         _tmpl_model = None
                 from .template_vars_dialog import get_template_vars
                 tv = get_template_vars(win, study_model=_tmpl_model,
-                                       defaults={"نام پروژه": name})
+                                       defaults={"نام پروژه": name, "selected_feeders": list(selected_feeders or [])})
                 if tv is None:
                     return  # user cancelled template dialog
                 template_path, template_vars, extra_images = tv
@@ -3340,8 +3363,24 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         proposed = None
         plc = state.get("plc")
         if plc is not None:
-            proposed = {sw["node"] for r in plc.result.recommendation
-                        for sw in r["switches"]} or None
+            try:
+                proposed = {sw["node"] for r in plc.result.recommendation
+                            for sw in r["switches"]} or None
+            except Exception:
+                proposed = None
+        # Also merge sectionalizer EENS nodes into proposed checklist when plc has none
+        # (requirement 1: proposed-switch visibility shows nothing even with 3 selected)
+        try:
+            sec_ids = {str(n.get("id")) for n in (state.get("sectionalizer_map_nodes") or []) if n.get("id")}
+            if sec_ids:
+                if proposed is None:
+                    proposed = set(sec_ids)
+                else:
+                    proposed = set(proposed) | sec_ids
+                if not proposed:
+                    proposed = None
+        except Exception:
+            pass
         # جایابی دستی — نقاط ارزیابی‌شده روی نقشه (درخواست کاربر، مورد ۶)
         manual = sorted({n for ev in (state.get("manual_evals") or [])
                          if ev.get("before") and ev.get("after")

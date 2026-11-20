@@ -746,11 +746,12 @@ def make_map_canvas(parent=None, osm_fetch=None):
             root = QHBoxLayout(self)
             root.setContentsMargins(4, 4, 4, 4)
             root.setSpacing(6)
+            # outer splitter for resizable left panels (requirement 13)
+            self.main_split = QSplitter(Qt.Orientation.Horizontal)
 
             # Individual switches: checkbox list, scrollable for large feeders.
             switch_box = QGroupBox("Switch visibility — دسته‌بندی نوع کلید")
-            switch_box.setMinimumWidth(220)
-            switch_box.setMaximumWidth(340)
+            switch_box.setMinimumWidth(200)
             sv = QVBoxLayout(switch_box)
             self.switch_count = QLabel("0 switches")
             sv.addWidget(self.switch_count)
@@ -793,8 +794,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
 
             # --- کلیدهای پیشنهادی جایابی (task 2) ----------------------
             proposed_box = QGroupBox("کلیدهای پیشنهادی — نمایش/عدم نمایش")
-            proposed_box.setMinimumWidth(220)
-            proposed_box.setMaximumWidth(340)
+            proposed_box.setMinimumWidth(200)
             pv = QVBoxLayout(proposed_box)
             self.proposed_count = QLabel("0 پیشنهادی")
             pv.addWidget(self.proposed_count)
@@ -824,8 +824,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
 
             # --- لایهٔ خاموشی‌های دارای مختصات --------------------------
             outage_box = QGroupBox("لایهٔ خاموشی‌ها — دارای مختصات")
-            outage_box.setMinimumWidth(220)
-            outage_box.setMaximumWidth(340)
+            outage_box.setMinimumWidth(200)
             ov = QVBoxLayout(outage_box)
             self.chk_outages = QCheckBox("نمایش خاموشی‌ها روی نقشه")
             self.chk_outages.setToolTip(
@@ -1000,10 +999,23 @@ def make_map_canvas(parent=None, osm_fetch=None):
             tool_scroll.setWidgetResizable(True)
             tool_scroll.setWidget(tools)
             tool_scroll.setFixedWidth(205)
-            root.addWidget(tool_scroll, 0)
-            root.addWidget(left_col_holder, 0)
+            # Make left_col_holder resizable: put tool_scroll + left + map into a horizontal splitter
+            # tool_scroll and left_col_holder are left side, map_pane expands
+            self.main_split.addWidget(tool_scroll)
+            self.main_split.addWidget(left_col_holder)
+            self.main_split.addWidget(map_pane)
+            # initial sizes: tool 205, left 280, map rest
+            self.main_split.setSizes([205, 300, 700])
+            self.main_split.setStretchFactor(0, 0)
+            self.main_split.setStretchFactor(1, 0)
+            self.main_split.setStretchFactor(2, 1)
+            self.main_split.setChildrenCollapsible(False)
+            # allow left_split vertical panels to be resizable too (already a splitter)
+            left_col_holder.setMinimumWidth(220)
+            # no maximum — panel width is now dynamic/resizable via main_split (requirement 13)
+            # remove fixed constraints on group boxes so they can grow with splitter
+            root.addWidget(self.main_split, 1)
             lay.addWidget(self.canvas, 1)
-            root.addWidget(map_pane, 1)
 
         def _toggle_switch_panel(self):
             visible = not self.layer_panel.isHidden()
@@ -1235,7 +1247,20 @@ def make_map_canvas(parent=None, osm_fetch=None):
             # --- پیشنهادی‌ها (task 2) -----------------------------------------
             self.proposed_list.blockSignals(True)
             self.proposed_list.clear()
+            # Merge plc proposed + sectionalizer nodes so checklist never appears empty
+            # when EENS study has 3 selected (requirement 1)
             prop_nodes = list(self._proposed or [])
+            # also add sectionalizer ids (from dicts with "id" or plain node id)
+            try:
+                for item in (self._opt_sec_nodes or []):
+                    if isinstance(item, dict):
+                        nid = str(item.get("id") or "").strip()
+                        if nid:
+                            prop_nodes.append(nid)
+                    elif isinstance(item, str) and item.strip():
+                        prop_nodes.append(item.strip())
+            except Exception:
+                pass
             prop_sorted = sorted({str(n) for n in prop_nodes})
             valid_prop = set(prop_sorted)
             self._hidden_proposed_ids.intersection_update(valid_prop)
@@ -1409,7 +1434,7 @@ def make_map_canvas(parent=None, osm_fetch=None):
                 zone_outage_hours=self._zone_outage_hours,
                 manual_tie_pairs=self._manual_tie_pairs,
                 outage_points=self._outage_points,
-                sectionalizer_nodes=self._opt_sec_nodes,
+                sectionalizer_nodes=[x for x in (self._opt_sec_nodes or []) if str((x.get("id") if isinstance(x, dict) else x) or "") not in self._hidden_proposed_ids],
                 hidden_outage_ids=self._hidden_outage_ids,
                 pf_voltages=self._pf_voltages,
                 pf_branch_loading=self._pf_branch_loading,

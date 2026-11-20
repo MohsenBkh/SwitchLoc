@@ -217,7 +217,7 @@ class ReportService:
             try:
                 check_cancelled()
                 report_progress(55, "ترسیم نقشه گزارش")
-                map_png = self._render_map(m, st.out_dir)
+                map_png = self._render_map(m, st.out_dir, project_name=st.project_name or None)
                 check_cancelled()
                 if map_png:
                     paths["map"] = map_png
@@ -232,7 +232,7 @@ class ReportService:
             if rows_idx:
                 charts_png = indices_figure(
                     rows_idx,
-                    str(Path(st.out_dir) / "feeder_indices.png"),
+                    str(_out(st.out_dir, "feeder_indices.png", project_name=st.project_name or None)),
                     selected_feeders=list(st.selected_feeders or []))
         except Exception as exc:                       # noqa: BLE001
             issues.append(("PHASE5-CHART-FAIL", "Warning",
@@ -242,7 +242,7 @@ class ReportService:
         check_cancelled()
         if "xlsx" in st.formats:
             paths["xlsx"] = export_workbook(
-                m, str(_out(st.out_dir, "SwitchLoc_study.xlsx")))
+                m, str(_out(st.out_dir, "SwitchLoc_study.xlsx", project_name=st.project_name or None)))
         if "docx" in st.formats:
             # template_vars may have been collected via UI dialog (task 4)
             tmpl = getattr(st, "template_path", None)
@@ -265,7 +265,7 @@ class ReportService:
                     tmpl = None
             paths["docx"] = export_docx(
                 build_report(m, map_note=_MAP_NOTE if map_png else ""),
-                str(_out(st.out_dir, "SwitchLoc_report.docx")),
+                str(_out(st.out_dir, "SwitchLoc_report.docx", project_name=st.project_name or None)),
                 map_png=map_png, charts_png=charts_png,
                 template_path=tmpl, template_vars=tvars,
                 extra_images=extra, study_model=m)
@@ -273,18 +273,18 @@ class ReportService:
             try:
                 paths["pdf"] = export_pdf(
                     build_report(m, map_note=_MAP_NOTE if map_png else ""),
-                    str(_out(st.out_dir, "SwitchLoc_report.pdf")),
+                    str(_out(st.out_dir, "SwitchLoc_report.pdf", project_name=st.project_name or None)),
                     map_png=map_png, charts_png=charts_png)
             except PdfUnavailableError as exc:
                 issues.append(("PHASE5-PDF-SKIP", "Information", str(exc)))
         if "gis" in st.formats:
-            paths["gis"] = export_gis(m, str(_out(st.out_dir, "gis")))
+            paths["gis"] = export_gis(m, str(_out(st.out_dir, "gis", project_name=st.project_name or None)))
         if "eens_json" in st.formats:
             if m.has_eens_study:
                 from .eens_report import export_eens_json
                 paths["eens_json"] = export_eens_json(
                     m.eens_study,
-                    str(_out(st.out_dir, "sectionalizer_eens_report.json")))
+                    str(_out(st.out_dir, "sectionalizer_eens_report.json", project_name=st.project_name or None)))
             else:
                 issues.append(("PHASE5-EENS-JSON-SKIP", "Information",
                                "گزارش JSON جایابی EENS ساخته نشد؛ مطالعهٔ "
@@ -456,7 +456,7 @@ class ReportService:
                              " — این گزارش از اجرای تازهٔ درون‌حافظه‌ای تولید شده است."}
 
     # ------------------------------------------------------------------
-    def _render_map(self, m: StudyModel, out_dir: str) -> str | None:
+    def _render_map(self, m: StudyModel, out_dir: str, *, project_name: str | None = None) -> str | None:
         proposed = [p.node for p in m.build_proposed()
                     if m.node_coord(p.node) is not None]
         manual = sorted({n for ev in (m.manual_evals or [])
@@ -469,7 +469,7 @@ class ReportService:
             switches={s.id: s for s in m.net.switches},
             tie_switch_ids={t.switch_id for t in m.topo.ties
                             if t.switch_id})
-        path = str(_out(out_dir, "report_map.png"))
+        path = str(_out(out_dir, "report_map.png", project_name=project_name))
         renderer.render(
             path, title=f"SwitchLoc — {m.name} (proposed switches = stars)",
             zone_labels=False, proposed_nodes=sorted(set(proposed)),
@@ -482,9 +482,25 @@ _MAP_NOTE = ("نقشه شبکه با ستاره‌های سبز (مکان کلی
              "خروجی GIS.")
 
 
-def _out(out_dir: str, name: str):
+def _out(out_dir: str, name: str, *, project_name: str | None = None):
+    """Resolve export path under ``reports/exports/<project_name>/`` when project_name is given.
+
+    If **project_name** is set (non-empty, stripped), the file lands in a subfolder named after the
+    sanitized project name (`` |/\\:*?\"<>\\n\\r`` -> ``_``) under *out_dir*, and the .xlsx/.docx/etc
+    filename itself is the generic name (e.g., ``SwitchLoc_report.docx``) inside that subfolder.
+    When *project_name* is falsy, the path is just ``out_dir/name`` for backward compat (unit tests).
+    """
     from pathlib import Path
-    d = Path(out_dir)
+    import re as _re
+    base = Path(out_dir)
+    sub = (project_name or "").strip()
+    if sub:
+        # sanitize for Windows/Unix illegal filename chars
+        sub = _re.sub(r'[|/\\:*?\"<>\n\r]', "_", sub).strip()
+        sub = sub[:80] or "project"
+        d = base / sub
+    else:
+        d = base
     d.mkdir(parents=True, exist_ok=True)
     return d / name
 

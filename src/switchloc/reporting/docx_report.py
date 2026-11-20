@@ -41,7 +41,7 @@ def _p_bidi(p) -> None:
         pPr.append(el)
 
 
-def _run_fa(run, size: float = 11, bold: bool = False,
+def _run_fa(run, size: float = 13, bold: bool = False,
             color: RGBColor | None = None, font: str | None = None) -> None:
     """Persian run: complex-script font + size + rtl."""
     fn = font or FONT_BODY
@@ -74,7 +74,7 @@ def _run_fa(run, size: float = 11, bold: bool = False,
         rPr.append(rtl)
 
 
-def _fa_para(doc, text: str, size: float = 11, bold: bool = False,
+def _fa_para(doc, text: str, size: float = 13, bold: bool = False,
              align=WD_ALIGN_PARAGRAPH.JUSTIFY, color=None,
              space_after: float = 6, font: str | None = None) -> object:
     p = doc.add_paragraph()
@@ -87,7 +87,7 @@ def _fa_para(doc, text: str, size: float = 11, bold: bool = False,
     return p
 
 
-def _fa_para_font(doc, text: str, font: str, size: float = 11, bold: bool = False,
+def _fa_para_font(doc, text: str, font: str, size: float = 13, bold: bool = False,
                   align=WD_ALIGN_PARAGRAPH.JUSTIFY, color=None,
                   space_after: float = 6) -> object:
     p = doc.add_paragraph()
@@ -125,7 +125,7 @@ def append_equation(doc, omml_xml: str, caption: str = "",
                  color=RGBColor(0x40, 0x40, 0x40), space_after=8)
 
 
-def _cell_fa(cell, text: str, bold: bool = False, size: float = 9) -> None:
+def _cell_fa(cell, text: str, bold: bool = False, size: float = 12) -> None:
     cell.text = ""
     p = cell.paragraphs[0]
     _p_bidi(p)
@@ -174,7 +174,7 @@ def export_docx(doc_content: ReportDoc, path: str,
     # normal style → Persian default (B Nazanin)
     st = doc.styles["Normal"]
     st.font.name = FONT_BODY
-    st.font.size = Pt(11)
+    st.font.size = Pt(13)
     # enforce rFonts for Normal and Headings (B Nazanin / B Titr)
     try:
         rPr = st.element.find(qn("w:rPr"))
@@ -207,7 +207,7 @@ def export_docx(doc_content: ReportDoc, path: str,
     # ---------------- title page -----------------------------------------
     for _ in range(4):
         doc.add_paragraph()
-    _fa_para(doc, doc_content.title, size=20, bold=True,
+    _fa_para(doc, doc_content.title, size=18, bold=True,
              align=WD_ALIGN_PARAGRAPH.CENTER, color=_NAVY, space_after=10)
     _fa_para(doc, doc_content.subtitle, size=13,
              align=WD_ALIGN_PARAGRAPH.CENTER, space_after=18)
@@ -247,12 +247,12 @@ def export_docx(doc_content: ReportDoc, path: str,
             else:
                 col_cm = [17.0 / n_cols] * n_cols
             for j, h in enumerate(tb.headers):
-                _cell_fa(t.rows[0].cells[j], str(h), bold=True, size=9)
+                _cell_fa(t.rows[0].cells[j], str(h), bold=True, size=12)
             for i, row in enumerate(tb.rows, start=1):
                 for j in range(n_cols):
                     _cell_fa(t.rows[i].cells[j],
                              str(row[j]) if j < len(row) else "",
-                             size=9)
+                             size=12)
             for j, w in enumerate(col_cm):       # fixed column widths
                 for r in t.rows:
                     r.cells[j].width = Cm(w)

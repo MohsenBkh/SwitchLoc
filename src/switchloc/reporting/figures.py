@@ -100,20 +100,20 @@ def indices_figure(rows: list, path: str,
         present = [v for v in values if v is not None]
         if not present:
             ax.text(0.5, 0.5, "no data", ha="center", va="center",
-                    fontsize=11, color="#8a939e")
+                    fontsize=14, color="#8a939e")
             ax.set_axis_off()
-            ax.set_title(label, fontsize=12, pad=8)
+            ax.set_title(label, fontsize=15, pad=8)
             continue
         xs = range(len(keys))
         bar_colors = [colors[i] if v is not None else "#d9dde2"
                       for i, v in enumerate(values)]
         bars = ax.bar(xs, [(v or 0.0) for v in values],
                       color=bar_colors, edgecolor="white", linewidth=0.6)
-        ax.set_title(label, fontsize=12, pad=6)
+        ax.set_title(label, fontsize=15, pad=6)
         ax.set_xticks(list(xs))
-        ax.set_xticklabels(keys, rotation=30, ha="right", fontsize=8.5)
-        ax.tick_params(axis="y", labelsize=9)
-        ax.tick_params(axis="x", labelsize=8.5)
+        ax.set_xticklabels(keys, rotation=30, ha="right", fontsize=11.5)
+        ax.tick_params(axis="y", labelsize=12)
+        ax.tick_params(axis="x", labelsize=11.5)
         ax.grid(axis="y", alpha=0.25)
         ax.set_axisbelow(True)
         top = max(present) if present else 0.0
@@ -123,24 +123,23 @@ def indices_figure(rows: list, path: str,
             txt = f"{v:,.1f}" if v < 100 else f"{v:,.0f}"
             ax.annotate(txt,
                         (b.get_x() + b.get_width() / 2, b.get_height()),
-                        ha="center", va="bottom", fontsize=8, fontweight="bold",
+                        ha="center", va="bottom", fontsize=11, fontweight="bold",
                         color="#222",
                         xytext=(0, 2), textcoords="offset points")
         if top > 0:
             ax.set_ylim(0, top * 1.22)
 
-    # لجند کلی رنگ→فیدر (بالای شکل، به‌جای عنوان ریز هر پنل)
+    # لجند کلی رنگ→فیدر — یک ردیف، بدون تداخل با عنوان (عنوان حذف شد per requirement 7)
     handles = [Patch(facecolor=palette.get(k, colors[i]), edgecolor="white", label=k)
                for i, k in enumerate(keys)]
-    # تعداد ستون لجند بر اساس تعداد فیدرها
-    ncols = min(len(keys), 4) if len(keys) > 4 else len(keys)
+        # تمام فیدرها در یک ردیف (درخواست کاربر)
+    ncols = len(keys)
     fig.legend(handles=handles, loc="upper center",
-               bbox_to_anchor=(0.5, 0.99), ncol=ncols,
-               fontsize=9, frameon=True, fancybox=True, shadow=False,
-               title="Feeders", title_fontsize=10)
+               bbox_to_anchor=(0.5, 0.98), ncol=ncols,
+               fontsize=12, frameon=True, fancybox=True, shadow=False,
+               title="Feeders", title_fontsize=13)
 
-    fig.suptitle(title, fontsize=13, y=0.96, fontweight="bold")
-    # فضای کافی برای لجند و عنوان
+    # عنوان figure حذف شد تا با لجند هم‌پوشانی نداشته باشد (requirement 7)
     fig.tight_layout(rect=(0, 0, 1, 0.92), h_pad=1.2, w_pad=1.0)
     # اگر لجند خیلی بلند شد، کمی پایین‌تر بیاید
     try:

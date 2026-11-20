@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox,
+    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
     QRadioButton, QScrollArea, QVBoxLayout, QWidget,
 )
@@ -147,6 +147,30 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
         except Exception:
             pass
 
+    # --- main feeder picker (requirement 12): if multi-feeder, ask user to choose the main {نام فیدر} ---
+    # We pre-collect feeder list from study_model (topo.traces or selected_feeders)
+    _feeder_choices: list[str] = []
+    try:
+        if study_model is not None and getattr(study_model, "topo", None) is not None:
+            _feeder_choices = [str(x.feeder_key) for x in (getattr(study_model.topo, "traces", []) or []) if getattr(x, "feeder_key", None)]
+        if not _feeder_choices and defaults.get("selected_feeders"):
+            _feeder_choices = [str(x) for x in defaults.get("selected_feeders", [])]
+    except Exception:
+        pass
+    _feeder_choices = [f for f in _feeder_choices if f and f.strip()]
+    # deduplicate preserving order
+    _seen = set()
+    _uniq_feeders: list[str] = []
+    for f in _feeder_choices:
+        if f not in _seen:
+            _seen.add(f)
+            _uniq_feeders.append(f)
+    _feeder_choices = _uniq_feeders
+    # Current main feeder (already in defaults or first)
+    _current_main = str(defaults.get("نام فیدر") or "").strip() if defaults.get("نام فیدر") else ""
+    if not _current_main and _feeder_choices:
+        _current_main = _feeder_choices[0]
+
     dlg = QDialog(parent)
     dlg.setWindowTitle("اطلاعات متغیر گزارش — تکمیل دفترچه")
     dlg.resize(620, 700)
@@ -218,6 +242,30 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     tg_lay.addWidget(rb_sec)
     tg_lay.addStretch(1)
     lay.addWidget(tmpl_group)
+
+    # Main feeder picker — only shown when multi-feeder
+    feeder_combo: QComboBox | None = None
+    if len(_feeder_choices) > 1:
+        fg = QGroupBox("فیدر اصلی برای متغیر {نام فیدر} — پارامترهای گزارش بر اساس همین فیدر پر می‌شود")
+        fl = QHBoxLayout(fg)
+        feeder_combo = QComboBox()
+        for fk in _feeder_choices:
+            feeder_combo.addItem(fk)
+        # select current
+        if _current_main in _feeder_choices:
+            feeder_combo.setCurrentText(_current_main)
+        feeder_combo.setMinimumWidth(320)
+        hint = QLabel("فیدر اصلی را انتخاب کنید — جریان، EENS و مختصات فقط برای این فیدر محاسبه می‌شود.")
+        hint.setWordWrap(True)
+        fl.addWidget(QLabel("نام فیدر اصلی :"))
+        fl.addWidget(feeder_combo, 1)
+        # also add hint below? keep compact
+        lay.addWidget(fg)
+        # tooltip
+        feeder_combo.setToolTip("در صورت چندفیدری بودن پروژه، دفترچه فقط برای یک فیدر اصلی تهیه می‌شود — پارامترهای محاسباتی بر همان فیدر اعمال می‌گردد.")
+    elif _feeder_choices:
+        # single feeder — no picker, show label
+        pass
 
     # Resolve current template path for preview variables
     def _current_template_path():
@@ -346,9 +394,15 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
         return None
 
     vars_dict = {k: e.text().strip() for k, e in edits.items()}
-    # prune empty? keep as is; empty will keep original placeholder
-    # remove empty entries to fallback to original/template? keep empty as original
     vars_dict = {k: v for k, v in vars_dict.items() if v != ""}
+    # main feeder override (requirement 12)
+    if feeder_combo is not None:
+        sel = feeder_combo.currentText().strip() if feeder_combo.currentText() else ""
+        if sel:
+            vars_dict["نام فیدر"] = sel
+    # Ensure dedup synonyms are unified already via _canonical filter in extract_variables,
+    # but if dialog returned canonical, we also ensure synonyms are not duplicated separately.
+    # _auto_fill will expand, so leaving canonical is fine.
 
     extra_images: dict[str, str] = {}
     # Map friendly placeholders to actual placeholder texts expected by template engine

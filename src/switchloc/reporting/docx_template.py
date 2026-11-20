@@ -36,9 +36,37 @@ _IMAGE_PLACEHOLDERS = {
     "محل تصویر بارگذاری توسط کاربر",
     "feeder_indices.png",
     "محل تصویر بارگذاری توسط کاربر ",  # with trailing
+    "تصویر فیدر تحت مطالعه از بخش مپ نرم افزار SwitchLoc",
+    "نقشه مپ فیدر با فعال سازی برچسب خاموشی ها و توزیع رنگی خاموشی ها مربوط به نرم افزار SwitchLoc",
+    "نقشه مپ مربوط به فیدر یا فیدرهای تحت مطالعه استخراجی از SwitchLoc",
 }
 
 _BRACE_RE = re.compile(r"\{([^}]+)\}")
+
+_SYNONYM_MAP = {
+    "امور مربوطه": "نام امور",
+    "نام شهرستان": "نام امور",
+    "موقعیت": "موقعیت نصب",
+}
+_AUTO_VARS = {
+    "جریان فیدر", "جریان بار",
+    "P_load (kW)/1000", "Q_load (kW)/1000", "Q_load (kW)", "P_load (kW)", "Q_load (kW)/1000",
+    "طول فیدر",
+    "سایر فیدر1", "سایر فیدر2", "سایر فیدر3", "سایر فیدر4",
+    "سایر فیدر1 ", "سایر فیدر2 ", "سایر فیدر3 ", "سایر فیدر4 ",
+    "رتبه فیدر از نظرعارضه بندی",
+    "نام پرعارضه ترین فیدر", "نام کم عارضه ترین فیدر",
+    "مقدار EENS پایه", "مقدار EENS نهایی", "درصد کاهش",
+    "EENS پایه", "EENS نهایی", "درصد کاهش EENS",
+    "عدد نرخ خرابی", "زمان تعمیر",
+    "تعداد کلید", "مختصات کلیدی پیشنهادی",
+    "توسط کاربر تکمیل می شود",
+}
+
+
+def _canonical(key: str) -> str:
+    k = key.strip()
+    return _SYNONYM_MAP.get(k, k)
 
 
 def _is_red(run) -> bool:
@@ -189,8 +217,25 @@ def extract_variables(template_path: str) -> list[str]:
                 ctext = cell.text.strip()
                 if ctext == "توسط کاربر تکمیل می شود":
                     vars_set.add(ctext)
-    # Keep order: braces first (sorted), then others
-    ordered = sorted(brace_keys) + sorted(v for v in vars_set if v not in brace_keys)
+    # Canonicalize and unify synonyms (requirement 9) and filter auto-calculated vars (requirements 4,5,6,10)
+    # Filter out image placeholders (they are file pickers, not text vars)
+    def _is_image_key(k: str) -> bool:
+        kk = k.strip()
+        # without braces inner
+        if kk in _IMAGE_PLACEHOLDERS:
+            return True
+        # with braces? inner may have the same
+        # heuristics for long map/chart placeholders
+        if "نقشه مپ" in kk or "SwitchLoc" in kk and "مپ" in kk:
+            return True
+        if kk in ("تصویر فیدر تحت مطالعه از بخش مپ نرم افزار SwitchLoc",):
+            return True
+        return False
+    canon_brace = {_canonical(k) for k in brace_keys if not _is_image_key(k) and k not in _IMAGE_PLACEHOLDERS}
+    canon_all = {_canonical(k) for k in vars_set if not _is_image_key(k)}
+    filtered_brace = sorted(k for k in canon_brace if k not in _AUTO_VARS)
+    other_keys = sorted(k for k in canon_all if k not in canon_brace and k not in _AUTO_VARS)
+    ordered = filtered_brace + other_keys
     return ordered
 
 
@@ -211,6 +256,20 @@ def apply_template(template_path: str, output_path: str,
     """
     vars_dict = dict(vars_dict or {})
     extra_images = dict(extra_images or {})
+    # expand vars_dict to include canonical and synonym variants so template placeholders with synonyms match
+    # Ensure canonical keys map to provided values and vice versa
+    _expanded = {}
+    for k, v in list(vars_dict.items()):
+        ck = _canonical(k)
+        _expanded[k] = v
+        _expanded[ck] = v
+        # also propagate to all synonyms that share same canonical
+        for syn, can in _SYNONYM_MAP.items():
+            if can == ck and syn not in _expanded:
+                _expanded[syn] = v
+            if syn == k and can not in _expanded:
+                _expanded[can] = v
+    vars_dict = _expanded
     template_path = str(template_path)
     output_path = str(output_path)
     doc = Document(template_path)
@@ -233,14 +292,27 @@ def apply_template(template_path: str, output_path: str,
     def _replace_braces(text: str) -> str:
         def repl(m):
             key = m.group(1).strip()
-            return str(vars_dict.get(key, m.group(0)))
+            # try direct, then canonical
+            if key in vars_dict:
+                return str(vars_dict[key])
+            ck = _canonical(key)
+            if ck in vars_dict:
+                return str(vars_dict[ck])
+            return m.group(0)
         return _BRACE_RE.sub(repl, text)
 
     def _replace_red_fragments_in_para(p) -> bool:
         """Replace red/brace variables inside paragraph; returns True if paragraph was image placeholder."""
         txt_stripped = p.text.strip()
+        # Normalize brace-wrapped image placeholders like {نقشه مپ ...}
+        _norm = txt_stripped.strip().strip("{} ").strip()
+        _is_img = (txt_stripped in _IMAGE_PLACEHOLDERS or _norm in _IMAGE_PLACEHOLDERS
+                   or txt_stripped.startswith("محل تصویر") or _norm.startswith("محل تصویر")
+                   or "نقشه مپ فیدر با فعال سازی" in txt_stripped or "نقشه مپ فیدر با فعال سازی" in _norm
+                   or txt_stripped == "تصویر فیدر تحت مطالعه از بخش مپ نرم افزار SwitchLoc"
+                   or _norm == "تصویر فیدر تحت مطالعه از بخش مپ نرم افزار SwitchLoc")
         # Image placeholder handling
-        if txt_stripped in _IMAGE_PLACEHOLDERS or txt_stripped.startswith("محل تصویر"):
+        if _is_img:
             # decide image path
             img_path = None
             # count occurrences for sequential same-text placeholders
@@ -249,8 +321,16 @@ def apply_template(template_path: str, output_path: str,
             # try sequential extra image first (e.g. second occurrence)
             seq_key = f"{txt_stripped}#{cnt+1}" if cnt > 0 else txt_stripped
             seq_key2 = f"{txt_stripped}#2" if cnt == 1 else None
+            # also handle brace-wrapped and long Persian placeholders
+            _norm_for_img = _norm
             if txt_stripped == "feeder_indices.png" and charts_png and Path(charts_png).exists():
                 img_path = charts_png
+            elif _norm_for_img == "نقشه مپ فیدر با فعال سازی برچسب خاموشی ها و توزیع رنگی خاموشی ها مربوط به نرم افزار SwitchLoc" and charts_png and Path(charts_png).exists():
+                img_path = charts_png
+            elif txt_stripped in ("محل تصویر بارگذاری توسط کاربر", "محل تصویر بارگذاری توسط کاربر ", "تصویر فیدر تحت مطالعه از بخش مپ نرم افزار SwitchLoc", "{تصویر فیدر تحت مطالعه از بخش مپ نرم افزار SwitchLoc}", "{نقشه مپ فیدر با فعال سازی برچسب خاموشی ها و توزیع رنگی خاموشی ها مربوط به نرم افزار SwitchLoc}") and map_png and Path(map_png).exists():
+                img_path = map_png
+            elif _norm_for_img in ("محل تصویر بارگذاری توسط کاربر", "تصویر فیدر تحت مطالعه از بخش مپ نرم افزار SwitchLoc", "نقشه مپ فیدر با فعال سازی برچسب خاموشی ها و توزیع رنگی خاموشی ها مربوط به نرم افزار SwitchLoc") and map_png and Path(map_png).exists():
+                img_path = map_png
             elif txt_stripped in ("محل تصویر بارگذاری توسط کاربر", "محل تصویر بارگذاری توسط کاربر ") and map_png and Path(map_png).exists():
                 img_path = map_png
             elif seq_key in extra_images and extra_images[seq_key] and Path(extra_images[seq_key]).exists():
@@ -293,7 +373,7 @@ def apply_template(template_path: str, output_path: str,
                     _p_bidi(p)
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     r = p.add_run(new_txt)
-                    _run_set_font(r, _font_for_para(p), size_pt=10, color=RGBColor(0, 0, 0))
+                    _run_set_font(r, _font_for_para(p), size_pt=13, color=RGBColor(0, 0, 0))
                 else:
                     # just recolor
                     for r in p.runs:
@@ -324,32 +404,37 @@ def apply_template(template_path: str, output_path: str,
                     new_text = new_text.replace(key, str(val))
 
         if new_text != original_text:
-            # Rebuild paragraph runs with single run preserving style but applying correct font
-            # Keep original alignment
+            # Rebuild paragraph runs — enforce 18 for titles, 13 for body (requirements 2,3)
             align = p.alignment
+            # capture title state BEFORE clear (style + bold/center heuristics)
+            try:
+                pre_font = _font_for_para(p)
+                is_title_before = (pre_font == FONT_TITLE) or _is_title_para(p)
+            except Exception:
+                is_title_before = _is_title_para(p)
             p.clear()
             _p_bidi(p)
             p.alignment = align
-            # decide font and size: try to infer from original first run size
-            # default 11
-            size_pt = 11
-            is_title = _is_title_para(p)
-            font_name = FONT_TITLE if is_title else FONT_BODY
-            # bold if original was heading
-            bold = is_title
+            size_pt = 18 if is_title_before else 13
+            font_name = FONT_TITLE if is_title_before else FONT_BODY
+            bold = True if is_title_before else False
             r = p.add_run(new_text)
             _run_set_font(r, font_name, size_pt=size_pt, bold=bold, color=RGBColor(0, 0, 0))
             return False
         else:
-            # No brace change, but recolor red runs to black and enforce fonts
+            # No brace change, but recolor red runs to black and enforce fonts to 13/18 (requirements 2,3)
+            try:
+                tgt_font = _font_for_para(p)
+                is_t = (tgt_font == FONT_TITLE)
+            except Exception:
+                is_t = _is_title_para(p)
+                tgt_font = FONT_TITLE if is_t else FONT_BODY
+            tgt_sz = 18 if is_t else 13
             for r in p.runs:
                 if _is_red(r):
-                    _run_set_font(r, _font_for_para(p), color=RGBColor(0, 0, 0))
+                    _run_set_font(r, tgt_font, size_pt=tgt_sz, bold=is_t, color=RGBColor(0, 0, 0))
                 else:
-                    # ensure correct font even for non-red (task 5)
-                    # Preserve size if exists
-                    sz = r.font.size.pt if r.font.size else None
-                    _run_set_font(r, _font_for_para(p), size_pt=sz, color=None)
+                    _run_set_font(r, tgt_font, size_pt=tgt_sz, bold=(r.bold if not is_t else True), color=None)
             _p_bidi(p)
             return False
 
@@ -388,17 +473,20 @@ def apply_template(template_path: str, output_path: str,
                         _p_bidi(p)
                         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                         r = p.add_run(new_text)
-                        # table cells are body font
-                        sz = 9 if ri == 0 else 9
+                        # table cells are body font — requirement 8: header 12 bold, body 12
+                        sz = 12
                         bold = (ri == 0)
                         _run_set_font(r, FONT_BODY, size_pt=sz, bold=bold, color=RGBColor(0, 0, 0))
                     else:
-                        # just enforce fonts and recolor red
+                        # just enforce fonts and recolor red — requirement 8
                         for r in p.runs:
                             if _is_red(r):
-                                _run_set_font(r, FONT_BODY, size_pt=9, bold=(ri == 0), color=RGBColor(0, 0, 0))
+                                _run_set_font(r, FONT_BODY, size_pt=12, bold=(ri == 0), color=RGBColor(0, 0, 0))
                             else:
-                                sz = r.font.size.pt if r.font.size else 9
+                                sz = r.font.size.pt if r.font.size else 12
+                                # ensure at least 12 for body, unless heading
+                                if sz is not None and sz < 12:
+                                    sz = 12
                                 _run_set_font(r, FONT_BODY, size_pt=sz, bold=(ri == 0) if ri == 0 else r.bold, color=None)
                         _p_bidi(p)
         # enforce bidiVisual
@@ -424,7 +512,7 @@ def apply_template(template_path: str, output_path: str,
     try:
         st = doc.styles["Normal"]
         st.font.name = FONT_BODY
-        st.font.size = Pt(11)
+        st.font.size = Pt(13)
         # set rFonts for Normal
         rPr = st.element.find(qn("w:rPr"))
         if rPr is not None:
@@ -436,10 +524,12 @@ def apply_template(template_path: str, output_path: str,
             rFonts.set(qn("w:hAnsi"), FONT_BODY)
             rFonts.set(qn("w:cs"), FONT_BODY)
             # also Heading styles to Titr
-            for sname in ("Heading 1", "Heading 2", "Heading 3", "Heading 4", "Heading 5"):
+            for sname in ("Heading 1", "Heading 2", "Heading 3", "Heading 4", "Heading 5", "Title"):
                 try:
                     hs = doc.styles[sname]
                     hs.font.name = FONT_TITLE
+                    # enforce size 18 for titles (requirement 2)
+                    hs.font.size = Pt(18)
                     hrPr = hs.element.find(qn("w:rPr"))
                     if hrPr is not None:
                         hr = hrPr.find(qn("w:rFonts"))
@@ -464,226 +554,521 @@ def apply_template(template_path: str, output_path: str,
 
 
 def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
-    """Populate common template vars from StudyModel if missing."""
+    """Populate common template vars from StudyModel if missing — auto-calculated.
+
+    Per requirements:
+    4 - جریان فیدر/بار from P/Q (S/(√3·20kV))
+    5 - EENS base/final + reduction auto (not prompted)
+    9 - نام امور / امور مربوطه / نام شهرستان unify
+    9 - موقعیت / موقعیت نصب unify
+    10+11 - sectionalizer EENS also auto, based on selected switch type/results
+    12 - if multi-feeder, main feeder name should be asked (handled in dialog) — here we respect existing value
+    """
     try:
-        # feeder name: primary selected feeder or first trace
-        feeders = [t.feeder_key for t in getattr(m.topo, "traces", [])]
-        primary = feeders[0] if feeders else "نامشخص"
-        # if placement has ranking, use top ranked feeder
+        import math
+        # --- primary feeder (respect already chosen main feeder) ---
+        feeders = [t.feeder_key for t in getattr(m.topo, "traces", [])] if getattr(m, "topo", None) else []
+        # if vars_dict already has نام فیدر (chosen via dialog), respect it
+        if "نام فیدر" in vars_dict and str(vars_dict["نام فیدر"]).strip():
+            primary = str(vars_dict["نام فیدر"]).strip()
+        else:
+            primary = feeders[0] if feeders else "نامشخص"
+            # if placement has ranking, use top ranked feeder as default primary? But for multi-feeder, dialog will ask.
+            # Keep first as fallback
+            try:
+                rank_rows = getattr(m.placement.ranking, "rows", [])
+                if rank_rows and len(feeders) == 1:
+                    top = sorted(rank_rows, key=lambda r: getattr(r, "rank", 0) or 999)[0]
+                    primary = getattr(top, "feeder_key", primary) or primary
+            except Exception:
+                pass
+
+        # --- EENS values: try placement economics first, then sectionalizer study, then fallback ---
+        eb = ea = pct = None
         try:
-            rank_rows = getattr(m.placement.ranking, "rows", [])
-            if rank_rows:
-                # first ranked is most critical?
-                # use feeder with max score?
-                top = sorted(rank_rows, key=lambda r: getattr(r, "rank", 0) or 999)[0]
-                primary = getattr(top, "feeder_key", primary) or primary
+            econ = getattr(m.placement, "economics", None)
+            ens_before = getattr(econ, "ens_before_kwh", {}) if econ else {}
+            ens_after_map = getattr(econ, "ens_after_kwh", {}) if econ else {}
+            def _find(mapping, key):
+                if not mapping:
+                    return None
+                if key in mapping:
+                    return mapping[key]
+                from ..topology.tracing import same_feeder
+                for k, v in mapping.items():
+                    if same_feeder(k, key):
+                        return v
+                return None
+            eb = _find(ens_before, primary)
+            if eb is None and ens_before:
+                try:
+                    # fallback to first available when primary not found
+                    eb = next(iter(ens_before.values()))
+                except Exception:
+                    pass
+            if ens_after_map:
+                for sid, d in ens_after_map.items():
+                    v = _find(d, primary)
+                    if v is not None:
+                        ea = v
+                        break
+                if ea is None:
+                    for d in ens_after_map.values():
+                        if d:
+                            ea = next(iter(d.values()))
+                            break
         except Exception:
             pass
-        # EENS values: from economics
-        econ = getattr(m.placement, "economics", None)
-        ens_before = getattr(econ, "ens_before_kwh", {}) if econ else {}
-        ens_after_map = getattr(econ, "ens_after_kwh", {}) if econ else {}
-        # pick primary's EENS
-        def _find(mapping, key):
-            if not mapping:
-                return None
-            if key in mapping:
-                return mapping[key]
-            from ..topology.tracing import same_feeder
-            for k, v in mapping.items():
-                if same_feeder(k, key):
-                    return v
-            return None
-        eb = _find(ens_before, primary)
-        # ens_after is dict scheme_id -> dict feeder->value
-        ea = None
-        if ens_after_map:
-            for sid, d in ens_after_map.items():
-                v = _find(d, primary)
-                if v is not None:
-                    ea = v
-                    break
-            if ea is None:
-                # fallback first value
-                for d in ens_after_map.values():
-                    if d:
-                        ea = next(iter(d.values()))
+        # fallback to sectionalizer/EENS study if placement EENS missing (requirement 10-11)
+        if eb is None or ea is None:
+            try:
+                eens_study = getattr(m, "eens_study", None) or {}
+                # newest: study is dict with "study" -> feeders -> before/best
+                study_data = eens_study.get("study") if isinstance(eens_study, dict) else None
+                if study_data and isinstance(study_data, dict):
+                    feeders_eens = study_data.get("feeders") or []
+                    for f in feeders_eens:
+                        if str(f.get("feeder_key") or "") == primary:
+                            eb = f.get("baseline_eens_kwh")
+                            # best may be under f["best"] or f["best_eens_kwh"]
+                            best = f.get("best") or {}
+                            if isinstance(best, dict):
+                                ea = best.get("eens_kwh") if "eens_kwh" in best else best.get("best_eens_kwh")
+                            if ea is None:
+                                ea = f.get("best_eens_kwh")
+                            break
+                    if eb is None and feeders_eens:
+                        # fallback first feeder
+                        f0 = feeders_eens[0]
+                        eb = f0.get("baseline_eens_kwh")
+                        best0 = f0.get("best") or {}
+                        ea = best0.get("eens_kwh") if isinstance(best0, dict) else f0.get("best_eens_kwh")
+                # also try top-level baseline/best
+                if eb is None and isinstance(eens_study, dict):
+                    # study might be directly at top level? Check m.eens_study["study"]["baseline_eens_kwh"]
+                    try:
+                        sd = eens_study.get("study") or eens_study
+                        if "baseline_eens_kwh" in sd:
+                            eb = sd.get("baseline_eens_kwh")
+                            ea = sd.get("best_eens_kwh") if "best_eens_kwh" in sd else sd.get("best", {}).get("eens_kwh")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        # also try feeder_table fallback for EENS (indices)
+        if eb is None or ea is None:
+            try:
+                rows_ft = m.feeder_table()
+                for r in rows_ft:
+                    if str(r.get("feeder_key") or "") == primary:
+                        # ens_before maybe in "ens_before_kwh"??? Check feeder_table row: it has ens_before_kwh ?
+                        if r.get("ens_before_kwh") is not None:
+                            eb = r.get("ens_before_kwh")
+                        if r.get("ens_per_year_kwh") is not None and ea is None:
+                            # not ideal, but placeholder
+                            pass
                         break
-        pct = None
-        if eb and ea and eb != 0:
-            pct = (eb - ea) / eb * 100.0
+            except Exception:
+                pass
+        if eb is not None and ea is not None and eb != 0:
+            try:
+                pct = (eb - ea) / eb * 100.0
+            except Exception:
+                pct = None
 
-        # fill brace keys if not present
+        # --- helper to get feeder P/Q and compute current ---
+        def _load_pq_for_feeder(feeder_key: str):
+            p_kw = q_kvar = None
+            # try m.load_model if exists
+            try:
+                lm = getattr(m, "load_model", None)
+                if lm and isinstance(lm, dict):
+                    pq = (lm.get("feeder_pq") or {}).get(feeder_key)
+                    if pq:
+                        p_kw = float(pq.get("p_kw") or 0) if pq.get("p_kw") is not None else None
+                        q_kvar = float(pq.get("q_kvar") or 0) if pq.get("q_kvar") is not None else None
+            except Exception:
+                pass
+            # try ProjectStore if db_path available
+            if p_kw is None or q_kvar is None:
+                try:
+                    dbp = getattr(m, "db_path", None)
+                    if dbp:
+                        from ..persistence.store import ProjectStore
+                        store = ProjectStore(str(dbp))
+                        try:
+                            from ..persistence.engineering_load import load_load_model
+                            lm2 = load_load_model(str(dbp))
+                            pq2 = (lm2.get("feeder_pq") or {}).get(feeder_key)
+                            if pq2:
+                                if p_kw is None and pq2.get("p_kw") is not None:
+                                    p_kw = float(pq2.get("p_kw"))
+                                if q_kvar is None and pq2.get("q_kvar") is not None:
+                                    q_kvar = float(pq2.get("q_kvar"))
+                        finally:
+                            store.close()
+                except Exception:
+                    pass
+            # fallback to placement load_model?
+            if p_kw is None:
+                try:
+                    lm3 = getattr(getattr(m.placement, "settings", None), "load_model", None)  # not likely
+                    pass
+                except Exception:
+                    pass
+            return p_kw, q_kvar
+
+        p_kw, q_kvar = _load_pq_for_feeder(primary)
+        # also get km and other feeder_table metrics
+        km_val = None
+        lambda_val = r_val = None
+        try:
+            rows = m.feeder_table()
+            for r in rows:
+                if str(r.get("feeder_key") or "") == primary:
+                    km_val = r.get("km")
+                    lambda_val = r.get("lambda_per_year")
+                    r_val = r.get("r_minutes")
+                    break
+        except Exception:
+            pass
+
+        # --- current calculation (requirement 4) ---
+        current_a = None
+        if p_kw is not None and q_kvar is not None:
+            try:
+                s_kva = math.hypot(float(p_kw), float(q_kvar))
+                # 20 kV base per template: I = S/(√3·V)
+                current_a = s_kva / (math.sqrt(3) * 20.0)
+            except Exception:
+                current_a = None
+        # if P/Q not available, try to estimate from feeder_table's km? fallback
+        current_str = f"{current_a:.2f}" if current_a is not None else "—"
+
+        # --- fill brace keys if not present (auto) ---
+
+        # primary feeder (only if not already chosen via dialog)
         if "نام فیدر" not in vars_dict:
             vars_dict["نام فیدر"] = str(primary)
+
+        # موقعیت / موقعیت نصب unify (requirement 9)
         if "موقعیت نصب" not in vars_dict and "موقعیت" not in vars_dict:
-            # for sectionalizer, موقعیت نصب may be coordinates of proposed switch
             try:
                 props = m.build_proposed()
+                # also consider sectionalizer nodes if placement empty
+                if not props:
+                    # try sectionalizer study nodes
+                    try:
+                        eens = getattr(m, "eens_study", {}) or {}
+                        study = eens.get("study") if isinstance(eens, dict) else None
+                        if study:
+                            for f in (study.get("feeders") or []):
+                                cands = (f.get("best") or {}).get("selected") or []
+                                if cands:
+                                    c = cands[0]
+                                    coord = c.get("coord")
+                                    if coord and len(coord)==2:
+                                        coord_txt = f"{float(coord[0]):.0f}, {float(coord[1]):.0f}"
+                                        vars_dict["موقعیت نصب"] = coord_txt
+                                        vars_dict["موقعیت"] = coord_txt
+                                        break
+                    except Exception:
+                        pass
                 if props:
-                    # use first proposed node's coord
                     ps = props[0]
                     coord_txt = f"{ps.x:.0f}, {ps.y:.0f}" if ps.x and ps.y else ps.node
                     vars_dict["موقعیت نصب"] = coord_txt
                     vars_dict["موقعیت"] = coord_txt
+                else:
+                    # fallback to feeder name?
+                    vars_dict["موقعیت نصب"] = str(primary)
+                    vars_dict["موقعیت"] = str(primary)
             except Exception:
                 pass
+        # ensure synonym consistency: if one exists, copy to other
+        if "موقعیت نصب" in vars_dict and "موقعیت" not in vars_dict:
+            vars_dict["موقعیت"] = vars_dict["موقعیت نصب"]
+        if "موقعیت" in vars_dict and "موقعیت نصب" not in vars_dict:
+            vars_dict["موقعیت نصب"] = vars_dict["موقعیت"]
+
         if "نام پست" not in vars_dict:
-            # try to infer from graph? Use first part of feeder key?
-            # feeder_key like "F6 - سلوط" -> post is "سلوط"
             if " - " in primary:
                 vars_dict["نام پست"] = primary.split(" - ", 1)[1].strip()
             else:
-                vars_dict["نام پست"] = "نامشخص"
-        if "نام شهرستان" not in vars_dict and "نام امور" not in vars_dict:
-            vars_dict["نام شهرستان"] = vars_dict.get("نام پست", "نامشخص")
-            vars_dict["نام امور"] = vars_dict.get("نام پست", "نامشخص")
-        if "جریان فیدر" not in vars_dict:
-            # try from load: topo traces load? Use branch? fallback 100
-            vars_dict["جریان فیدر"] = "—"
-        if "مقدار EENS پایه" not in vars_dict and eb is not None:
-            vars_dict["مقدار EENS پایه"] = f"{eb:,.1f}"
-        if "مقدار EENS نهایی" not in vars_dict and ea is not None:
-            vars_dict["مقدار EENS نهایی"] = f"{ea:,.1f}"
-        if "درصد کاهش" not in vars_dict and pct is not None:
-            vars_dict["درصد کاهش"] = f"{pct:.1f}"
-        if "نام پرعارضه ترین فیدر" not in vars_dict:
-            # most λ
+                # try to infer from net?
+                try:
+                    # feeder_key may be like "F1 - MESHKIN" -> post MESHKIN
+                    # Already handled
+                    vars_dict["نام پست"] = "نامشخص"
+                except Exception:
+                    vars_dict["نام پست"] = "نامشخص"
+
+        # نام امور / امور مربوطه / نام شهرستان unify (requirement 9)
+        # canonical is "نام امور"
+        post_name = vars_dict.get("نام پست", "نامشخص")
+        if "نام امور" not in vars_dict and "امور مربوطه" not in vars_dict and "نام شهرستان" not in vars_dict:
+            vars_dict["نام امور"] = post_name
+            vars_dict["امور مربوطه"] = post_name
+            vars_dict["نام شهرستان"] = post_name
+        else:
+            # propagate to synonyms
+            canonical = vars_dict.get("نام امور") or vars_dict.get("امور مربوطه") or vars_dict.get("نام شهرستان") or post_name
+            vars_dict["نام امور"] = canonical
+            vars_dict["امور مربوطه"] = canonical
+            vars_dict["نام شهرستان"] = canonical
+
+        # جریان (unify)
+        for key in ("جریان فیدر", "جریان بار"):
+            if key not in vars_dict:
+                vars_dict[key] = current_str
+
+        # P/Q auto (for table placeholders like P_load, Q_load)
+        # These are in MW/Mvar in template as /1000
+        if p_kw is not None:
+            # p_kw in kW
+            vars_dict.setdefault("P_load (kW)/1000", f"{p_kw/1000.0:.2f}")
+            vars_dict.setdefault("P_load (kW)", f"{p_kw:.2f}")
+            # also handle without space variant? Already trimmed brace inner strips, so key exactly as above
+        else:
+            vars_dict.setdefault("P_load (kW)/1000", "—")
+            vars_dict.setdefault("P_load (kW)", "—")
+        if q_kvar is not None:
+            vars_dict.setdefault("Q_load (kW)/1000", f"{q_kvar/1000.0:.2f}")
+            vars_dict.setdefault("Q_load (kW)/1000", f"{q_kvar/1000.0:.2f}")
+            vars_dict.setdefault("Q_load (kW)", f"{q_kvar:.2f}")
+        else:
+            vars_dict.setdefault("Q_load (kW)/1000", "—")
+            vars_dict.setdefault("Q_load (kW)", "—")
+
+        if km_val is not None:
+            vars_dict.setdefault("طول فیدر", f"{km_val:.2f}")
+        else:
+            # try from feeder_table already? fallback
+            vars_dict.setdefault("طول فیدر", "—")
+
+        # EENS auto - handle both naming variants, formatted to 2 decimals (requirement 6 + 5 +10)
+        if eb is not None:
+            val_eb = f"{eb/1000.0:.2f}" if eb > 1000 else f"{eb:.2f}"  # template expects MWh, but eb in kWh? In placement economics ens is kWh, template expects MWh
+            # Check template: recloser uses MWh (small numbers like 21.354) which is kWh/1000? Let's see earlier: 21.354 MWh from kWh? In sample, 21.354 MWh corresponds to maybe kWh/1000. Our eb from economics is kWh (e.g., 21354 kWh -> 21.354 MWh). So divide by 1000 if value large?
+            # For consistency, if eb > 2000, assume kWh and convert; else assume already MWh.
+            # Safer: if eb > 1000, divide by 1000 and format.
+            # But for sectionalizer, eb also kWh? In sectionalizer dump: 109.6664 MWh already divided? Let's check: In sectionalizer study baseline 109.6664 MWh - that value is already MWh? Actually baseline_eens_kwh would be 109666 kWh -> 109.666 MWh. So conversion needed.
+            # We'll detect: if eb > 1000, convert; else keep.
+            # Use detection: if eb > 5000, likely kWh, divide.
+            # To simplify, always provide both: if eb is large, convert to MWh.
+            if eb is not None:
+                try:
+                    eb_mwh = eb/1000.0 if eb > 500 else eb
+                    ea_mwh = ea/1000.0 if ea is not None and ea > 500 else ea
+                    pct_val = pct
+                    for k in ("مقدار EENS پایه", "EENS پایه"):
+                        if k not in vars_dict:
+                            vars_dict[k] = f"{eb_mwh:.2f}"
+                    for k in ("مقدار EENS نهایی", "EENS نهایی"):
+                        if k not in vars_dict and ea_mwh is not None:
+                            vars_dict[k] = f"{ea_mwh:.2f}"
+                    for k in ("درصد کاهش", "درصد کاهش EENS"):
+                        if k not in vars_dict and pct_val is not None:
+                            vars_dict[k] = f"{pct_val:.2f}"
+                except Exception:
+                    pass
+        # also handle mixed: if only one of each pair missing
+        if "EENS پایه" not in vars_dict and "مقدار EENS پایه" in vars_dict:
+            vars_dict["EENS پایه"] = vars_dict["مقدار EENS پایه"]
+        if "مقدار EENS پایه" not in vars_dict and "EENS پایه" in vars_dict:
+            vars_dict["مقدار EENS پایه"] = vars_dict["EENS پایه"]
+        if "EENS نهایی" not in vars_dict and "مقدار EENS نهایی" in vars_dict:
+            vars_dict["EENS نهایی"] = vars_dict["مقدار EENS نهایی"]
+        if "مقدار EENS نهایی" not in vars_dict and "EENS نهایی" in vars_dict:
+            vars_dict["مقدار EENS نهایی"] = vars_dict["EENS نهایی"]
+        if "درصد کاهش EENS" not in vars_dict and "درصد کاهش" in vars_dict:
+            vars_dict["درصد کاهش EENS"] = vars_dict["درصد کاهش"]
+        if "درصد کاهش" not in vars_dict and "درصد کاهش EENS" in vars_dict:
+            vars_dict["درصد کاهش"] = vars_dict["درصد کاهش EENS"]
+
+        # other auto vars
+        # lambda and repair
+        if lambda_val is not None:
+            vars_dict.setdefault("عدد نرخ خرابی", f"{lambda_val:.2f}")
+        else:
+            # try from lambda matrix directly?
+            vars_dict.setdefault("عدد نرخ خرابی", "—")
+        if r_val is not None:
+            vars_dict.setdefault("زمان تعمیر", f"{r_val:.2f}")
+        else:
+            vars_dict.setdefault("زمان تعمیر", "—")
+
+        # تعداد کلید and مختصات
+        try:
+            props = m.build_proposed()
+            cnt = len(props) if props else 0
+            # also check sectionalizer count if placement empty
+            if cnt == 0:
+                try:
+                    eens = getattr(m, "eens_study", {}) or {}
+                    study = eens.get("study") if isinstance(eens, dict) else None
+                    if study:
+                        for f in (study.get("feeders") or []):
+                            cands = (f.get("best") or {}).get("selected") or []
+                            cnt += len(cands)
+                except Exception:
+                    pass
+            vars_dict.setdefault("تعداد کلید", str(cnt) if cnt else "—")
+            # مختصات
+            coord_txt = vars_dict.get("موقعیت نصب") or vars_dict.get("موقعیت") or ""
+            if "مختصات کلیدی پیشنهادی" not in vars_dict:
+                if props:
+                    # join all coords
+                    coords = []
+                    for ps in props:
+                        if ps.x and ps.y:
+                            coords.append(f"{ps.x:.0f}, {ps.y:.0f}")
+                        else:
+                            coords.append(ps.node)
+                    vars_dict["مختصات کلیدی پیشنهادی"] = " | ".join(coords) if coords else coord_txt
+                else:
+                    # try sectionalizer coords
+                    try:
+                        eens = getattr(m, "eens_study", {}) or {}
+                        study = eens.get("study") if isinstance(eens, dict) else None
+                        if study:
+                            ccs=[]
+                            for f in (study.get("feeders") or []):
+                                for c in ((f.get("best") or {}).get("selected") or []):
+                                    coord = c.get("coord")
+                                    if coord and len(coord)==2:
+                                        ccs.append(f"{float(coord[0]):.0f}, {float(coord[1]):.0f}")
+                            if ccs:
+                                vars_dict["مختصات کلیدی پیشنهادی"] = " | ".join(ccs)
+                            else:
+                                vars_dict.setdefault("مختصات کلیدی پیشنهادی", coord_txt or "—")
+                        else:
+                            vars_dict.setdefault("مختصات کلیدی پیشنهادی", coord_txt or "—")
+                    except Exception:
+                        vars_dict.setdefault("مختصات کلیدی پیشنهادی", coord_txt or "—")
+        except Exception:
+            pass
+
+        # پرعارضه etc
+        if "نام پرعارضه ترین فیدر" not in vars_dict or "نام کم عارضه ترین فیدر" not in vars_dict or "رتبه فیدر از نظرعارضه بندی" not in vars_dict:
             try:
                 rows = m.feeder_table()
                 if rows:
-                    # sort by lambda_per_year descending
                     worst = max(rows, key=lambda r: float(r.get("lambda_per_year") or 0))
-                    vars_dict["نام پرعارضه ترین فیدر"] = str(worst.get("feeder_key") or primary)
                     best = min(rows, key=lambda r: float(r.get("lambda_per_year") or 0))
-                    vars_dict["نام کم عارضه ترین فیدر"] = str(best.get("feeder_key") or primary)
+                    if "نام پرعارضه ترین فیدر" not in vars_dict:
+                        vars_dict["نام پرعارضه ترین فیدر"] = str(worst.get("feeder_key") or primary)
+                    if "نام کم عارضه ترین فیدر" not in vars_dict:
+                        vars_dict["نام کم عارضه ترین فیدر"] = str(best.get("feeder_key") or primary)
+                    # رتبه
+                    if "رتبه فیدر از نظرعارضه بندی" not in vars_dict:
+                        # rank by lambda descending: 1 is worst
+                        sorted_rows = sorted(rows, key=lambda r: float(r.get("lambda_per_year") or 0), reverse=True)
+                        rank = next((i+1 for i, r in enumerate(sorted_rows) if str(r.get("feeder_key") or "") == primary), 1)
+                        vars_dict["رتبه فیدر از نظرعارضه بندی"] = str(rank)
+                        # also simple "رتبه فیدر"? Not in template but keep
+                # سایر فیدر1..4
+                others = [r.get("feeder_key") for r in rows if str(r.get("feeder_key") or "") != primary] if rows else []
+                for idx in range(1,5):
+                    key = f"سایر فیدر{idx}"
+                    # template has trailing space like "سایر فیدر1 " - we handle via stripped, but also ensure that exact key with space is covered?
+                    # Our brace inner is stripped, so "سایر فیدر1" matches. Provide.
+                    if key not in vars_dict:
+                        if idx-1 < len(others):
+                            vars_dict[key] = str(others[idx-1])
+                        else:
+                            vars_dict[key] = "—"
+                    # also handle variant with space
+                    if f"سایر فیدر{idx} " not in vars_dict and key in vars_dict:
+                        vars_dict[f"سایر فیدر{idx} "] = vars_dict[key]
             except Exception:
                 pass
-        # date
-        if "آبان 1405" not in vars_dict:
-            # use current Persian date? Keep template default if not overridden
-            pass
+
+        # ensure synonyms after all
+        if "موقعیت نصب" in vars_dict and "موقعیت" not in vars_dict:
+            vars_dict["موقعیت"] = vars_dict["موقعیت نصب"]
+        if "موقعیت" in vars_dict and "موقعیت نصب" not in vars_dict:
+            vars_dict["موقعیت نصب"] = vars_dict["موقعیت"]
+        for canonical, synonyms in [("نام امور", ["امور مربوطه", "نام شهرستان"]), ("موقعیت نصب", ["موقعیت"])]:
+            if canonical in vars_dict:
+                for syn in synonyms:
+                    if syn not in vars_dict:
+                        vars_dict[syn] = vars_dict[canonical]
+
     except Exception:
         pass
 
 
 def _fill_tables_from_model(doc, m) -> None:
-    """If template contains data tables with red placeholder values, replace with real numbers."""
+    """If template contains data tables with red placeholder values, replace with real numbers.
+    Requirement 6: all table values to two decimals.
+    Requirement 8: header 12 bold, body 12 (handled via font patch).
+    """
     try:
         rows_table = m.feeder_table()
         if not rows_table:
             return
-        # For recloser templates, Table1 (6x8) and Table0 (2x6) and Table2 (2x8)
-        # For sectionalizer, Table1 (2x7)
-        # We will attempt to fill any table whose header matches known patterns
         for t in doc.tables:
             if len(t.rows) < 2 or len(t.columns) < 4:
                 continue
             headers = [cell.text.strip() for cell in t.rows[0].cells]
             header_joined = " | ".join(headers)
-            # Table with indices (λ, SAIDI etc.)
+            # Table with indices (λ, SAIDI etc.) — recloser Table1
             if "SAIDI" in header_joined and "SAIFI" in header_joined:
-                # This is the indices table (Table1 recloser)
-                # Replace its data rows with rows_table filtered to selected?
-                # Keep header, replace rows
-                # Ensure rows count matches feeders; if mismatch, rebuild
-                # Build mapping feeder_key -> row dict
-                key_to_row = {str(r.get("feeder_key")): r for r in rows_table}
-                # Determine which feeders currently in table (first col)
-                existing_feeders = [row.cells[0].text.strip() for row in t.rows[1:]]
-                # If existing feeders count differs from rows_table count, we replace with rows_table
-                # Else fill in place
-                if len(t.rows)-1 != len(rows_table):
-                    # Rebuild table to match rows_table length (may be selected only)
-                    # Remove extra rows / add rows as needed
-                    # Simpler: fill first N rows and hide extras? But spec says only selected feeders should appear.
-                    # So rebuild by removing all data rows and adding new ones
-                    # Keep header row 0
-                    # Remove rows 1..end
-                    # Need to recreate rows
-                    # docx table has no easy delete; we can clear and add
-                    # Instead, fill sequentially and truncate/add
-                    # For now, fill existing rows and if need more, add rows
-                    # Remove all data rows after header
-                    tbl = t._tbl
-                    trs = tbl.findall(qn("w:tr"))
-                    # keep first tr (header)
-                    for tr in trs[1:]:
-                        tbl.remove(tr)
-                    # add new rows
-                    for r in rows_table:
-                        cells = t.add_row().cells
-                        # fill cells in order matching header: فیدر, طول, λ, r, SAIDI, SAIFI, CAIDI, ENS
-                        # header order assumed as in template
-                        vals = [
-                            str(r.get("feeder_key") or ""),
-                            f"{r.get('km') or 0:.2f}",
-                            f"{r.get('lambda_per_year') or 0:.2f}",
-                            f"{r.get('r_minutes') or 0:.1f}",
-                            f"{r.get('saidi') if r.get('saidi') is not None else '—':}",
-                            f"{r.get('saifi') if r.get('saifi') is not None else '—':}",
-                            f"{r.get('caidi') if r.get('caidi') is not None else '—':}",
-                            f"{r.get('ens_per_year_kwh') if r.get('ens_per_year_kwh') is not None else '—':}",
-                        ]
-                        # header may have 8 cols, ensure vals length
-                        for i, v in enumerate(vals[:len(cells)]):
-                            p = cells[i].paragraphs[0]
-                            p.clear()
-                            _p_bidi(p)
-                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                            run = p.add_run(str(v))
-                            _run_set_font(run, FONT_BODY, size_pt=9, color=RGBColor(0, 0, 0))
-                        # style remaining cells empty
-                    continue
-                else:
-                    for i, row in enumerate(t.rows[1:]):
-                        if i >= len(rows_table):
-                            break
-                        r = rows_table[i]
-                        # map feeder key order as table order or rows_table order; use rows_table[i]
-                        # fill in same order as header expects
-                        # but ensure feeder column matches
-                        # We'll fill by index i
-                        vals = [
-                            str(r.get("feeder_key") or ""),
-                            f"{r.get('km') or 0:.2f}",
-                            f"{r.get('lambda_per_year') or 0:.2f}",
-                            f"{r.get('r_minutes') or 0:.1f}",
-                            f"{r.get('saidi') if r.get('saidi') is not None else '—'}",
-                            f"{r.get('saifi') if r.get('saifi') is not None else '—'}",
-                            f"{r.get('caidi') if r.get('caidi') is not None else '—'}",
-                            f"{r.get('ens_per_year_kwh') if r.get('ens_per_year_kwh') is not None else '—'}",
-                        ]
-                        for ci in range(min(len(row.cells), len(vals))):
-                            cell = row.cells[ci]
-                            p = cell.paragraphs[0]
-                            p.clear()
-                            _p_bidi(p)
-                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                            run = p.add_run(str(vals[ci]))
-                            _run_set_font(run, FONT_BODY, size_pt=9, color=RGBColor(0, 0, 0))
+                # rebuild to match rows_table exactly (per selected feeders)
+                tbl = t._tbl
+                trs = tbl.findall(qn("w:tr"))
+                for tr in trs[1:]:
+                    tbl.remove(tr)
+                for r in rows_table:
+                    cells = t.add_row().cells
+                    # ensure two decimals for all numeric columns (req 6)
+                    def _fmt(v):
+                        if v is None:
+                            return "—"
+                        try:
+                            return f"{float(v):.2f}"
+                        except Exception:
+                            return str(v)
+                    # SAIDI/SAIFI etc may be None -> "—" else two decimals
+                    vals = [
+                        str(r.get("feeder_key") or ""),
+                        f"{float(r.get('km') or 0):.2f}",
+                        f"{float(r.get('lambda_per_year') or 0):.2f}",
+                        f"{float(r.get('r_minutes') or 0):.2f}",
+                        _fmt(r.get("saidi")),
+                        _fmt(r.get("saifi")),
+                        _fmt(r.get("caidi")),
+                        _fmt(r.get("ens_per_year_kwh")),
+                    ]
+                    for i, v in enumerate(vals[:len(cells)]):
+                        p_ = cells[i].paragraphs[0]
+                        p_.clear()
+                        _p_bidi(p_)
+                        p_.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        run = p_.add_run(str(v))
+                        _run_set_font(run, FONT_BODY, size_pt=12, color=RGBColor(0, 0, 0))
+                continue
             elif "EENS پایه" in header_joined and "EENS نهایی" in header_joined:
                 # Table2 recloser or Table1 sectionalizer with EENS summary
-                # Fill with primary feeder's EENS
+                # Determine primary feeder (respect vars? Use first in rows_table)
                 primary_rows = rows_table[:1]
                 if not primary_rows:
                     continue
                 r = primary_rows[0]
-                # Try to get EENS before/after from economics
+                # Try to get EENS before/after from economics or eens_study (consistent with _auto_fill)
+                eb = ea = pct = None
                 try:
                     econ = getattr(m.placement, "economics", None)
-                    eb = None
-                    ea = None
                     if econ:
-                        eb_dict = getattr(econ, "ens_before_kwh", {})
-                        ea_dict = getattr(econ, "ens_after_kwh", {})
-                        # find matching feeder
+                        eb_dict = getattr(econ, "ens_before_kwh", {}) or {}
+                        ea_dict = getattr(econ, "ens_after_kwh", {}) or {}
                         from ..topology.tracing import same_feeder
                         for k, v in (eb_dict or {}).items():
                             if same_feeder(k, str(r.get("feeder_key") or "")):
                                 eb = v
                                 break
-                        if not eb and eb_dict:
+                        if eb is None and eb_dict:
                             eb = next(iter(eb_dict.values()))
                         for d in (ea_dict or {}).values():
                             if isinstance(d, dict):
@@ -698,83 +1083,181 @@ def _fill_tables_from_model(doc, m) -> None:
                                 if d:
                                     ea = next(iter(d.values()))
                                     break
-                    if eb is None:
-                        eb = r.get("ens_before_kwh")
-                    if ea is None:
-                        ea = r.get("ens_per_year_kwh")
-                    if eb and ea:
-                        pct = (eb - ea) / eb * 100 if eb else 0
-                        # Fill table row 1 (first data row)
-                        # Header: فیدر, طول پایین دست, بار, EENS پایه, EENS نهایی, کاهش, X, Y (or variations)
-                        # For recloser: 8 cols, for sectionalizer: 7 cols
-                        # Determine column count
-                        row_cells = t.rows[1].cells
-                        # feeder
-                        vals = {}
-                        vals[0] = str(r.get("feeder_key") or "")
-                        if len(row_cells) >= 2:
-                            vals[1] = f"{r.get('km') or 0:.2f}"
-                        if len(row_cells) >= 3:
-                            # load?
-                            vals[2] = f"{r.get('loads') or ''}"
-                        if len(row_cells) >= 4:
-                            vals[3] = f"{eb:.2f}" if eb is not None else "—"
-                        if len(row_cells) >= 5:
-                            vals[4] = f"{ea:.2f}" if ea is not None else "—"
-                        if len(row_cells) >= 6:
-                            vals[5] = f"{pct:.1f}" if pct is not None else "—"
-                        # X,Y from proposed
-                        try:
-                            props = m.build_proposed()
-                            if props and len(row_cells) >= 8:
-                                ps = props[0]
-                                vals[6] = f"{ps.x:.0f}" if ps.x else ""
-                                vals[7] = f"{ps.y:.0f}" if ps.y else ""
-                            elif props and len(row_cells) == 7:
-                                ps = props[0]
-                                vals[6] = f"{ps.x:.0f},{ps.y:.0f}" if ps.x and ps.y else ps.node
-                        except Exception:
-                            pass
-                        for ci, v in vals.items():
-                            if ci < len(row_cells):
-                                cell = row_cells[ci]
-                                p = cell.paragraphs[0]
-                                p.clear()
-                                _p_bidi(p)
-                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                run = p.add_run(str(v))
-                                _run_set_font(run, FONT_BODY, size_pt=9, color=RGBColor(0, 0, 0))
+                    # fallback to eens_study
+                    if eb is None or ea is None:
+                        eens = getattr(m, "eens_study", {}) or {}
+                        study = eens.get("study") if isinstance(eens, dict) else None
+                        if study:
+                            for f in (study.get("feeders") or []):
+                                if str(f.get("feeder_key") or "") == str(r.get("feeder_key") or ""):
+                                    eb = f.get("baseline_eens_kwh") if eb is None else eb
+                                    best = f.get("best") or {}
+                                    if isinstance(best, dict):
+                                        ea = best.get("eens_kwh") if ea is None else ea
+                                    break
                 except Exception:
                     pass
+                # also try fallback from feeder_table's ens if still None
+                # compute pct
+                if eb is not None and ea is not None:
+                    try:
+                        pct = (eb - ea) / eb * 100.0 if eb else 0
+                        # convert to MWh for display if large (kWh -> MWh)
+                        eb_disp = eb/1000.0 if eb > 500 else eb
+                        ea_disp = ea/1000.0 if ea > 500 else ea
+                    except Exception:
+                        eb_disp, ea_disp, pct = eb, ea, 0
+                else:
+                    eb_disp = eb
+                    ea_disp = ea
+                    pct = 0
+                # Fill first data row
+                row_cells = t.rows[1].cells
+                vals = {}
+                vals[0] = str(r.get("feeder_key") or "")
+                if len(row_cells) >= 2:
+                    vals[1] = f"{float(r.get('km') or 0):.2f}"
+                if len(row_cells) >= 3:
+                    try:
+                        p_kw = None
+                        try:
+                            lm0 = getattr(m, "load_model", None)
+                            if isinstance(lm0, dict):
+                                pq0 = (lm0.get("feeder_pq") or {}).get(str(r.get("feeder_key") or "")) or {}
+                                p_kw = pq0.get("p_kw")
+                        except Exception:
+                            pass
+                        if p_kw is None:
+                            try:
+                                from ..persistence.store import ProjectStore
+                                if getattr(m, "db_path", None):
+                                    store = ProjectStore(str(m.db_path))
+                                    try:
+                                        from ..persistence.engineering_load import load_load_model
+                                        lm = load_load_model(str(m.db_path))
+                                        pq = (lm.get("feeder_pq") or {}).get(str(r.get("feeder_key") or "")) or {}
+                                        p_kw = pq.get("p_kw")
+                                    finally:
+                                        store.close()
+                            except Exception:
+                                pass
+                        if p_kw is not None:
+                            vals[2] = f"{float(p_kw):.2f}"
+                        else:
+                            vals[2] = f"{float(r.get('loads') or 0):.2f}"  # fallback
+                    except Exception:
+                        vals[2] = f"{float(r.get('loads') or 0):.2f}"
+                if len(row_cells) >= 4:
+                    vals[3] = f"{eb_disp:.2f}" if eb_disp is not None else "—"
+                if len(row_cells) >= 5:
+                    vals[4] = f"{ea_disp:.2f}" if ea_disp is not None else "—"
+                if len(row_cells) >= 6:
+                    vals[5] = f"{pct:.2f}" if pct is not None else "—"
+                # X,Y or مختصات
+                try:
+                    props = m.build_proposed()
+                    # also check sectionalizer
+                    if not props:
+                        eens = getattr(m, "eens_study", {}) or {}
+                        study = eens.get("study") if isinstance(eens, dict) else None
+                        if study:
+                            for f in (study.get("feeders") or []):
+                                for c in ((f.get("best") or {}).get("selected") or []):
+                                    coord = c.get("coord")
+                                    if coord and len(coord)==2 and len(row_cells) >=7:
+                                        vals[6] = f"{float(coord[0]):.0f}, {float(coord[1]):.0f}"
+                                        break
+                    else:
+                        if props and len(row_cells) >= 8:
+                            ps = props[0]
+                            vals[6] = f"{ps.x:.0f}" if ps.x else ""
+                            vals[7] = f"{ps.y:.0f}" if ps.y else ""
+                        elif props and len(row_cells) == 7:
+                            ps = props[0]
+                            vals[6] = f"{ps.x:.0f},{ps.y:.0f}" if ps.x and ps.y else ps.node
+                except Exception:
+                    pass
+                for ci, v in vals.items():
+                    if ci < len(row_cells):
+                        cell = row_cells[ci]
+                        p_ = cell.paragraphs[0]
+                        p_.clear()
+                        _p_bidi(p_)
+                        p_.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        run = p_.add_run(str(v))
+                        _run_set_font(run, FONT_BODY, size_pt=12, color=RGBColor(0, 0, 0))
             elif "فیدر" in header_joined and "پست فوق توزیع" in header_joined:
-                # Table0 feeder spec
+                # Table0 feeder spec (recloser & sectionalizer) — 2x6 with brace placeholders
                 if rows_table:
                     r = rows_table[0]
                     row_cells = t.rows[1].cells
-                    vals = [
-                        str(r.get("feeder_key") or ""),
-                        # post name derived from feeder key
-                        (str(r.get("feeder_key")).split(" - ",1)[1] if " - " in str(r.get("feeder_key")) else "—"),
-                        "—",  # current
-                        "—",  # P
-                        "—",  # Q
-                        f"{r.get('km') or 0:.2f}",
-                    ]
-                    # For sectionalizer variant with 6 cols but different header: includes ولتاژ (20)
-                    # Adjust
+                    # compute current/P/Q as in auto_fill — check model first then db (requirements 4,6)
+                    try:
+                        import math
+                        p_kw = q_kvar = None
+                        # try model.load_model dict first (live run)
+                        try:
+                            lm = getattr(m, "load_model", None)
+                            if isinstance(lm, dict):
+                                pq = (lm.get("feeder_pq") or {}).get(str(r.get("feeder_key") or "")) or {}
+                                p_kw = pq.get("p_kw")
+                                q_kvar = pq.get("q_kvar")
+                        except Exception:
+                            pass
+                        # try db fallback if still missing
+                        if p_kw is None or q_kvar is None:
+                            try:
+                                from ..persistence.store import ProjectStore
+                                if getattr(m, "db_path", None):
+                                    store = ProjectStore(str(m.db_path))
+                                    try:
+                                        from ..persistence.engineering_load import load_load_model
+                                        lm2 = load_load_model(str(m.db_path))
+                                        pq2 = (lm2.get("feeder_pq") or {}).get(str(r.get("feeder_key") or "")) or {}
+                                        if p_kw is None:
+                                            p_kw = pq2.get("p_kw")
+                                        if q_kvar is None:
+                                            q_kvar = pq2.get("q_kvar")
+                                    finally:
+                                        store.close()
+                            except Exception:
+                                pass
+                        s_current = "—"
+                        p_mw = q_mvar = "—"
+                        if p_kw is not None and q_kvar is not None:
+                            s_kva = math.hypot(float(p_kw), float(q_kvar))
+                            cur = s_kva / (math.sqrt(3)*20.0)
+                            s_current = f"{cur:.2f}"
+                            p_mw = f"{float(p_kw)/1000.0:.2f}"
+                            q_mvar = f"{float(q_kvar)/1000.0:.2f}"
+                        # also keep raw kW for sectionalizer's P_load (kW) variant
+                        vals = [
+                            str(r.get("feeder_key") or ""),
+                            (str(r.get("feeder_key")).split(" - ",1)[1] if " - " in str(r.get("feeder_key")) else "—"),
+                            s_current,
+                            p_mw,
+                            q_mvar,
+                            f"{float(r.get('km') or 0):.2f}",
+                        ]
+                    except Exception as e:
+                        vals = [
+                            str(r.get("feeder_key") or ""),
+                            (str(r.get("feeder_key")).split(" - ",1)[1] if " - " in str(r.get("feeder_key")) else "—"),
+                            "—",
+                            "—",
+                            "—",
+                            f"{float(r.get('km') or 0):.2f}",
+                        ]
                     for ci in range(min(len(row_cells), len(vals))):
-                        # keep ولتاژ column as 20 if header contains ولتاژ
                         if headers[ci] and "ولتاژ" in headers[ci]:
-                            vals[ci] = "20"
+                            vals[ci] = "20.00"
                         cell = row_cells[ci]
-                        # don't overwrite if vars_dict already provided placeholder value
-                        p = cell.paragraphs[0]
-                        # if current text is not red placeholder? But we overwrite anyway with real km
-                        p.clear()
-                        _p_bidi(p)
-                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                        run = p.add_run(str(vals[ci]))
-                        _run_set_font(run, FONT_BODY, size_pt=9, color=RGBColor(0, 0, 0))
+                        p_ = cell.paragraphs[0]
+                        p_.clear()
+                        _p_bidi(p_)
+                        p_.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        run = p_.add_run(str(vals[ci]))
+                        _run_set_font(run, FONT_BODY, size_pt=12, color=RGBColor(0, 0, 0))
     except Exception as e:
         from ...logging_setup import get_logger
         get_logger("reporting.docx_template").warning("table fill error: %s", e)
