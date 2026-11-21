@@ -980,7 +980,8 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
             vars_dict.setdefault("طول فیدر", "—")
 
         # EENS auto - handle both naming variants, formatted to 2 decimals (requirement 6 + 5 +10)
-        # Always ensure brace vars are filled (with dash if missing) to avoid leftover { } in docx
+        # Always ensure brace vars are filled - OVERWRITE any stale "—" from previous saves/dialog
+        # Table is correct (from _fill_tables) but paragraph was showing "—" when vars_dict already had "—"
         try:
             eb_mwh = None
             ea_mwh = None
@@ -990,31 +991,33 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                 pct_val = pct
             if ea is not None:
                 ea_mwh = ea/1000.0 if ea > 500 else ea
-            # If eb present, set پایه; else set dash if not already provided
+            # ALWAYS overwrite with computed optimal values (not just when missing)
             for k in ("مقدار EENS پایه", "EENS پایه"):
-                if k not in vars_dict:
-                    if eb_mwh is not None:
-                        vars_dict[k] = f"{eb_mwh:.2f}"
-                    else:
+                if eb_mwh is not None:
+                    vars_dict[k] = f"{eb_mwh:.2f}"
+                else:
+                    # keep existing valid value if already present and not dash, else set dash
+                    if k not in vars_dict or vars_dict[k].strip() in ("—", "", "0.00", "0"):
                         vars_dict[k] = "—"
             for k in ("مقدار EENS نهایی", "EENS نهایی"):
-                if k not in vars_dict:
-                    if ea_mwh is not None:
-                        vars_dict[k] = f"{ea_mwh:.2f}"
-                    else:
+                if ea_mwh is not None:
+                    vars_dict[k] = f"{ea_mwh:.2f}"
+                else:
+                    if k not in vars_dict or vars_dict[k].strip() in ("—", "", "0.00", "0"):
                         vars_dict[k] = "—"
             for k in ("درصد کاهش", "درصد کاهش EENS"):
-                if k not in vars_dict:
-                    if pct_val is not None and eb_mwh is not None and ea_mwh is not None:
-                        vars_dict[k] = f"{pct_val:.2f}"
-                    elif eb_mwh is not None and ea_mwh is not None:
-                        # fallback compute
-                        try:
-                            _pct = (eb - ea)/eb*100.0 if eb else 0
-                            vars_dict[k] = f"{_pct:.2f}"
-                        except Exception:
+                # Always overwrite when we have both values
+                if pct_val is not None and eb_mwh is not None and ea_mwh is not None:
+                    vars_dict[k] = f"{pct_val:.2f}"
+                elif eb_mwh is not None and ea_mwh is not None:
+                    try:
+                        _pct = (eb - ea)/eb*100.0 if eb else 0
+                        vars_dict[k] = f"{_pct:.2f}"
+                    except Exception:
+                        if k not in vars_dict or vars_dict[k].strip() in ("—", "", "0.00", "0"):
                             vars_dict[k] = "—"
-                    else:
+                else:
+                    if k not in vars_dict or vars_dict[k].strip() in ("—", "", "0.00", "0"):
                         vars_dict[k] = "—"
         except Exception:
             pass
