@@ -671,69 +671,72 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
         if not display_name:
             display_name = primary
 
-        # --- EENS values: try placement economics first, then sectionalizer study, then fallback ---
+        # --- EENS values: from optimal EENS module (eens_study) ONLY, do NOT use level1 placement economics ---
+        # User request: مقادیر eens استخراجی از ماژول eens بهینه است نه از روی سطح اول. از سطح اول استفاده نکن.
         eb = ea = pct = None
+        # 1) Try optimal EENS study first (sectionalizer_study / switch_placement optimal)
+        # This is the correct source for both recloser and sectionalizer templates.
         try:
-            econ = getattr(m.placement, "economics", None)
-            ens_before = getattr(econ, "ens_before_kwh", {}) if econ else {}
-            ens_after_map = getattr(econ, "ens_after_kwh", {}) if econ else {}
-            def _find(mapping, key):
-                if not mapping:
-                    return None
-                if key in mapping:
-                    return mapping[key]
-                # Try normalized and same_feeder and feeder_key matching
-                try:
-                    from ..topology.tracing import same_feeder, feeder_key
-                except Exception:
-                    same_feeder = None
-                    feeder_key = lambda x: x
-                # 1) same_feeder (handles short vs full)
-                if same_feeder is not None:
-                    for k, v in mapping.items():
-                        try:
-                            if same_feeder(k, key):
-                                return v
-                        except Exception:
-                            pass
-                # 2) feeder_key short token match
-                try:
-                    kkey = feeder_key(key) if callable(feeder_key) else None
-                    if kkey:
-                        for k, v in mapping.items():
-                            if feeder_key(k) == kkey:
-                                return v
-                except Exception:
-                    pass
-                # 3) case-insensitive normalized (upper, dash)
-                try:
+            eens_study = getattr(m, "eens_study", None) or {}
+            _found_optimal = False
+            # newest: study is dict with "study" -> feeders -> before/best
+            study_data = eens_study.get("study") if isinstance(eens_study, dict) else None
+            if study_data and isinstance(study_data, dict):
+                feeders_eens = study_data.get("feeders") or []
+                # try robust match for primary
+                def _match_feeder(a,b):
+                    if not a or not b:
+                        return False
+                    if str(a).strip() == str(b).strip():
+                        return True
+                    try:
+                        from ..topology.tracing import same_feeder, feeder_key
+                        if same_feeder(str(a), str(b)):
+                            return True
+                        if feeder_key(str(a)) == feeder_key(str(b)):
+                            return True
+                    except Exception:
+                        pass
                     import re
-                    def _norm(s):
-                        s = (s or "").strip().upper()
-                        s = re.sub(r"\s+", " ", s)
-                        s = re.sub(r"\s*-\s*", " - ", s)
-                        return s
-                    nk = _norm(key)
-                    for k, v in mapping.items():
-                        if _norm(k) == nk:
-                            return v
+                    def _n(s): return re.sub(r"\s*-\s*", " - ", re.sub(r"\s+", " ", str(s).strip().upper()))
+                    return _n(a) == _n(b)
+                for f in feeders_eens:
+                    if _match_feeder(f.get("feeder_key"), primary):
+                        eb = f.get("baseline_eens_kwh")
+                        # best may be under f["best"] or f["best_eens_kwh"]
+                        best = f.get("best") or {}
+                        if isinstance(best, dict):
+                            ea = best.get("eens_kwh") if "eens_kwh" in best else best.get("best_eens_kwh")
+                        if ea is None:
+                            ea = f.get("best_eens_kwh")
+                        _found_optimal = (eb is not None or ea is not None)
+                        break
+                # also try top-level baseline/best if still missing and study has totals
+                if not _found_optimal and eb is None and isinstance(eens_study, dict):
+                    try:
+                        sd = eens_study.get("study") or eens_study
+                        if "baseline_eens_kwh" in sd:
+                            eb = sd.get("baseline_eens_kwh")
+                            ea = sd.get("best_eens_kwh") if "best_eens_kwh" in sd else sd.get("best", {}).get("eens_kwh")
+                    except Exception:
+                        pass
+            # fallback for older payload shapes: direct total fields
+            if eb is None and isinstance(eens_study, dict):
+                try:
+                    sd = eens_study.get("study") or eens_study
+                    if "baseline_eens_kwh" in sd:
+                        eb = sd.get("baseline_eens_kwh")
+                        ea = sd.get("best_eens_kwh") if "best_eens_kwh" in sd else sd.get("best", {}).get("eens_kwh")
                 except Exception:
                     pass
-                return None
-            eb = _find(ens_before, primary)
-            # No unconditional fallback to first — keep None to try other sources (feeder_table, eens_study)
-            # Only fallback if mapping has single entry and primary was not specified (i.e., primary is fallback itself)
-            # So do not fallback here.
-            if ens_after_map:
-                for sid, d in ens_after_map.items():
-                    v = _find(d, primary)
-                    if v is not None:
-                        ea = v
-                        break
-                # Do not fallback to first when primary specified — keep None
         except Exception:
             pass
-        # fallback to sectionalizer/EENS study if placement EENS missing (requirement 10-11)
+        # 2) Do NOT use placement.economics (level1) - removed per user request
+        # 3) Fallback to feeder_table only for eb if optimal missing (to avoid 0), but ea will remain dash
+        # This fallback is NOT level1 economics, it's outage indices; kept only to avoid empty table.
+        # If you want strict optimal-only, comment this block.
+        # We keep it but only for eb, not for ea, and only to show dash for ea.
+        
         if eb is None or ea is None:
             try:
                 eens_study = getattr(m, "eens_study", None) or {}
@@ -783,38 +786,8 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                         pass
             except Exception:
                 pass
-        # also try feeder_table fallback for EENS (indices)
-        if eb is None or ea is None or (eb is not None and eb == 0):
-            try:
-                rows_ft = m.feeder_table()
-                def _match(a,b):
-                    if str(a).strip() == str(b).strip():
-                        return True
-                    try:
-                        from ..topology.tracing import same_feeder, feeder_key
-                        if same_feeder(str(a), str(b)):
-                            return True
-                        if feeder_key(str(a)) == feeder_key(str(b)):
-                            return True
-                    except Exception:
-                        pass
-                    import re
-                    def _n(s): return re.sub(r"\s*-\s*", " - ", re.sub(r"\s+", " ", str(s).strip().upper()))
-                    return _n(a) == _n(b)
-                for r in rows_ft:
-                    if _match(r.get("feeder_key"), primary):
-                        # Try economics first, then outage indices ens
-                        if r.get("ens_before_kwh") is not None and (eb is None or eb == 0):
-                            # Only use if non-zero or if no other source
-                            if r.get("ens_before_kwh") not in (None, 0) or eb is None:
-                                eb = r.get("ens_before_kwh")
-                        # Fallback to outage indices ens_per_year_kwh (in kWh) if still missing/zero
-                        if (eb is None or eb == 0) and r.get("ens_per_year_kwh") not in (None, 0):
-                            eb = r.get("ens_per_year_kwh")
-                        # No after value in feeder_table, so keep ea as is (will show dash)
-                        break
-            except Exception:
-                pass
+        # No fallback to feeder_table/outage when optimal missing - show dash per user request (از سطح اول استفاده نکن)
+        # If optimal EENS not available for this feeder, leave eb/ea as None to display "—" 
         if eb is not None and ea is not None and eb != 0:
             try:
                 pct = (eb - ea) / eb * 100.0
@@ -1277,84 +1250,56 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                     if not primary_rows:
                         continue
                     r = primary_rows[0]
-                # Try to get EENS before/after from economics or eens_study (consistent with _auto_fill)
+                # EENS from optimal module ONLY (eens_study), do NOT use level1 economics
+                # User request: مقادیر eens استخراجی از ماژول eens بهینه است نه از روی سطح اول
                 eb = ea = pct = None
                 try:
-                    econ = getattr(m.placement, "economics", None)
-                    if econ:
-                        eb_dict = getattr(econ, "ens_before_kwh", {}) or {}
-                        ea_dict = getattr(econ, "ens_after_kwh", {}) or {}
-                        from ..topology.tracing import same_feeder, feeder_key
+                    eens = getattr(m, "eens_study", None) or {}
+                    study = eens.get("study") if isinstance(eens, dict) else None
+                    if study:
                         import re
-                        def _norm(s):
+                        def _norm2(s):
                             s = (s or "").strip().upper()
                             s = re.sub(r"\s+", " ", s)
                             s = re.sub(r"\s*-\s*", " - ", s)
                             return s
-                        def _match(a,b):
-                            if not a or not b:
-                                return False
+                        def _match2(a,b):
                             if str(a).strip() == str(b).strip():
                                 return True
                             try:
+                                from ..topology.tracing import same_feeder, feeder_key
                                 if same_feeder(str(a), str(b)):
                                     return True
                                 if feeder_key(str(a)) == feeder_key(str(b)):
                                     return True
                             except Exception:
                                 pass
-                            return _norm(a) == _norm(b)
-                        for k, v in (eb_dict or {}).items():
-                            if _match(k, str(r.get("feeder_key") or "")):
-                                eb = v
+                            return _norm2(a) == _norm2(b)
+                        for f in (study.get("feeders") or []):
+                            if _match2(f.get("feeder_key"), str(r.get("feeder_key") or "")):
+                                eb = f.get("baseline_eens_kwh")
+                                best = f.get("best") or {}
+                                if isinstance(best, dict):
+                                    ea = best.get("eens_kwh") if "eens_kwh" in best else best.get("best_eens_kwh")
+                                if ea is None:
+                                    ea = f.get("best_eens_kwh")
                                 break
-                        # do not fallback to first when primary specified
-                        for d in (ea_dict or {}).values():
-                            if isinstance(d, dict):
-                                for k2, v2 in d.items():
-                                    if _match(k2, str(r.get("feeder_key") or "")):
-                                        ea = v2
-                                        break
-                                if ea is not None:
-                                    break
-                        # no fallback to first
-                    # fallback to eens_study with robust matching
-                    if eb is None or ea is None:
-                        eens = getattr(m, "eens_study", {}) or {}
-                        study = eens.get("study") if isinstance(eens, dict) else None
-                        if study:
-                            import re
-                            def _norm2(s):
-                                s = (s or "").strip().upper()
-                                s = re.sub(r"\s+", " ", s)
-                                s = re.sub(r"\s*-\s*", " - ", s)
-                                return s
-                            def _match2(a,b):
-                                if str(a).strip() == str(b).strip():
-                                    return True
-                                try:
-                                    from ..topology.tracing import same_feeder, feeder_key
-                                    if same_feeder(str(a), str(b)):
-                                        return True
-                                    if feeder_key(str(a)) == feeder_key(str(b)):
-                                        return True
-                                except Exception:
-                                    pass
-                                return _norm2(a) == _norm2(b)
-                            for f in (study.get("feeders") or []):
-                                if _match2(f.get("feeder_key"), str(r.get("feeder_key") or "")):
-                                    eb = f.get("baseline_eens_kwh") if eb is None else eb
-                                    best = f.get("best") or {}
-                                    if isinstance(best, dict):
-                                        ea = best.get("eens_kwh") if ea is None else ea
-                                    break
+                        # also try study totals if per-feeder not found but study has totals
+                        if eb is None:
+                            try:
+                                sd = eens.get("study") or {}
+                                if "total_baseline_eens_kwh_per_year" in sd:
+                                    # total is sum across all feeders; only use for single-feeder case
+                                    # To avoid mixing, only use if single feeder table
+                                    if len(rows_table) == 1:
+                                        eb = sd.get("total_baseline_eens_kwh_per_year")
+                                        ea = sd.get("total_best_eens_kwh_per_year")
+                            except Exception:
+                                pass
                 except Exception:
                     pass
-                # Fallback to feeder_table's outage EENS if still missing or zero (for recloser where economics is 0)
-                if (eb is None or eb == 0) and r.get("ens_per_year_kwh") not in (None, 0):
-                    eb = r.get("ens_per_year_kwh")
-                if (eb is None or eb == 0) and r.get("ens_before_kwh") not in (None, 0):
-                    eb = r.get("ens_before_kwh")
+                # Do NOT use economics (level1) - removed per user request
+                # No fallback to feeder_table when optimal missing - show dash (از سطح اول استفاده نکن)
                 # If ea still None, keep dash (do not use total kpis as per-feeder)
                 # compute pct and display conversion (always convert kWh->MWh when >500)
                 if eb is not None and ea is not None:

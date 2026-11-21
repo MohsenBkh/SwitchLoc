@@ -19,6 +19,19 @@ TEMPLATE_SEC = "نمونه دفترچه مطالعات سکسیونر.docx"
 
 def _find_templates() -> dict[str, Path]:
     import sys
+    import unicodedata
+    _PERSIAN_FIX = str.maketrans({"ي": "ی", "ك": "ک"})
+    def _norm_name(s: str) -> str:
+        s = s.translate(_PERSIAN_FIX)
+        s = unicodedata.normalize("NFC", s)
+        return s
+    substrings = {
+        "ریکلوزر": TEMPLATE_RECL,
+        "سکسیونر": TEMPLATE_SEC,
+        "recloser": TEMPLATE_RECL,
+        "sectionalizer": TEMPLATE_SEC,
+    }
+    norm_expected = { _norm_name(TEMPLATE_RECL): TEMPLATE_RECL, _norm_name(TEMPLATE_SEC): TEMPLATE_SEC }
     candidates_roots: list[Path] = []
     # cwd and ancestors
     try:
@@ -42,12 +55,13 @@ def _find_templates() -> dict[str, Path]:
                 cur = cur.parent
             meipass = getattr(sys, "_MEIPASS", None)
             if meipass:
-                candidates_roots.append(Path(meipass).resolve())
-                # _MEIPASS parent may contain templates when datas copied to root
                 try:
-                    candidates_roots.append(Path(meipass).resolve().parent)
+                    mp_path = Path(meipass).resolve()
+                    candidates_roots.append(mp_path)
+                    candidates_roots.append(mp_path.parent)
+                    candidates_roots.append(mp_path / "_internal")
                 except Exception:
-                    pass
+                    candidates_roots.append(Path(meipass))
     except Exception:
         pass
     # __file__ ancestors
@@ -63,6 +77,7 @@ def _find_templates() -> dict[str, Path]:
         import switchloc
         candidates_roots.append(Path(switchloc.__file__).resolve().parents[1])
         candidates_roots.append(Path(switchloc.__file__).resolve().parents[2])
+        candidates_roots.append(Path(switchloc.__file__).resolve().parent)
     except Exception:
         pass
     # argv 0
@@ -82,49 +97,116 @@ def _find_templates() -> dict[str, Path]:
         if rp not in seen:
             seen.add(rp)
             uniq_roots.append(r)
-    extra_subdirs = ["", "data", "build_assets", "assets", "templates", "resources"]
+    extra_subdirs = ["", "data", "build_assets", "assets", "templates", "resources", "_internal", "report_templates"]
     out: dict[str, Path] = {}
+    # 1) Direct and normalized listing
     for name in (TEMPLATE_RECL, TEMPLATE_SEC):
+        norm_exp = _norm_name(name)
         found: Path | None = None
         for root in uniq_roots:
             for sub in extra_subdirs:
                 base = root / sub if sub else root
-                p = base / name
-                if p.is_file():
-                    found = p
-                    break
+                try:
+                    if not base.is_dir():
+                        continue
+                    p = base / name
+                    if p.is_file():
+                        found = p
+                        break
+                    # normalized listing
+                    try:
+                        for entry in base.iterdir():
+                            if entry.is_file() and entry.suffix.lower() == ".docx":
+                                norm_entry = _norm_name(entry.name)
+                                if norm_entry == norm_exp:
+                                    found = entry
+                                    break
+                                for sub_key, target in substrings.items():
+                                    if sub_key in norm_entry and target == name:
+                                        found = entry
+                                        break
+                            if found:
+                                break
+                    except Exception:
+                        pass
+                except Exception:
+                    continue
             if found:
                 break
         if found:
             out[name] = found
-    # final direct check and rglob fallback
+    # 2) Recursive rglob
     for name in (TEMPLATE_RECL, TEMPLATE_SEC):
-        if name not in out:
-            p = Path(name)
-            if p.is_file():
-                out[name] = p.resolve()
-            else:
-                try:
-                    for cand in Path.cwd().rglob(name):
-                        if cand.is_file():
+        if name in out:
+            continue
+        norm_exp = _norm_name(name)
+        for root in uniq_roots:
+            try:
+                if not root.is_dir():
+                    continue
+                for cand in root.rglob("*.docx"):
+                    try:
+                        norm_cand = _norm_name(cand.name)
+                        if norm_cand == norm_exp:
                             out[name] = cand
                             break
-                except Exception:
-                    pass
-                if name not in out:
-                    # also search via importlib.resources
+                        for sub_key, target in substrings.items():
+                            if sub_key in norm_cand and target == name:
+                                out[name] = cand
+                                break
+                    except Exception:
+                        continue
+                    if name in out:
+                        break
+            except Exception:
+                continue
+            if name in out:
+                break
+    # 3) importlib.resources fallback
+    for name in (TEMPLATE_RECL, TEMPLATE_SEC):
+        if name in out:
+            continue
+        try:
+            import importlib.resources as _ir
+            for pkg in ("switchloc", "switchloc.reporting", "switchloc.data", "build_assets"):
+                try:
+                    files = _ir.files(pkg)  # type: ignore
+                    cand = files.joinpath(name)
+                    if cand.is_file():
+                        try:
+                            with _ir.as_file(cand) as _p:
+                                if _p.is_file():
+                                    out[name] = Path(_p)
+                                    break
+                        except Exception:
+                            pass
+                    # rglob via resources
                     try:
-                        import importlib.resources as _ir
-                        # try package data
-                        for pkg in ("switchloc", "switchloc.data", "build_assets"):
-                            try:
-                                if _ir.files(pkg).joinpath(name).is_file():  # type: ignore[attr-defined]
-                                    # extract to temp is complex; skip
-                                    pass
-                            except Exception:
-                                pass
+                        for res in files.rglob("*.docx"):
+                            if _norm_name(res.name) == _norm_name(name):
+                                try:
+                                    with _ir.as_file(res) as _p2:
+                                        out[name] = Path(_p2)
+                                        break
+                                except Exception:
+                                    continue
                     except Exception:
                         pass
+                except Exception:
+                    continue
+                if name in out:
+                    break
+        except Exception:
+            pass
+    # final direct check
+    for name in (TEMPLATE_RECL, TEMPLATE_SEC):
+        if name not in out:
+            try:
+                p = Path(name)
+                if p.is_file():
+                    out[name] = p.resolve()
+            except Exception:
+                pass
     return out
 
 

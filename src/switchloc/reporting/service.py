@@ -40,9 +40,26 @@ FORMATS = ("xlsx", "docx", "pdf", "gis")
 
 
 def _find_template_files() -> dict[str, Path]:
-    """Robust locate of the two Word templates at repo root or beside exe."""
+    """Robust locate of the two Word templates at repo root, beside exe, or in bundle."""
     import sys
+    import unicodedata
+    import os
+    # Normalize Persian characters (ي->ی, ك->ک) and NFC
+    _PERSIAN_FIX = str.maketrans({"ي": "ی", "ك": "ک"})
+    def _norm_name(s: str) -> str:
+        s = s.translate(_PERSIAN_FIX)
+        s = unicodedata.normalize("NFC", s)
+        return s
     names = ["نمونه دفترچه مطالعات ریکلوزر.docx", "نمونه دفترچه مطالعات سکسیونر.docx"]
+    norm_names = { _norm_name(n): n for n in names }
+    # Also accept substring matching for robustness (ریکلوزر / سکسیونر)
+    substrings = {
+        "ریکلوزر": "نمونه دفترچه مطالعات ریکلوزر.docx",
+        "سکسیونر": "نمونه دفترچه مطالعات سکسیونر.docx",
+        "recloser": "نمونه دفترچه مطالعات ریکلوزر.docx",
+        "sectionalizer": "نمونه دفترچه مطالعات سکسیونر.docx",
+        "سکسیونر": "نمونه دفترچه مطالعات سکسیونر.docx",
+    }
     candidates: list[Path] = []
     try:
         cur = Path.cwd().resolve()
@@ -64,7 +81,14 @@ def _find_template_files() -> dict[str, Path]:
                 cur = cur.parent
             mp = getattr(sys, "_MEIPASS", None)
             if mp:
-                candidates.append(Path(mp).resolve())
+                try:
+                    mp_path = Path(mp).resolve()
+                    candidates.append(mp_path)
+                    # also search parent and _internal
+                    candidates.append(mp_path.parent)
+                    candidates.append(mp_path / "_internal")
+                except Exception:
+                    candidates.append(Path(mp))
     except Exception:
         pass
     try:
@@ -77,6 +101,12 @@ def _find_template_files() -> dict[str, Path]:
     try:
         import switchloc as _sw
         candidates.append(Path(_sw.__file__).resolve().parents[1])
+        candidates.append(Path(_sw.__file__).resolve().parents[2])
+        candidates.append(Path(_sw.__file__).resolve().parent)
+    except Exception:
+        pass
+    try:
+        candidates.append(Path(sys.argv[0]).resolve().parent)
     except Exception:
         pass
     # dedup
@@ -91,20 +121,122 @@ def _find_template_files() -> dict[str, Path]:
             seen.add(rp)
             uniq.append(r)
     out: dict[str, Path] = {}
+    # 1) Exact normalized match in known subdirs
     for name in names:
+        norm_expected = _norm_name(name)
         for root in uniq:
-            for sub in ("", "data", "build_assets", "templates"):
+            for sub in ("", "data", "build_assets", "templates", "resources", "_internal", "report_templates"):
                 base = root / sub if sub else root
-                p = base / name
-                if p.is_file():
-                    out[name] = p
-                    break
+                try:
+                    if not base.is_dir():
+                        continue
+                    # direct check
+                    p = base / name
+                    if p.is_file():
+                        out[name] = p
+                        break
+                    # normalized directory listing
+                    try:
+                        for entry in base.iterdir():
+                            if entry.is_file() and entry.suffix.lower() == ".docx":
+                                norm_entry = _norm_name(entry.name)
+                                if norm_entry == norm_expected:
+                                    out[name] = entry
+                                    break
+                                # substring fallback
+                                for sub_key, target in substrings.items():
+                                    if sub_key in norm_entry and target == name:
+                                        out[name] = entry
+                                        break
+                            if name in out:
+                                break
+                    except Exception:
+                        pass
+                except Exception:
+                    continue
             if name in out:
                 break
         if name not in out:
-            p = Path(name)
-            if p.is_file():
-                out[name] = p.resolve()
+            try:
+                p = Path(name)
+                if p.is_file():
+                    out[name] = p.resolve()
+            except Exception:
+                pass
+    # 2) Recursive rglob in all candidates (including _MEIPASS)
+    for name in names:
+        if name in out:
+            continue
+        norm_expected = _norm_name(name)
+        for root in uniq:
+            try:
+                if not root.is_dir():
+                    continue
+                for cand in root.rglob("*.docx"):
+                    try:
+                        norm_cand = _norm_name(cand.name)
+                        if norm_cand == norm_expected:
+                            out[name] = cand
+                            break
+                        for sub_key, target in substrings.items():
+                            if sub_key in norm_cand and target == name:
+                                out[name] = cand
+                                break
+                    except Exception:
+                        continue
+                    if name in out:
+                        break
+            except Exception:
+                continue
+            if name in out:
+                break
+    # 3) importlib.resources fallback (package data)
+    for name in names:
+        if name in out:
+            continue
+        try:
+            import importlib.resources as _ir
+            # Try to find via package resources - check multiple packages
+            for pkg in ("switchloc", "switchloc.reporting", "switchloc.data"):
+                try:
+                    # Python 3.9+ API
+                    files = _ir.files(pkg)  # type: ignore
+                    # Try direct
+                    cand = files.joinpath(name)
+                    if cand.is_file():
+                        # For frozen, this may be inside zip; try to get path
+                        try:
+                            # Try to get as file path via as_file
+                            import importlib.resources as _ir2
+                            from contextlib import nullcontext
+                            # Use as_file to extract to temp if needed
+                            try:
+                                with _ir2.as_file(cand) as _p:
+                                    if _p.is_file():
+                                        out[name] = Path(_p)
+                                        break
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                    # Fallback: rglob via resource
+                    try:
+                        for res in files.rglob("*.docx"):
+                            if _norm_name(res.name) == _norm_name(name):
+                                try:
+                                    with _ir.as_file(res) as _p2:
+                                        out[name] = Path(_p2)
+                                        break
+                                except Exception:
+                                    continue
+                    except Exception:
+                        pass
+                except Exception:
+                    continue
+                if name in out:
+                    break
+        except Exception:
+            pass
     return out
 
 
