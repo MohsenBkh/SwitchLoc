@@ -237,7 +237,36 @@ def _find_template_files() -> dict[str, Path]:
                     break
         except Exception:
             pass
-    return out
+def _switch_type_from_eens(eens_study: dict | None) -> str:
+    """Return 'recloser' | 'sectionalizer' | 'disconnector' | '' from EENS payload.
+    The payload is the dict stored under KV_KEY 'sectionalizer_study':
+      {settings: {switch_type: ...}, study: {settings: {switch_type: ...}, feeders: [...]}, ...}
+    Recloser must use the recloser template, all others use sectionalizer template.
+    """
+    if not eens_study or not isinstance(eens_study, dict):
+        return ""
+    # check common locations
+    for d in (eens_study, eens_study.get("study") if isinstance(eens_study.get("study"), dict) else None):
+        if not isinstance(d, dict):
+            continue
+        st = d.get("settings") if isinstance(d.get("settings"), dict) else None
+        if isinstance(st, dict):
+            v = st.get("switch_type")
+            if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
+                return v.strip().lower()
+        v = d.get("switch_type")
+        if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
+            return v.strip().lower()
+    # fallback: check top-level study.settings
+    try:
+        st2 = eens_study.get("study", {}).get("settings", {}) if isinstance(eens_study.get("study"), dict) else {}
+        if isinstance(st2, dict):
+            v = st2.get("switch_type")
+            if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
+                return v.strip().lower()
+    except Exception:
+        pass
+    return ""
 
 
 @dataclass
@@ -373,21 +402,38 @@ class ReportService:
         report_progress(70, "ساخت فایل‌های گزارش")
         check_cancelled()
         if "xlsx" in st.formats:
+            proj_x = (st.project_name or "").strip()
+            import re as _re4
+            safe_x = _re4.sub(r'[|/\\\\:*?"<>\n\r]', "_", proj_x).strip()[:40] if proj_x else ""
+            xlsx_name = f"{safe_x}_کتاب_کار.xlsx" if safe_x else "SwitchLoc_study.xlsx"
             paths["xlsx"] = export_workbook(
-                m, str(_out(st.out_dir, "SwitchLoc_study.xlsx", project_name=st.project_name or None)))
-        if "docx" in st.formats:
+                m, str(_out(st.out_dir, xlsx_name, project_name=st.project_name or None)))
+        # When PDF is requested, also produce its Word counterpart (user request)
+        effective_formats = set(st.formats or [])
+        if "pdf" in effective_formats and "docx" not in effective_formats:
+            effective_formats.add("docx")
+            _log.info("PDF requested -> also generating Word (DOCX) counterpart")
+
+        if "docx" in effective_formats:
             # template_vars may have been collected via UI dialog (task 4)
             tmpl = getattr(st, "template_path", None)
             tvars = dict(getattr(st, "template_vars", None) or {})
             extra = dict(getattr(st, "extra_images", None) or {})
-            # auto-detect template if not explicitly set (robust search)
+            # auto-detect template if not explicitly set (robust search) — switch_type aware
             if not tmpl:
                 try:
                     found = _find_template_files()
                     cand_recl = found.get("نمونه دفترچه مطالعات ریکلوزر.docx")
                     cand_sec = found.get("نمونه دفترچه مطالعات سکسیونر.docx")
                     if cand_recl or cand_sec:
-                        if m.has_eens_study and cand_sec is not None:
+                        sw = _switch_type_from_eens(m.eens_study if hasattr(m, "eens_study") else {})
+                        # recloser -> recloser template, sectionalizer/disconnector -> sectionalizer template
+                        if sw == "recloser" and cand_recl is not None:
+                            tmpl = str(cand_recl.resolve())
+                        elif sw in ("sectionalizer", "disconnector") and cand_sec is not None:
+                            tmpl = str(cand_sec.resolve())
+                        elif m.has_eens_study and cand_sec is not None:
+                            # fallback for old payloads without switch_type -> sectionalizer
                             tmpl = str(cand_sec.resolve())
                         elif cand_recl is not None:
                             tmpl = str(cand_recl.resolve())
@@ -395,17 +441,55 @@ class ReportService:
                             tmpl = str(cand_sec.resolve())
                 except Exception:
                     tmpl = None
+            # distinct filenames per switch_type / project so recloser vs sectionalizer don't overwrite each other
+            # and Word vs PDF are distinguishable (user request: اسم گزارش پروژه رو تغییر بده)
+            sw_for_name = _switch_type_from_eens(m.eens_study if hasattr(m, "eens_study") else {})
+            proj = (st.project_name or "").strip()
+            import re as _re2
+            safe_proj = _re2.sub(r'[|/\\\\:*?"<>\n\r]', "_", proj).strip()[:40] if proj else ""
+            if safe_proj:
+                if sw_for_name == "recloser":
+                    docx_name = f"{safe_proj}_ریکلووزر_دفترچه.docx"
+                elif sw_for_name in ("sectionalizer", "disconnector"):
+                    docx_name = f"{safe_proj}_سکسیونر_دفترچه.docx"
+                else:
+                    docx_name = f"{safe_proj}_گزارش.docx"
+            else:
+                if sw_for_name == "recloser":
+                    docx_name = "SwitchLoc_ریکلووزر_دفترچه.docx"
+                elif sw_for_name in ("sectionalizer", "disconnector"):
+                    docx_name = "SwitchLoc_سکسیونر_دفترچه.docx"
+                else:
+                    docx_name = "SwitchLoc_report.docx"
             paths["docx"] = export_docx(
                 build_report(m, map_note=_MAP_NOTE if map_png else ""),
-                str(_out(st.out_dir, "SwitchLoc_report.docx", project_name=st.project_name or None)),
+                str(_out(st.out_dir, docx_name, project_name=st.project_name or None)),
                 map_png=map_png, charts_png=charts_png,
                 template_path=tmpl, template_vars=tvars,
                 extra_images=extra, study_model=m)
-        if "pdf" in st.formats:
+        if "pdf" in effective_formats:
             try:
+                sw_for_name_pdf = _switch_type_from_eens(m.eens_study if hasattr(m, "eens_study") else {})
+                proj_pdf = (st.project_name or "").strip()
+                import re as _re3
+                safe_pdf = _re3.sub(r'[|/\\\\:*?"<>\n\r]', "_", proj_pdf).strip()[:40] if proj_pdf else ""
+                if safe_pdf:
+                    if sw_for_name_pdf == "recloser":
+                        pdf_name = f"{safe_pdf}_ریکلووزر_دفترچه.pdf"
+                    elif sw_for_name_pdf in ("sectionalizer", "disconnector"):
+                        pdf_name = f"{safe_pdf}_سکسیونر_دفترچه.pdf"
+                    else:
+                        pdf_name = f"{safe_pdf}_گزارش.pdf"
+                else:
+                    if sw_for_name_pdf == "recloser":
+                        pdf_name = "SwitchLoc_ریکلووزر_دفترچه.pdf"
+                    elif sw_for_name_pdf in ("sectionalizer", "disconnector"):
+                        pdf_name = "SwitchLoc_سکسیونر_دفترچه.pdf"
+                    else:
+                        pdf_name = "SwitchLoc_report.pdf"
                 paths["pdf"] = export_pdf(
                     build_report(m, map_note=_MAP_NOTE if map_png else ""),
-                    str(_out(st.out_dir, "SwitchLoc_report.pdf", project_name=st.project_name or None)),
+                    str(_out(st.out_dir, pdf_name, project_name=st.project_name or None)),
                     map_png=map_png, charts_png=charts_png)
             except PdfUnavailableError as exc:
                 issues.append(("PHASE5-PDF-SKIP", "Information", str(exc)))
@@ -414,9 +498,19 @@ class ReportService:
         if "eens_json" in st.formats:
             if m.has_eens_study:
                 from .eens_report import export_eens_json
+                sw_e = _switch_type_from_eens(m.eens_study)
+                proj_e = (st.project_name or "").strip()
+                import re as _re5
+                safe_e = _re5.sub(r'[|/\\\\:*?"<>\n\r]', "_", proj_e).strip()[:40] if proj_e else ""
+                if sw_e == "recloser":
+                    eens_name = f"{safe_e + '_' if safe_e else ''}recloser_eens_report.json"
+                elif sw_e in ("sectionalizer", "disconnector"):
+                    eens_name = f"{safe_e + '_' if safe_e else ''}sectionalizer_eens_report.json"
+                else:
+                    eens_name = f"{safe_e + '_' if safe_e else ''}eens_report.json"
                 paths["eens_json"] = export_eens_json(
                     m.eens_study,
-                    str(_out(st.out_dir, "sectionalizer_eens_report.json", project_name=st.project_name or None)))
+                    str(_out(st.out_dir, eens_name, project_name=st.project_name or None)))
             else:
                 issues.append(("PHASE5-EENS-JSON-SKIP", "Information",
                                "گزارش JSON جایابی EENS ساخته نشد؛ مطالعهٔ "

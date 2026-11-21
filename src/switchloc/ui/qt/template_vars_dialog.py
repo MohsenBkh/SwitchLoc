@@ -303,13 +303,53 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
         rb_recl.setChecked(True)
     elif selected_template == "sectionalizer" and has_sec:
         rb_sec.setChecked(True)
+    elif selected_template == "recloser" and has_recl:
+        rb_recl.setChecked(True)
     else:
-        # auto: if study has EENS -> sectionalizer else recloser
+        # auto: choose template based on actual switch_type of EENS study, not just existence
+        # Recloser study must use recloser template, sectionalizer/disconnector -> sectionalizer
+        def _sw_type_from_model(m):
+            if m is None:
+                return ""
+            try:
+                eens = getattr(m, "eens_study", None) or {}
+                if isinstance(eens, dict):
+                    # check settings and study.settings
+                    for d in (eens, eens.get("study") if isinstance(eens.get("study"), dict) else None):
+                        if not isinstance(d, dict):
+                            continue
+                        st = d.get("settings") if isinstance(d.get("settings"), dict) else None
+                        if isinstance(st, dict):
+                            v = st.get("switch_type")
+                            if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
+                                return v.strip().lower()
+                        v = d.get("switch_type")
+                        if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
+                            return v.strip().lower()
+                    # also check study.settings directly
+                    try:
+                        st2 = eens.get("study", {}).get("settings", {}) if isinstance(eens.get("study"), dict) else {}
+                        if isinstance(st2, dict):
+                            v = st2.get("switch_type")
+                            if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
+                                return v.strip().lower()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+            return ""
         try:
+            sw_type = _sw_type_from_model(study_model)
             is_eens = bool(study_model and getattr(study_model, "has_eens_study", False))
         except Exception:
+            sw_type = ""
             is_eens = False
-        if is_eens and has_sec:
+        if sw_type == "recloser" and has_recl:
+            rb_recl.setChecked(True)
+        elif sw_type in ("sectionalizer", "disconnector") and has_sec:
+            rb_sec.setChecked(True)
+        elif is_eens and has_sec:
+            # fallback for old payloads without switch_type
             rb_sec.setChecked(True)
         elif has_recl:
             rb_recl.setChecked(True)
