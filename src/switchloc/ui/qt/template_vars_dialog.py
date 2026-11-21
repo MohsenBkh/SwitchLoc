@@ -15,6 +15,7 @@ from ...reporting.docx_template import extract_variables
 
 TEMPLATE_RECL = "نمونه دفترچه مطالعات ریکلوزر.docx"
 TEMPLATE_SEC = "نمونه دفترچه مطالعات سکسیونر.docx"
+TEMPLATE_SECT = "نمونه دفترچه مطالعات سکشنالایزر.docx"  # optional: dedicated sectionalizer template; fallback to SEC
 
 
 def _find_templates() -> dict[str, Path]:
@@ -28,10 +29,13 @@ def _find_templates() -> dict[str, Path]:
     substrings = {
         "ریکلوزر": TEMPLATE_RECL,
         "سکسیونر": TEMPLATE_SEC,
+        "سکشنالایزر": TEMPLATE_SECT,
         "recloser": TEMPLATE_RECL,
-        "sectionalizer": TEMPLATE_SEC,
+        "sectionalizer": TEMPLATE_SECT,
+        "disconnector": TEMPLATE_SEC,
+        "سکسیونر": TEMPLATE_SEC,
     }
-    norm_expected = { _norm_name(TEMPLATE_RECL): TEMPLATE_RECL, _norm_name(TEMPLATE_SEC): TEMPLATE_SEC }
+    norm_expected = { _norm_name(TEMPLATE_RECL): TEMPLATE_RECL, _norm_name(TEMPLATE_SEC): TEMPLATE_SEC, _norm_name(TEMPLATE_SECT): TEMPLATE_SECT }
     candidates_roots: list[Path] = []
     # cwd and ancestors
     try:
@@ -100,7 +104,7 @@ def _find_templates() -> dict[str, Path]:
     extra_subdirs = ["", "data", "build_assets", "assets", "templates", "resources", "_internal", "report_templates"]
     out: dict[str, Path] = {}
     # 1) Direct and normalized listing
-    for name in (TEMPLATE_RECL, TEMPLATE_SEC):
+    for name in (TEMPLATE_RECL, TEMPLATE_SEC, TEMPLATE_SECT):
         norm_exp = _norm_name(name)
         found: Path | None = None
         for root in uniq_roots:
@@ -136,7 +140,7 @@ def _find_templates() -> dict[str, Path]:
         if found:
             out[name] = found
     # 2) Recursive rglob
-    for name in (TEMPLATE_RECL, TEMPLATE_SEC):
+    for name in (TEMPLATE_RECL, TEMPLATE_SEC, TEMPLATE_SECT):
         if name in out:
             continue
         norm_exp = _norm_name(name)
@@ -163,7 +167,7 @@ def _find_templates() -> dict[str, Path]:
             if name in out:
                 break
     # 3) importlib.resources fallback
-    for name in (TEMPLATE_RECL, TEMPLATE_SEC):
+    for name in (TEMPLATE_RECL, TEMPLATE_SEC, TEMPLATE_SECT):
         if name in out:
             continue
         try:
@@ -199,7 +203,7 @@ def _find_templates() -> dict[str, Path]:
         except Exception:
             pass
     # final direct check
-    for name in (TEMPLATE_RECL, TEMPLATE_SEC):
+    for name in (TEMPLATE_RECL, TEMPLATE_SEC, TEMPLATE_SECT):
         if name not in out:
             try:
                 p = Path(name)
@@ -207,6 +211,9 @@ def _find_templates() -> dict[str, Path]:
                     out[name] = p.resolve()
             except Exception:
                 pass
+    # Fallback: if dedicated sectionalizer template not found but disconnector exists, alias it (they share template historically)
+    if TEMPLATE_SECT not in out and TEMPLATE_SEC in out:
+        out[TEMPLATE_SECT] = out[TEMPLATE_SEC]
     return out
 
 
@@ -267,9 +274,82 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     # enable only where file exists
     has_recl = TEMPLATE_RECL in templates
     has_sec = TEMPLATE_SEC in templates
+    has_sect = TEMPLATE_SECT in templates
+    # sectionalizer shares disconnector template if dedicated not present (alias added in _find_templates)
+    # So has_sec counts for sectionalizer; keep both enabled separately for UI clarity
+    # If only has_sect alias, then has_sec is True anyway
     rb_recl.setEnabled(has_recl)
-    rb_sec.setEnabled(has_sec)
-    if not has_recl and not has_sec:
+    rb_sec.setEnabled(has_sec or has_sect)
+    # helper: robust switch_type detection from StudyModel
+    def _sw_type_from_model(m):
+        if m is None:
+            return ""
+        try:
+            eens = getattr(m, "eens_study", None) or {}
+            if not isinstance(eens, dict):
+                return ""
+            # candidates: top-level eens, eens["study"], settings, engine, feeders
+            candidates = []
+            # 1) eens itself and eens["study"]
+            for d in (eens, eens.get("study") if isinstance(eens.get("study"), dict) else None):
+                if isinstance(d, dict):
+                    candidates.append(d)
+                    # nested settings
+                    st = d.get("settings")
+                    if isinstance(st, dict):
+                        candidates.append(st)
+                        # engine inside settings
+                        eng = st.get("engine")
+                        if isinstance(eng, dict):
+                            candidates.append(eng)
+                        # also settings may have switch_type directly
+            # 2) also explicitly check study.settings.engine
+            try:
+                sd = eens.get("study", {}) if isinstance(eens.get("study"), dict) else {}
+                st2 = sd.get("settings", {}) if isinstance(sd, dict) else {}
+                if isinstance(st2, dict):
+                    candidates.append(st2)
+                    eng2 = st2.get("engine")
+                    if isinstance(eng2, dict):
+                        candidates.append(eng2)
+            except Exception:
+                pass
+            # 3) check feeders[0].switch_type in study
+            try:
+                sd2 = eens.get("study", {}) if isinstance(eens.get("study"), dict) else eens
+                if isinstance(sd2, dict):
+                    for f in (sd2.get("feeders") or []):
+                        if isinstance(f, dict) and f.get("switch_type"):
+                            candidates.append(f)
+            except Exception:
+                pass
+            for d in candidates:
+                if not isinstance(d, dict):
+                    continue
+                v = d.get("switch_type")
+                if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
+                    return v.strip().lower()
+                # also check switchType camel?
+                v = d.get("switchType")
+                if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
+                    return v.strip().lower()
+        except Exception:
+            pass
+        return ""
+    def _has_eens(m):
+        try:
+            return bool(m and getattr(m, "has_eens_study", False))
+        except Exception:
+            try:
+                eens = getattr(m, "eens_study", None) or {}
+                if not isinstance(eens, dict):
+                    return False
+                st = eens.get("study") if isinstance(eens, dict) else None
+                return bool(st and (st.get("feeders") or st.get("settings")))
+            except Exception:
+                return False
+
+    if not has_recl and not has_sec and not has_sect:
         resp = QMessageBox.question(
             parent, "تمپلیت یافت نشد",
             "فایل‌های تمپلیت در ریشه پروژه یافت نشدند:\n"
@@ -287,7 +367,7 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
                 "Word (*.docx);;All (*.*)")
             if path and Path(path).is_file():
                 low = Path(path).name.lower()
-                if "سکسیونر" in low or "sectionalizer" in low or low == TEMPLATE_SEC.lower():
+                if "سکسیونر" in low or "سکشنالایزر" in low or "sectionalizer" in low or "disconnector" in low or low == TEMPLATE_SEC.lower():
                     templates[TEMPLATE_SEC] = Path(path)
                     has_sec = True
                 elif "ریکلووزر" in low or "recloser" in low or low == TEMPLATE_RECL.lower():
@@ -301,58 +381,31 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
         else:  # No -> generic report
             return (None, {}, {})
         rb_recl.setChecked(True)
-    elif selected_template == "sectionalizer" and has_sec:
+    elif selected_template == "sectionalizer" and (has_sec or has_sect):
+        rb_sec.setChecked(True)
+    elif selected_template == "disconnector" and has_sec:
         rb_sec.setChecked(True)
     elif selected_template == "recloser" and has_recl:
         rb_recl.setChecked(True)
     else:
         # auto: choose template based on actual switch_type of EENS study, not just existence
-        # Recloser study must use recloser template, sectionalizer/disconnector -> sectionalizer
-        def _sw_type_from_model(m):
-            if m is None:
-                return ""
-            try:
-                eens = getattr(m, "eens_study", None) or {}
-                if isinstance(eens, dict):
-                    # check settings and study.settings
-                    for d in (eens, eens.get("study") if isinstance(eens.get("study"), dict) else None):
-                        if not isinstance(d, dict):
-                            continue
-                        st = d.get("settings") if isinstance(d.get("settings"), dict) else None
-                        if isinstance(st, dict):
-                            v = st.get("switch_type")
-                            if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
-                                return v.strip().lower()
-                        v = d.get("switch_type")
-                        if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
-                            return v.strip().lower()
-                    # also check study.settings directly
-                    try:
-                        st2 = eens.get("study", {}).get("settings", {}) if isinstance(eens.get("study"), dict) else {}
-                        if isinstance(st2, dict):
-                            v = st2.get("switch_type")
-                            if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
-                                return v.strip().lower()
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            return ""
         try:
             sw_type = _sw_type_from_model(study_model)
-            is_eens = bool(study_model and getattr(study_model, "has_eens_study", False))
+            is_eens = _has_eens(study_model)
         except Exception:
             sw_type = ""
             is_eens = False
         if sw_type == "recloser" and has_recl:
             rb_recl.setChecked(True)
-        elif sw_type in ("sectionalizer", "disconnector") and has_sec:
+        elif sw_type in ("sectionalizer", "disconnector") and (has_sec or has_sect):
             rb_sec.setChecked(True)
-        elif is_eens and has_sec:
-            # fallback for old payloads without switch_type
+        elif is_eens and (has_sec or has_sect):
+            # fallback for old payloads without switch_type -> sectionalizer/disconnector template
             rb_sec.setChecked(True)
         elif has_recl:
             rb_recl.setChecked(True)
+        elif has_sec or has_sect:
+            rb_sec.setChecked(True)
         else:
             rb_auto.setChecked(True)
             rb_auto.setEnabled(False)
@@ -390,16 +443,47 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
         # keep hidden; no widget added
         pass
 
-    # Resolve current template path for preview variables
+    # Resolve current template path for preview variables — switch_type-aware for Auto
     def _current_template_path():
         if rb_recl.isChecked() and has_recl:
             return templates[TEMPLATE_RECL]
-        if rb_sec.isChecked() and has_sec:
-            return templates[TEMPLATE_SEC]
+        if rb_sec.isChecked() and (has_sec or has_sect):
+            # prefer dedicated sectionalizer if exists else disconnector
+            if has_sect and TEMPLATE_SECT in templates:
+                # if model says disconnector, use disconnector file; else use sectionalizer
+                sw = _sw_type_from_model(study_model)
+                if sw == "disconnector" and has_sec:
+                    return templates[TEMPLATE_SEC]
+                return templates[TEMPLATE_SECT]
+            if has_sec:
+                return templates[TEMPLATE_SEC]
+            if has_sect:
+                return templates[TEMPLATE_SECT]
+        if rb_auto.isChecked():
+            sw = _sw_type_from_model(study_model)
+            is_eens = _has_eens(study_model)
+            if sw == "recloser" and has_recl:
+                return templates[TEMPLATE_RECL]
+            if sw in ("sectionalizer", "disconnector") and (has_sec or has_sect):
+                if has_sect and TEMPLATE_SECT in templates and sw == "sectionalizer":
+                    return templates[TEMPLATE_SECT]
+                return templates.get(TEMPLATE_SEC) or templates.get(TEMPLATE_SECT)
+            if is_eens and (has_sec or has_sect):
+                if has_sect:
+                    return templates[TEMPLATE_SECT]
+                return templates[TEMPLATE_SEC]
+            if has_recl:
+                return templates[TEMPLATE_RECL]
+            if has_sec:
+                return templates[TEMPLATE_SEC]
+            if has_sect:
+                return templates[TEMPLATE_SECT]
         if has_recl:
             return templates[TEMPLATE_RECL]
         if has_sec:
             return templates[TEMPLATE_SEC]
+        if has_sect:
+            return templates[TEMPLATE_SECT]
         return None
 
     # Variables form inside scroll
@@ -416,6 +500,10 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     extra_edits: dict[str, QLineEdit] = {}
     extra_buttons: dict[str, QPushButton] = {}
 
+    # Persistent store for user edits across template switches
+    # Initialized with defaults so first rebuild can fallback to it
+    live_cache: dict[str, str] = dict(defaults)
+
     # Pre-collect variables for current template
     cur_path = _current_template_path()
     var_names: list[str] = []
@@ -428,17 +516,73 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     if not var_names:
         var_names = sorted(set(defaults.keys()))
 
+    # Helper to get value for a var key with synonym fallback
+    def _value_for_key(key: str) -> str:
+        # direct live_cache — even empty string is preserved to honor user deletion
+        if key in live_cache:
+            # if live_cache has this exact key, return it (may be empty to indicate user cleared)
+            # but if it is empty and we have a synonym with non-empty, prefer synonym only if this key was never explicitly edited?
+            # We distinguish: if live_cache[key]=="" because defaults had no value, and synonym has value, use synonym.
+            # Otherwise respect the empty.
+            val = live_cache[key]
+            if str(val).strip() != "":
+                return str(val)
+            # empty — check if this key was originally from defaults with empty: fallback to synonym if available
+            # Determine if we should fallback: if key was initially empty in defaults/live_cache, synonym may provide a value
+            # So attempt synonym before returning empty
+            try:
+                from ...reporting.docx_template import _canonical
+                ck = _canonical(key)
+                for lk, lv in live_cache.items():
+                    if _canonical(lk) == ck and str(lv).strip() != "":
+                        return str(lv)
+                # PD generic fallback
+                if key.strip().startswith("PD-"):
+                    for lk2, lv2 in live_cache.items():
+                        if str(lk2).strip().startswith("PD-") and str(lv2).strip() != "":
+                            return str(lv2)
+            except Exception:
+                pass
+            return str(val)
+        # synonym via canonical (key not in live_cache)
+        try:
+            from ...reporting.docx_template import _canonical
+            ck = _canonical(key)
+            for lk, lv in live_cache.items():
+                if _canonical(lk) == ck and str(lv).strip() != "":
+                    return str(lv)
+            for dk, dv in defaults.items():
+                if _canonical(dk) == ck and str(dv).strip() != "":
+                    return str(dv)
+            # PD generic: any PD-... shares value
+            if key.strip().startswith("PD-"):
+                for lk2, lv2 in live_cache.items():
+                    if str(lk2).strip().startswith("PD-") and str(lv2).strip() != "":
+                        return str(lv2)
+                for dk2, dv2 in defaults.items():
+                    if str(dk2).strip().startswith("PD-") and str(dv2).strip() != "":
+                        return str(dv2)
+        except Exception:
+            pass
+        # direct defaults
+        if key in defaults:
+            return str(defaults[key])
+        return ""
+
     # Build form rows
     # Use Persian labels directly as var names
     for key in var_names:
         le = QLineEdit()
-        le.setText(str(defaults.get(key, "")))
+        le.setText(_value_for_key(key))
         le.setPlaceholderText(f"مقدار {key}")
-        # For date/number fields, keep simple
         edits[key] = le
         lbl = QLabel(key + " :")
         lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
         form_lay.addRow(lbl, le)
+    # snapshot initial values into live_cache (in case _value_for_key used defaults, ensure live_cache reflects what user sees)
+    for k, le in edits.items():
+        if k not in live_cache or live_cache[k] == "":
+            live_cache[k] = le.text()
 
     # Extra images pickers
     img_group = QGroupBox("تصاویر اختیاری — منحنی‌های حفاظتی (TCC)")
@@ -477,8 +621,7 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     bbox.rejected.connect(dlg.reject)
     lay.addWidget(bbox)
 
-    # When template choice changes, rebuild var form? Simple: reload variables on accept
-    # But also update on radio toggle
+    # When template choice changes, rebuild var form — preserve edits
     def _rebuild_vars():
         nonlocal var_names
         new_path = _current_template_path()
@@ -490,6 +633,18 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
             return
         if set(new_vars) == set(var_names):
             return
+        # Snapshot current edits into live_cache before clearing (preserve user typing)
+        for k, le in list(edits.items()):
+            live_cache[k] = le.text()
+            # also store canonical synonyms to help cross-template mapping (e.g., موقعیت <-> موقعیت نصب)
+            try:
+                from ...reporting.docx_template import _canonical
+                ck = _canonical(k)
+                # ensure canonical entry also updated
+                if ck != k:
+                    live_cache[ck] = le.text()
+            except Exception:
+                pass
         # Clear form
         while form_lay.rowCount() > 0:
             form_lay.removeRow(0)
@@ -497,12 +652,18 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
         var_names = new_vars
         for key in var_names:
             le = QLineEdit()
-            le.setText(str(defaults.get(key, "")))
+            le.setText(_value_for_key(key))
             le.setPlaceholderText(f"مقدار {key}")
             edits[key] = le
             lbl = QLabel(key + " :")
             lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
             form_lay.addRow(lbl, le)
+        # keep live_cache in sync with new defaults visible
+        for k, le in edits.items():
+            if k not in live_cache or live_cache[k] == "":
+                # if still empty but we have a visible value, keep it
+                if le.text():
+                    live_cache[k] = le.text()
 
     rb_recl.toggled.connect(lambda checked: _rebuild_vars() if checked else None)
     rb_sec.toggled.connect(lambda checked: _rebuild_vars() if checked else None)
@@ -518,40 +679,24 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
 
     vars_dict = {k: e.text().strip() for k, e in edits.items()}
     vars_dict = {k: v for k, v in vars_dict.items() if v != ""}
+    # Merge also any live_cache entries for synonyms that user typed but current form does not show?
+    # No — final output should only contain vars for the selected template. But ensure synonyms are not lost for canonical mapping:
+    # e.g., if sectionalizer template has موقعیت نصب but user had typed موقعیت in live_cache, we already copy via _value_for_key, so visible field already has it.
     # Store technical lookup key separately (English), keep display name as typed (Persian)
     if feeder_combo is not None:
         sel = feeder_combo.currentText().strip() if feeder_combo.currentText() else ""
         if sel:
             vars_dict["__main_feeder_key"] = sel
-            # Also store under a Persian key for debugging? Keep
             vars_dict["_main_feeder_key"] = sel
-    # Ensure dedup synonyms are unified already via _canonical filter in extract_variables,
-    # but if dialog returned canonical, we also ensure synonyms are not duplicated separately.
-    # _auto_fill will expand, so leaving canonical is fine.
 
     extra_images: dict[str, str] = {}
-    # Map friendly placeholders to actual placeholder texts expected by template engine
-    # The engine expects keys like "منحنی توسط کاربر بارگذاری می شود" (single) but we have two
-    # We'll map first to that key, second to same with disambiguation via extra_images dict
-    # Simpler: if user picked image for either curve, use it for generic placeholder;
-    # the second curve will overwrite if needed — we handle sequential placeholders differently.
-    # For now, collect any picked images and let engine try to match by order.
     picked = []
     for placeholder, le in extra_edits.items():
         p = le.text().strip()
         if p:
             picked.append(p)
-    # Map to generic keys in order of appearance in document:
-    # For recloser: two "منحنی توسط کاربر بارگذاری می شود" placeholders (Fig3, Fig4)
-    # For sectionalizer: two "تصویر توسط کاربر بارگذاری می شود" (Fig3,4)
-    # We'll pass list via extra_images with special keys
     if picked:
-        # Use ordered mapping: first picked -> first generic placeholder, etc.
-        # Engine will attempt to use extra_images["منحنی توسط کاربر بارگذاری می شود"] etc.
-        # For disambiguation, assign by index
         generic_keys = ["منحنی توسط کاربر بارگذاری می شود", "تصویر توسط کاربر بارگذاری می شود"]
-        # Assign both curves to same generic but engine will use first; to support two images we need index
-        # We'll store extra_images with suffix _1, _2 and engine will be updated to handle
         for idx, path in enumerate(picked):
             if idx == 0:
                 extra_images["منحنی توسط کاربر بارگذاری می شود"] = path

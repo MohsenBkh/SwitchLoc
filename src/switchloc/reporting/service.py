@@ -50,14 +50,18 @@ def _find_template_files() -> dict[str, Path]:
         s = s.translate(_PERSIAN_FIX)
         s = unicodedata.normalize("NFC", s)
         return s
-    names = ["نمونه دفترچه مطالعات ریکلوزر.docx", "نمونه دفترچه مطالعات سکسیونر.docx"]
+    # Three switch types: recloser (ریکلوزر), sectionalizer (سکشنالایزر), disconnector (سکسیونر)
+    # Repo currently ships two files; third is optional (fallback to سکسیونر for sectionalizer)
+    names = ["نمونه دفترچه مطالعات ریکلوزر.docx", "نمونه دفترچه مطالعات سکسیونر.docx", "نمونه دفترچه مطالعات سکشنالایزر.docx"]
     norm_names = { _norm_name(n): n for n in names }
-    # Also accept substring matching for robustness (ریکلوزر / سکسیونر)
+    # Also accept substring matching for robustness (ریکلوزر / سکسیونر / سکشنالایزر)
     substrings = {
         "ریکلوزر": "نمونه دفترچه مطالعات ریکلوزر.docx",
         "سکسیونر": "نمونه دفترچه مطالعات سکسیونر.docx",
+        "سکشنالایزر": "نمونه دفترچه مطالعات سکشنالایزر.docx",
         "recloser": "نمونه دفترچه مطالعات ریکلوزر.docx",
-        "sectionalizer": "نمونه دفترچه مطالعات سکسیونر.docx",
+        "sectionalizer": "نمونه دفترچه مطالعات سکشنالایزر.docx",
+        "disconnector": "نمونه دفترچه مطالعات سکسیونر.docx",
         "سکسیونر": "نمونه دفترچه مطالعات سکسیونر.docx",
     }
     candidates: list[Path] = []
@@ -237,35 +241,56 @@ def _find_template_files() -> dict[str, Path]:
                     break
         except Exception:
             pass
+    # Fallback: if dedicated sectionalizer template not found but disconnector exists, alias it
+    if "نمونه دفترچه مطالعات سکشنالایزر.docx" not in out and "نمونه دفترچه مطالعات سکسیونر.docx" in out:
+        out["نمونه دفترچه مطالعات سکشنالایزر.docx"] = out["نمونه دفترچه مطالعات سکسیونر.docx"]
+    return out
+
+
 def _switch_type_from_eens(eens_study: dict | None) -> str:
     """Return 'recloser' | 'sectionalizer' | 'disconnector' | '' from EENS payload.
-    The payload is the dict stored under KV_KEY 'sectionalizer_study':
-      {settings: {switch_type: ...}, study: {settings: {switch_type: ...}, feeders: [...]}, ...}
-    Recloser must use the recloser template, all others use sectionalizer template.
+    Robustly checks multiple nested locations including engine and feeders.
     """
     if not eens_study or not isinstance(eens_study, dict):
         return ""
-    # check common locations
+    candidates = []
+    # collect dicts to search
     for d in (eens_study, eens_study.get("study") if isinstance(eens_study.get("study"), dict) else None):
-        if not isinstance(d, dict):
-            continue
-        st = d.get("settings") if isinstance(d.get("settings"), dict) else None
-        if isinstance(st, dict):
-            v = st.get("switch_type")
-            if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
-                return v.strip().lower()
-        v = d.get("switch_type")
-        if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
-            return v.strip().lower()
-    # fallback: check top-level study.settings
+        if isinstance(d, dict):
+            candidates.append(d)
+            st = d.get("settings")
+            if isinstance(st, dict):
+                candidates.append(st)
+                eng = st.get("engine")
+                if isinstance(eng, dict):
+                    candidates.append(eng)
+    # explicitly also check study.settings and its engine
     try:
-        st2 = eens_study.get("study", {}).get("settings", {}) if isinstance(eens_study.get("study"), dict) else {}
-        if isinstance(st2, dict):
-            v = st2.get("switch_type")
-            if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
-                return v.strip().lower()
+        sd = eens_study.get("study", {}) if isinstance(eens_study.get("study"), dict) else {}
+        if isinstance(sd, dict):
+            st2 = sd.get("settings", {}) if isinstance(sd.get("settings"), dict) else {}
+            if isinstance(st2, dict):
+                candidates.append(st2)
+                eng2 = st2.get("engine")
+                if isinstance(eng2, dict):
+                    candidates.append(eng2)
+            # feeders switch_type
+            for f in (sd.get("feeders") or []):
+                if isinstance(f, dict) and f.get("switch_type"):
+                    candidates.append(f)
+            # also top-level feeders if payload not nested
+            for f in (eens_study.get("feeders") or []):
+                if isinstance(f, dict) and f.get("switch_type"):
+                    candidates.append(f)
     except Exception:
         pass
+    for d in candidates:
+        if not isinstance(d, dict):
+            continue
+        for key in ("switch_type", "switchType"):
+            v = d.get(key)
+            if isinstance(v, str) and v.strip().lower() in ("recloser", "sectionalizer", "disconnector"):
+                return v.strip().lower()
     return ""
 
 
@@ -427,10 +452,15 @@ class ReportService:
                     cand_sec = found.get("نمونه دفترچه مطالعات سکسیونر.docx")
                     if cand_recl or cand_sec:
                         sw = _switch_type_from_eens(m.eens_study if hasattr(m, "eens_study") else {})
-                        # recloser -> recloser template, sectionalizer/disconnector -> sectionalizer template
+                        # also check for sectionalizer template (سکشنالایزر) if exists
+                        cand_sect = found.get("نمونه دفترچه مطالعات سکشنالایزر.docx") or cand_sec
                         if sw == "recloser" and cand_recl is not None:
                             tmpl = str(cand_recl.resolve())
-                        elif sw in ("sectionalizer", "disconnector") and cand_sec is not None:
+                        elif sw == "sectionalizer" and cand_sect is not None:
+                            # prefer dedicated سکشنالایزر template, fallback to سکسیونر
+                            sec_path = found.get("نمونه دفترچه مطالعات سکشنالایزر.docx")
+                            tmpl = str((sec_path or cand_sec).resolve()) if (sec_path or cand_sec) else None
+                        elif sw == "disconnector" and cand_sec is not None:
                             tmpl = str(cand_sec.resolve())
                         elif m.has_eens_study and cand_sec is not None:
                             # fallback for old payloads without switch_type -> sectionalizer
