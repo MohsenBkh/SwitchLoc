@@ -104,6 +104,38 @@ class ProjectStore:
         if self.schema_version() < SCHEMA_VERSION:
             self.conn.execute(f"PRAGMA user_version = {int(SCHEMA_VERSION)}")
         self.conn.commit()
+        # --- stable file size: opportunistic auto_vacuum upgrade (no schema bump) ---
+        # Old project files were created with auto_vacuum=0 (NONE) so REPLACE/DELETE
+        # left freelist that never shrank: 20 -> 32 MB on every calculate+close.
+        # New files already get auto_vacuum=incremental via SCHEMA_SQL; upgrade
+        # existing files once on first open after the update.
+        try:
+            av = int(self.conn.execute("PRAGMA auto_vacuum").fetchone()[0] or 0)
+            if av != 2 and self.path.exists() and self.path.stat().st_size > 0:
+                # Only VACUUM if file has content and is not already incremental
+                try:
+                    self.conn.execute("PRAGMA auto_vacuum = incremental")
+                    self.conn.execute("VACUUM")
+                    _log.info("auto_vacuum -> incremental (VACUUM) for %s", self.path.name)
+                except Exception as exc2:
+                    _log.debug("auto_vacuum upgrade skipped: %s", exc2)
+        except Exception:
+            pass
+        # reclaim freelist left by previous REPLACE/DELETE cycles (20->32 MB bug)
+        try:
+            self._vacuum_if_needed(force=False)
+        except Exception:
+            pass
+        # immediately cap history for already-bloated files (e.g. 20->32 MB)
+        # so reopening alone shrinks the freelist without needing another calculate
+        try:
+            if self.path.exists() and self.path.stat().st_size > 0:
+                pruned = self._prune_old_study_runs(keep=3)
+                if pruned:
+                    self.conn.commit()
+                    self._vacuum_if_needed(force=True)
+        except Exception:
+            pass
 
     def _backup(self, tag: str) -> None:
         """Copy the project next to itself before a destructive upgrade."""
@@ -118,8 +150,19 @@ class ProjectStore:
             _log.warning("could not back up %s: %s", self.path, exc)
 
     def close(self):
-        self.conn.commit()
-        self.conn.close()
+        try:
+            self.conn.commit()
+            # checkpoint WAL so -wal/-shm do not accumulate beside the .sqlite
+            try:
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
+            try:
+                self._vacuum_if_needed()
+            except Exception:
+                pass
+        finally:
+            self.conn.close()
 
     # ------------------------------------------------------------------
     def save_network(self, net: CanonicalNetwork, issues: IssueLog,
@@ -132,16 +175,117 @@ class ProjectStore:
             self.conn.rollback()
             raise
 
+    # child tables that are scoped to a study_run — deleting them before
+    # re-inserting makes a repeated import/calculate idempotent and prevents
+    # the 20 MB -> 32 MB growth on every close/reopen (F5 Gerami).
+    _STUDY_RUN_CHILDREN = (
+        "source_record", "layer_mapping", "crs_definition",
+        "feeder", "substation", "node", "branch", "branch_segment",
+        "switch_dev", "transformer", "load_pt", "validation_issue",
+        "tie_connection",
+    )
+
+    def _delete_study_run_children(self, run_id: str) -> None:
+        c = self.conn
+        for _tbl in self._STUDY_RUN_CHILDREN:
+            try:
+                c.execute(f"DELETE FROM {_tbl} WHERE run_id=?", (run_id,))
+            except sqlite3.OperationalError:
+                pass
+
+    def _prune_old_study_runs(self, keep: int = 3) -> int:
+        """Keep at most *keep* newest study_runs; delete the rest (with children)."""
+        cur = self.conn
+        try:
+            rows = cur.execute("SELECT id FROM study_run ORDER BY started_at DESC").fetchall()
+        except sqlite3.OperationalError:
+            return 0
+        if len(rows) <= keep:
+            return 0
+        pruned = 0
+        for (old_id,) in rows[keep:]:
+            self._delete_study_run_children(old_id)
+            # also drop orphaned topology linked to the pruned run
+            try:
+                topo_ids = [r[0] for r in cur.execute(
+                    "SELECT id FROM topo_run WHERE run_id=?", (old_id,)).fetchall()]
+                for tid in topo_ids:
+                    for _t in ("topo_zone_node", "topo_zone_edge", "topo_zone", "topo_boundary"):
+                        try:
+                            cur.execute(f"DELETE FROM {_t} WHERE topo_run_id=?", (tid,))
+                        except sqlite3.OperationalError:
+                            pass
+                    cur.execute("DELETE FROM scenario_log WHERE topo_run_id=?", (tid,))
+                    cur.execute("DELETE FROM topo_run WHERE id=?", (tid,))
+            except sqlite3.OperationalError:
+                pass
+            cur.execute("DELETE FROM study_run WHERE id=?", (old_id,))
+            pruned += 1
+        if pruned:
+            _log.info("pruned %d old study_run(s), kept %d newest", pruned, keep)
+        return pruned
+
+    def _vacuum_if_needed(self, force: bool = False) -> None:
+        """Reclaim freelist left by REPLACE/DELETE so the file does not grow
+        monotonically (commercial tools use the same reclamation)."""
+        try:
+            freelist = int(self.conn.execute("PRAGMA freelist_count").fetchone()[0] or 0)
+            page_size = int(self.conn.execute("PRAGMA page_size").fetchone()[0] or 4096)
+            # also checkpoint WAL so -wal/-shm do not linger
+            try:
+                self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass
+            if force or (freelist * page_size > 512 * 1024):  # >512 KB free
+                av = int(self.conn.execute("PRAGMA auto_vacuum").fetchone()[0] or 0)
+                if av == 2:  # incremental
+                    self.conn.execute("PRAGMA incremental_vacuum")
+                elif force or (freelist * page_size > 2 * 1024 * 1024):
+                    # fallback for legacy DBs still on auto_vacuum=0 until V3 VACUUM
+                    self.conn.execute("VACUUM")
+        except Exception as exc:
+            _log.debug("vacuum skipped: %s", exc)
+
     def _save_network(self, net: CanonicalNetwork, issues: IssueLog,
                       run: StudyRunMeta) -> str:
-        run_id = run.algo_version + "-" + run.started_at.replace(":", "").replace("-", "")
-        import uuid as _u
-        run_id = _u.uuid5(_u.NAMESPACE_URL, run_id + "|" + net.project_name +
-                          "|" + json.dumps(run.input_hashes, sort_keys=True))
-        run_id = str(run_id)
+        # Deterministic run_id: identical inputs/settings -> identical id.
+        # The old code mixed started_at (wall clock) into the UUID, so every
+        # "calculate -> close -> reopen -> calculate" created a brand-new
+        # study_run row plus thousands of branch_segment/layer_mapping rows and
+        # the file grew 20 -> 32 MB.  Commercial software keeps a stable size
+        # by replacing the same logical run.
+        settings_json = json.dumps(run.settings_snapshot, ensure_ascii=False, sort_keys=True)
+        hashes_json = json.dumps(run.input_hashes, ensure_ascii=False, sort_keys=True)
+        run_id = str(stable_id("study_run", net.project_name, hashes_json,
+                                settings_json, run.algo_version, run.tav_revision))
         c = self.conn
+        # Clean legacy duplicates from before the deterministic-id fix:
+        # old files stored timestamp-based UUIDs, so the same logical GIS now
+        # gets a different id and would coexist as a duplicate. Remove any
+        # existing run with the same logical content but different id.
+        try:
+            for (oid, o_hashes_j, o_settings_j, o_proj, o_algo) in c.execute(
+                "SELECT id, input_hashes_json, settings_json, project, algo_version FROM study_run"
+            ).fetchall():
+                if oid == run_id:
+                    continue
+                if o_proj != net.project_name or o_algo != run.algo_version:
+                    continue
+                try:
+                    if json.loads(o_hashes_j) == run.input_hashes and json.loads(o_settings_j) == run.settings_snapshot:
+                        self._delete_study_run_children(oid)
+                        c.execute("DELETE FROM study_run WHERE id=?", (oid,))
+                        _log.info("removed legacy duplicate study_run %s (same GIS)", oid[:8])
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        # Make the write idempotent: if this logical run already exists (user
+        # pressed "calculate" again with the same GIS/excel), wipe its old
+        # children first so INSERTs do not accumulate.
+        self._delete_study_run_children(run_id)
         c.execute(
-            "INSERT INTO study_run VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO study_run VALUES (?,?,?,?,?,?,?,?,?)",
             (run_id, run.project_name, run.started_at, run.user, run.algo_version,
              run.tav_revision, json.dumps(run.settings_snapshot, ensure_ascii=False),
              json.dumps(run.input_hashes, ensure_ascii=False),
@@ -229,7 +373,19 @@ class ProjectStore:
                        isu.record_id, isu.field, isu.current_value,
                        isu.suggestion_fa, isu.impact_fa, isu.status,
                        json.dumps(isu.meta, ensure_ascii=False, default=str)))
+        # keep only a few recent logical runs so the file does not grow
+        # forever when the user imports a *different* GIS (new hashes → new id)
+        pruned = 0
+        try:
+            pruned = self._prune_old_study_runs(keep=3)
+        except Exception:
+            pass
         self.conn.commit()
+        try:
+            # after pruning we have freelist to reclaim; force incremental
+            self._vacuum_if_needed(force=pruned > 0)
+        except Exception:
+            pass
         return run_id
 
     # ------------------------------------------------------------------
@@ -413,6 +569,11 @@ class ProjectStore:
             c.execute("INSERT OR REPLACE INTO tie_connection VALUES (?,?,?,?,?,?,?)",
                       (t.id, source_run_id, t.feeder_a, t.feeder_b,
                        t.switch_id, int(t.automation_capable), t.status))
+        # scenario_log is append-only (AUTOINCREMENT) -> repeated topology with
+        # identical settings (same topo_run_id) would duplicate rows and bloat.
+        # Make it idempotent like the other topology tables.
+        if scenarios:
+            c.execute("DELETE FROM scenario_log WHERE topo_run_id=?", (topo_run_id,))
         for sc in _checkpointed(scenarios or []):
             c.execute("INSERT INTO scenario_log (topo_run_id, name, note,"
                       " actions_json, summary_json, created_at, user)"
@@ -422,6 +583,10 @@ class ProjectStore:
                        _json.dumps(sc.get("summary", {}), ensure_ascii=False),
                        created_at, user))
         self.conn.commit()
+        try:
+            self._vacuum_if_needed()
+        except Exception:
+            pass
         return topo_run_id
 
     def list_topo_runs(self) -> list[dict]:
@@ -484,6 +649,10 @@ class ProjectStore:
                  f.r_minutes_nonzero, f.energy_kwh,
                  _json.dumps(f.class_counts or {}, ensure_ascii=False)))
         self.conn.commit()
+        try:
+            self._vacuum_if_needed()
+        except Exception:
+            pass
         return outage_run_id
 
     def list_outage_runs(self) -> list[dict]:
@@ -664,6 +833,10 @@ class ProjectStore:
                  r["e2_before_kwh"], r["e1_after_kwh"], r["ce_rials"],
                  r["cn_rials"], r["ce_over_cn"], int(r["selected"])))
         self.conn.commit()
+        try:
+            self._vacuum_if_needed()
+        except Exception:
+            pass
         return placement_run_id
 
     def list_placement_runs(self) -> list[dict]:
@@ -915,6 +1088,12 @@ class ProjectStore:
              json.dumps(value, ensure_ascii=False, default=str),
              _dt.now().isoformat(timespec="seconds"), user))
         self.conn.commit()
+        # large KV blobs (eens_study, switch_placement ~ MBs) leave freelist
+        # on every REPLACE — reclaim it so file stays stable like commercial tools
+        try:
+            self._vacuum_if_needed()
+        except Exception:
+            pass
 
     def get_kv(self, key: str, default=None):
         """Read one JSON value; missing/corrupt → ``default``."""
@@ -934,4 +1113,13 @@ class ProjectStore:
 
     def delete_kv(self, key: str) -> None:
         self.conn.execute("DELETE FROM project_kv WHERE key=?", (str(key),))
+        self.conn.commit()
+        try:
+            self._vacuum_if_needed()
+        except Exception:
+            pass
+
+    # Small helper for the UI / tests to inspect file health
+    def vacuum(self, force: bool = True) -> None:
+        self._vacuum_if_needed(force=force)
         self.conn.commit()

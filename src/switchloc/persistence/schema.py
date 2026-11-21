@@ -21,6 +21,7 @@ MIGRATIONS: dict[int, str] = {
 }
 
 SCHEMA_SQL = """
+PRAGMA auto_vacuum = incremental;
 PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS study_run (
