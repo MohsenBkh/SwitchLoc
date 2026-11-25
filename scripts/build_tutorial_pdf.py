@@ -163,7 +163,7 @@ template='''#set page(paper: "a4", margin: (x: 20mm, y: 20mm), footer: align(cen
 #set par(justify: true, leading: 0.7em)
 #align(center)[#text(size: 19pt, weight: "bold", fill: rgb("#123a59"))[راهنمای آموزشی مهندسی SwitchLoc]]
 #align(center)[#text(size: 13pt)[تحلیل قابلیت اطمینان و جایابی تجهیزات شبکه توزیع]]
-#align(center)[#text(size: 10pt)[متن آموزشی و مطالعه موردی ـ نسخه بازبینی‌شده ۱٫۲۳]]
+#align(center)[#text(size: 10pt)[متن آموزشی و مطالعه موردی ـ نسخه ۱٫۲۸٫۰]]
 #pagebreak()
 '''
 for e in math:
