@@ -1420,6 +1420,48 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
 
     btn_review_outages.clicked.connect(lambda *_: review_outage_locations())
 
+    def ensure_reliability_feeder_loads() -> bool:
+        """Require active-power inputs before reliability-index analysis.
+
+        Outage import also calculates SAIDI/SAIFI. Without feeder P, the
+        engine can only produce a device-based lower bound, which is not a
+        sound basis for feeder ranking. Reuse Engineering settings to collect
+        missing P values, then recheck before starting either outage workflow.
+        """
+        from ...topology.tracing import feeder_id
+
+        active_keys = list(study_feeder_keys())
+
+        def missing_p():
+            available = _feeder_load_kw(state)
+            return [key for key in active_keys
+                    if feeder_id(key) not in available]
+
+        missing = missing_p()
+        if not missing:
+            return True
+        answer = QMessageBox.question(
+            win, "بار اکتیو فیدرها برای شاخص قابلیت اطمینان",
+            "برای محاسبهٔ قابل اتکای SAIDI/SAIFI باید بار اکتیو P هر فیدر "
+            "وارد شود. فعلاً برای این فیدرها P ثبت نشده است:\n\n"
+            + "، ".join(missing)
+            + "\n\nاکنون تنظیمات مهندسی را باز می‌کنید تا P را وارد کنید؟ "
+              "(برای خود شاخص‌ها Q لازم نیست.)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        open_settings()
+        missing = missing_p()
+        if missing:
+            QMessageBox.warning(
+                win, "بار اکتیو ناقص است",
+                "تحلیل خاموشی شروع نشد؛ برای محاسبهٔ قابل اتکای شاخص‌ها، "
+                "P بزرگ‌تر از صفر را برای همهٔ فیدرهای دامنه وارد کنید:\n\n"
+                + "، ".join(missing))
+            return False
+        return True
+
     def do_outage_import() -> None:
         """Phase 3 on the open project: read → classify → λ/r → persist."""
         if not state.get("db"):
@@ -1431,6 +1473,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         if not scope_is_valid():
             QMessageBox.warning(win, "Study scope",
                                 "برای تحلیل محدود، دست‌کم یک فیدر را انتخاب کنید.")
+            return
+        if not ensure_reliability_feeder_loads():
             return
         path, _ = QFileDialog.getOpenFileName(
             win, "Select the outage list workbook (Excel)", "",
@@ -1505,6 +1549,8 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
         if not scope_is_valid():
             QMessageBox.warning(win, "Study scope",
                                 "برای تحلیل محدود، دست‌کم یک فیدر را انتخاب کنید.")
+            return
+        if not ensure_reliability_feeder_loads():
             return
         active_keys = set(study_feeder_keys())
         files = {k: v for k, v in
@@ -1825,11 +1871,9 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             def _in_active(name) -> bool:
                 return any(_same_feeder(name, a) for a in active_set)
 
+            # Keep the full load map available to the dialog: bulk import and
+            # scoped edits must preserve values for feeders outside this study.
             load_model = dict(state.get("load_model") or {})
-            if state.get("scope"):
-                load_model["feeder_pq"] = {
-                    k: v for k, v in (load_model.get("feeder_pq") or {}).items()
-                    if _in_active(k)}
             dlg = make_settings_dialog(win, active_keys, {
                 "load_model": load_model,
                 "capacity_rows": [r for r in (state.get("capacity_rows") or [])

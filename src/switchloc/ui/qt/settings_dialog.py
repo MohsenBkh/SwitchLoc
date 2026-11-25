@@ -19,6 +19,9 @@ testable).
 """
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
 from ...reliability.load_model import (DEFAULT_LOADING_FACTOR,
                                        DEFAULT_SUBSTITUTE_FACTOR, LEVELS,
                                        LEVEL_FA, LEVEL_SCALED)
@@ -26,6 +29,17 @@ from .main_window import _fmt_exc, _write_log
 
 CAPACITY_COLUMNS = ("Feeder", "Nominal kW", "Peak kW (خودکار از مدل بار)",
                     "Emergency kW", "Note")
+
+
+def _bundled_feeder_load_file() -> str:
+    """Locate the supplied master workbook in source and frozen builds."""
+    candidates = []
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root:
+        candidates.append(Path(frozen_root) / "Feeders Loads.xlsx")
+    candidates.extend((Path(__file__).resolve().parents[4] / "Feeders Loads.xlsx",
+                       Path.cwd() / "Feeders Loads.xlsx"))
+    return str(next((p for p in candidates if p.is_file()), Path.cwd()))
 
 
 def default_capacity_rows(feeder_keys) -> list[dict]:
@@ -85,8 +99,9 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
     """
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import (QComboBox, QDialog, QDialogButtonBox,
-                                   QDoubleSpinBox, QFormLayout, QHBoxLayout,
-                                   QHeaderView, QLabel, QLineEdit, QTableWidget,
+                                   QDoubleSpinBox, QFileDialog, QFormLayout,
+                                   QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                                   QMessageBox, QPushButton, QTableWidget,
                                    QTableWidgetItem, QTabWidget, QVBoxLayout,
                                    QWidget)
     from .widgets import (EXPLAIN_QSS, fill_table, make_explain_label,
@@ -127,6 +142,17 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
 
     # -- 1b) Load Scaling — ورودی P/Q هر فیدر (روش جدید کاربر) --------------
     pq_cur = dict((cur.get("load_model", {}) or {}).get("feeder_pq") or {})
+    # Keep the complete project-wide map here, including feeders outside the
+    # current study scope. The visible table is scoped, but imports are not.
+    all_feeder_pq = {str(k): dict(v or {}) for k, v in pq_cur.items()}
+    from ...topology.tracing import same_feeder
+
+    def _matching_saved_key(mapping, feeder):
+        if feeder in mapping:
+            return feeder
+        hits = [key for key in mapping if same_feeder(key, feeder)]
+        return hits[0] if len(hits) == 1 else None
+
     s_rated = dict(feeder_s_rated or {})
     pq_headers = ["Feeder", "P_load (kW)*", "Q_load (kVAr)*",
                   "ΣS_rated (kVA)", "S_load (kVA)", "cos φ", "K"]
@@ -201,6 +227,60 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
         "P هر ترانس = K × S_rated × cos φ را محاسبه می‌کند. ستون‌های "
         "ستاره‌دار الزامی‌اند؛ فیدر بدون ورودی صفر می‌گیرد و هشدار صریح "
         "می‌سازد."))
+    btn_import_feeder_loads = QPushButton("بارگذاری گروهی بار فیدرها از Excel…")
+
+    def _import_feeder_loads():
+        path, _ = QFileDialog.getOpenFileName(
+            dlg, "انتخاب فایل بار فیدرها", _bundled_feeder_load_file(),
+            "Excel workbook (*.xlsx *.xlsm)")
+        if not path:
+            return
+        try:
+            from ...reliability.feeder_load_import import read_feeder_load_workbook
+            imported = read_feeder_load_workbook(path)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(
+                dlg, "ورود بار فیدرها ناموفق بود",
+                f"فایل خوانده نشد یا ساختار ستون‌ها معتبر نیست:\n{exc}")
+            return
+
+        for feeder, values in imported.feeder_pq.items():
+            old_key = _matching_saved_key(all_feeder_pq, feeder)
+            if old_key is not None:
+                del all_feeder_pq[old_key]
+            all_feeder_pq[feeder] = dict(values)
+
+        # Update the visible (study-scope) rows; all other imported feeder
+        # values remain in all_feeder_pq and are saved with the project too.
+        for i, feeder in enumerate(feeder_keys):
+            values = _lookup_by_feeder(all_feeder_pq, feeder)
+            if values is None:
+                continue
+            busy["on"] = True
+            try:
+                pq_table.item(i, 1).setText(
+                    f"{float(values.get('p_kw') or 0):g}")
+                pq_table.item(i, 2).setText(
+                    f"{float(values.get('q_kvar') or 0):g}")
+            finally:
+                busy["on"] = False
+            _pq_calc_row(i)
+
+        msg = (f"مقادیر {len(imported.feeder_pq)} فیدر از فایل خوانده شد "
+               "(MW/MVAr به kW/kvar تبدیل شد) و برای همهٔ فیدرها در مدل "
+               "پروژه نگهداری می‌شود؛ فیدرهای خارج از مطالعهٔ فعلی نیز حذف "
+               "نمی‌شوند.")
+        if imported.warnings:
+            msg += "\n\nموارد نیازمند بررسی (حداکثر ۱۰ مورد):\n• " + "\n• ".join(
+                imported.warnings[:10])
+            if len(imported.warnings) > 10:
+                msg += f"\n• و {len(imported.warnings) - 10} مورد دیگر"
+            QMessageBox.warning(dlg, "ورود بار با هشدار", msg)
+        else:
+            QMessageBox.information(dlg, "ورود بار فیدرها", msg)
+
+    btn_import_feeder_loads.clicked.connect(_import_feeder_loads)
+    f1.addRow(btn_import_feeder_loads)
     f1.addRow(pq_table)
     tabs.addTab(page1, "Load model")
 
@@ -332,8 +412,9 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
         def months(text):
             return [p.strip() for p in (text or "").split(",")
                     if p.strip()]
-        # Load Scaling P/Q — فقط ردیف‌هایی که ورودی دارند (عدد > 0)
-        feeder_pq = {}
+        # Preserve project-wide/imported entries, then apply the visible
+        # rows (manual edits retain precedence for feeders in this study).
+        feeder_pq = {str(k): dict(v or {}) for k, v in all_feeder_pq.items()}
         for i, k in enumerate(feeder_keys):
             def _num(col, _i=i):
                 it = pq_table.item(_i, col)
@@ -344,6 +425,9 @@ def make_settings_dialog(parent, feeder_keys, current: dict,
                 except ValueError:
                     return 0.0
             p, q = _num(1), _num(2)
+            old_key = _matching_saved_key(feeder_pq, k)
+            if old_key is not None:
+                del feeder_pq[old_key]
             if p > 0 or q > 0:
                 feeder_pq[k] = {"p_kw": p, "q_kvar": q}
         cap = parse_capacity_rows(
