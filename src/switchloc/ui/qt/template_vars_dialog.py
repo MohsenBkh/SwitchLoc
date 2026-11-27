@@ -631,12 +631,9 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     # Feeder-specific values must follow the selected technical lookup key.
     # These are generated values (not user-entered display labels), so a new
     # feeder selection deliberately replaces the previous feeder's numbers.
-    _feeder_value_keys = {
-        "جریان فیدر", "جریان بار", "P_load (kW)/1000", "P_load (kW)",
-        "Q_load (kW)/1000", "Q_load (kW)", "طول فیدر",
-        "مقدار EENS پایه", "EENS پایه", "مقدار EENS نهایی", "EENS نهایی",
-        "درصد کاهش", "درصد کاهش EENS", "عدد نرخ خرابی", "زمان تعمیر",
-    }
+    from ...reporting.template_values import (
+        FEEDER_VALUE_KEYS, refresh_feeder_template_caches,
+    )
 
     def _refresh_feeder_values(*_args):
         if study_model is None or feeder_combo is None:
@@ -648,15 +645,9 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
             from ...reporting.docx_template import _auto_fill_vars_from_model
             generated = {"__main_feeder_key": feeder_key}
             _auto_fill_vars_from_model(generated, study_model)
-            for key in _feeder_value_keys:
-                if key not in generated:
-                    continue
-                value = str(generated[key])
-                defaults[key] = value
-                # A deliberate feeder change replaces the generated fields in
-                # every template cache; plain template switches never do.
-                for cache in template_caches.values():
-                    cache[key] = value
+            refreshed = refresh_feeder_template_caches(
+                generated, defaults, template_caches, FEEDER_VALUE_KEYS)
+            for key, value in refreshed.items():
                 if key in edits:
                     edits[key].setText(value)
         except Exception:

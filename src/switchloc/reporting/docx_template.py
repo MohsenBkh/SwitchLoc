@@ -714,6 +714,51 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                 pass
         # primary for technical lookups
         primary = lookup_key
+        # Keep sectionalizer candidates scoped to the selected feeder. A report
+        # for one feeder must never borrow the first proposed switch/coordinate
+        # from a different feeder in a multi-feeder EENS study.
+        def _feeder_matches(a, b):
+            if not a or not b:
+                return False
+            if str(a).strip() == str(b).strip():
+                return True
+            try:
+                from ..topology.tracing import same_feeder
+                if same_feeder(str(a), str(b)):
+                    return True
+            except Exception:
+                pass
+            import re
+            def _norm_feeder(s):
+                return re.sub(r"\s*-\s*", " - ",
+                              re.sub(r"\s+", " ", str(s).strip().upper()))
+            return _norm_feeder(a) == _norm_feeder(b)
+
+        _eens_study = getattr(m, "eens_study", None) or {}
+        _study_data = (_eens_study.get("study")
+                       if isinstance(_eens_study, dict) else None)
+        _study_feeders = ((_study_data or {}).get("feeders") or []) \
+            if isinstance(_study_data, dict) else []
+        _exact_study_feeders = [
+            f for f in _study_feeders
+            if isinstance(f, dict)
+            and str(f.get("feeder_key") or "").strip().casefold()
+            == str(primary or "").strip().casefold()
+        ]
+        _matched_study_feeders = [
+            f for f in _study_feeders
+            if isinstance(f, dict) and _feeder_matches(f.get("feeder_key"), primary)
+        ]
+        # Exact identity wins. A shortened feeder token is only acceptable if
+        # it resolves uniquely; never silently select one of two F2 variants.
+        _primary_study_feeders = (_exact_study_feeders or
+                                  (_matched_study_feeders
+                                   if len(_matched_study_feeders) == 1 else []))
+        _primary_candidates = [
+            c for f in _primary_study_feeders
+            for c in ((f.get("best") or {}).get("selected") or [])
+            if isinstance(c, dict)
+        ]
         # keep display_name for UI: if no display, fallback to lookup
         if not display_name:
             display_name = primary
@@ -732,30 +777,13 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
             study_data = eens_study.get("study") if isinstance(eens_study, dict) else None
             if study_data and isinstance(study_data, dict):
                 feeders_eens = study_data.get("feeders") or []
-                # try robust match for primary
-                def _match_feeder(a,b):
-                    if not a or not b:
-                        return False
-                    if str(a).strip() == str(b).strip():
-                        return True
-                    try:
-                        from ..topology.tracing import same_feeder
-                        if same_feeder(str(a), str(b)):
-                            return True
-                    except Exception:
-                        pass
-                    import re
-                    def _n(s): return re.sub(r"\s*-\s*", " - ", re.sub(r"\s+", " ", str(s).strip().upper()))
-                    return _n(a) == _n(b)
                 safe_study_total = (
-                    (len(feeders_eens) == 1 and
-                     _match_feeder(feeders_eens[0].get("feeder_key"), primary)) or
+                    (len(feeders_eens) == 1 and len(_primary_study_feeders) == 1) or
                     (not feeders_eens and len(feeders) <= 1))
-                for f in feeders_eens:
-                    if _match_feeder(f.get("feeder_key"), primary):
-                        eb, ea = _feeder_eens_values(f)
-                        _found_optimal = (eb is not None or ea is not None)
-                        break
+                for f in _primary_study_feeders:
+                    eb, ea = _feeder_eens_values(f)
+                    _found_optimal = (eb is not None or ea is not None)
+                    break
                 # A study-level total is safe only for a single-feeder payload.
                 if not _found_optimal and eb is None and safe_study_total and isinstance(eens_study, dict):
                     try:
@@ -785,25 +813,9 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                 study_data = eens_study.get("study") if isinstance(eens_study, dict) else None
                 if study_data and isinstance(study_data, dict):
                     feeders_eens = study_data.get("feeders") or []
-                    # try robust match for primary
-                    def _match_feeder(a,b):
-                        if not a or not b:
-                            return False
-                        if str(a).strip() == str(b).strip():
-                            return True
-                        try:
-                            from ..topology.tracing import same_feeder
-                            if same_feeder(str(a), str(b)):
-                                return True
-                        except Exception:
-                            pass
-                        import re
-                        def _n(s): return re.sub(r"\s*-\s*", " - ", re.sub(r"\s+", " ", str(s).strip().upper()))
-                        return _n(a) == _n(b)
-                    for f in feeders_eens:
-                        if _match_feeder(f.get("feeder_key"), primary):
-                            eb, ea = _feeder_eens_values(f)
-                            break
+                    for f in _primary_study_feeders:
+                        eb, ea = _feeder_eens_values(f)
+                        break
                     # Do not fallback to first feeder when primary not found — keep None to avoid mixing
                     # (previous code incorrectly used first feeder's data for wrong feeder)
                     pass
@@ -928,38 +940,28 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
             # if user typed Persian display, keep it; else use lookup key or display_name
             vars_dict["نام فیدر"] = str(display_name or primary)
 
-        # موقعیت / موقعیت نصب unify (requirement 9)
-        if "موقعیت نصب" not in vars_dict and "موقعیت" not in vars_dict:
+        # موقعیت / موقعیت نصب unify (requirement 9). Prefer the selected
+        # feeder's EENS proposal; only use placement proposals when there is no
+        # feeder-scoped sectionalizer proposal.
+        if not str(vars_dict.get("موقعیت نصب") or vars_dict.get("موقعیت") or "").strip():
             try:
-                props = m.build_proposed()
-                # also consider sectionalizer nodes if placement empty
-                if not props:
-                    # try sectionalizer study nodes
-                    try:
-                        eens = getattr(m, "eens_study", {}) or {}
-                        study = eens.get("study") if isinstance(eens, dict) else None
-                        if study:
-                            for f in (study.get("feeders") or []):
-                                cands = (f.get("best") or {}).get("selected") or []
-                                if cands:
-                                    c = cands[0]
-                                    coord = c.get("coord")
-                                    if coord and len(coord)==2:
-                                        coord_txt = f"{float(coord[0]):.0f}, {float(coord[1]):.0f}"
-                                        vars_dict["موقعیت نصب"] = coord_txt
-                                        vars_dict["موقعیت"] = coord_txt
-                                        break
-                    except Exception:
-                        pass
-                if props:
-                    ps = props[0]
-                    coord_txt = f"{ps.x:.0f}, {ps.y:.0f}" if ps.x and ps.y else ps.node
-                    vars_dict["موقعیت نصب"] = coord_txt
-                    vars_dict["موقعیت"] = coord_txt
-                elif "موقعیت" not in vars_dict and "موقعیت نصب" not in vars_dict:
-                    # fallback to feeder name only if not already set from eens_study
-                    vars_dict["موقعیت نصب"] = str(primary)
-                    vars_dict["موقعیت"] = str(primary)
+                coord_txt = ""
+                if _primary_candidates:
+                    coord = _primary_candidates[0].get("coord")
+                    if coord and len(coord) == 2:
+                        coord_txt = f"{float(coord[0]):.0f}, {float(coord[1]):.0f}"
+                    else:
+                        coord_txt = str(_primary_candidates[0].get("node") or "")
+                if not coord_txt and not _study_feeders:
+                    props = m.build_proposed()
+                    if props:
+                        ps = props[0]
+                        coord_txt = (f"{ps.x:.0f}, {ps.y:.0f}"
+                                     if ps.x and ps.y else str(ps.node))
+                if not coord_txt:
+                    coord_txt = str(primary)
+                vars_dict["موقعیت نصب"] = coord_txt
+                vars_dict["موقعیت"] = coord_txt
             except Exception:
                 pass
         # ensure synonym consistency: if one exists, copy to other
@@ -1091,54 +1093,38 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
         else:
             vars_dict.setdefault("زمان تعمیر", "—")
 
-        # تعداد کلید and مختصات
+        # تعداد کلید and مختصات: use only the selected feeder's EENS
+        # candidates. Empty/stale cached values are replaced with current model
+        # data so template round-trips cannot leave these fields blank.
         try:
             props = m.build_proposed()
-            cnt = len(props) if props else 0
-            # also check sectionalizer count if placement empty
-            if cnt == 0:
-                try:
-                    eens = getattr(m, "eens_study", {}) or {}
-                    study = eens.get("study") if isinstance(eens, dict) else None
-                    if study:
-                        for f in (study.get("feeders") or []):
-                            cands = (f.get("best") or {}).get("selected") or []
-                            cnt += len(cands)
-                except Exception:
-                    pass
-            vars_dict.setdefault("تعداد کلید", str(cnt) if cnt else "—")
-            # مختصات
-            coord_txt = vars_dict.get("موقعیت نصب") or vars_dict.get("موقعیت") or ""
-            if "مختصات کلیدی پیشنهادی" not in vars_dict:
-                if props:
-                    # join all coords
-                    coords = []
-                    for ps in props:
-                        if ps.x and ps.y:
-                            coords.append(f"{ps.x:.0f}, {ps.y:.0f}")
-                        else:
-                            coords.append(ps.node)
-                    vars_dict["مختصات کلیدی پیشنهادی"] = " | ".join(coords) if coords else coord_txt
-                else:
-                    # try sectionalizer coords
-                    try:
-                        eens = getattr(m, "eens_study", {}) or {}
-                        study = eens.get("study") if isinstance(eens, dict) else None
-                        if study:
-                            ccs=[]
-                            for f in (study.get("feeders") or []):
-                                for c in ((f.get("best") or {}).get("selected") or []):
-                                    coord = c.get("coord")
-                                    if coord and len(coord)==2:
-                                        ccs.append(f"{float(coord[0]):.0f}, {float(coord[1]):.0f}")
-                            if ccs:
-                                vars_dict["مختصات کلیدی پیشنهادی"] = " | ".join(ccs)
-                            else:
-                                vars_dict.setdefault("مختصات کلیدی پیشنهادی", coord_txt or "—")
-                        else:
-                            vars_dict.setdefault("مختصات کلیدی پیشنهادی", coord_txt or "—")
-                    except Exception:
-                        vars_dict.setdefault("مختصات کلیدی پیشنهادی", coord_txt or "—")
+            props = list(props or [])
+            candidates = list(_primary_candidates)
+            # For EENS/sectionalizer reports candidates take precedence over
+            # generic placement (which may refer to another study/feeder).
+            scoped_count = len(candidates)
+            cnt = scoped_count if _study_feeders else len(props)
+            if "تعداد کلید" not in vars_dict or not str(vars_dict["تعداد کلید"]).strip():
+                vars_dict["تعداد کلید"] = str(cnt) if cnt else "—"
+
+            coords = []
+            if candidates:
+                for candidate in candidates:
+                    coord = candidate.get("coord")
+                    if coord and len(coord) == 2:
+                        coords.append(f"{float(coord[0]):.0f}, {float(coord[1]):.0f}")
+                    elif candidate.get("node"):
+                        coords.append(str(candidate["node"]))
+            elif props and not _study_feeders:
+                for ps in props:
+                    if ps.x and ps.y:
+                        coords.append(f"{ps.x:.0f}, {ps.y:.0f}")
+                    elif getattr(ps, "node", None):
+                        coords.append(str(ps.node))
+            coord_txt = vars_dict.get("موقعیت نصب") or vars_dict.get("موقعیت") or str(primary)
+            if "مختصات کلیدی پیشنهادی" not in vars_dict or not str(
+                    vars_dict.get("مختصات کلیدی پیشنهادی") or "").strip():
+                vars_dict["مختصات کلیدی پیشنهادی"] = " | ".join(coords) if coords else coord_txt or "—"
         except Exception:
             pass
 
@@ -1246,51 +1232,26 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                 # Use main feeder (lookup key) if provided, else first
                 r = None
                 if primary_key:
-                    # robust match: exact -> same_feeder -> feeder_key -> normalized
                     try:
-                        from ..topology.tracing import same_feeder, feeder_key
+                        from ..topology.tracing import same_feeder
                     except Exception:
-                        same_feeder = None
-                        feeder_key = lambda x: x
+                        same_feeder = lambda a, b: str(a).strip() == str(b).strip()
                     import re
                     def _norm(s):
                         s = (s or "").strip().upper()
                         s = re.sub(r"\s+", " ", s)
-                        s = re.sub(r"\s*-\s*", " - ", s)
-                        return s
-                    nk = _norm(primary_key)
-                    for cand in rows_table:
-                        ck = str(cand.get("feeder_key") or "")
-                        if ck == primary_key:
-                            r = cand
-                            break
-                        try:
-                            if same_feeder is not None and same_feeder(ck, primary_key):
-                                r = cand
-                                break
-                        except Exception:
-                            pass
-                        try:
-                            if feeder_key is not None and feeder_key(ck) == feeder_key(primary_key):
-                                # Only if one is short? But still prefer if same_feeder failed due to different suffix?
-                                # Use short match only if one is short token?
-                                # For safety, allow short match when normalized full not equal but short equal and one is short?
-                                # We already have same_feeder handling short cases; keep short match as fallback for case like F4 vs F4 - South?
-                                if _norm(ck) == nk:
-                                    r = cand
-                                    break
-                                # Also check short token equality as last resort
-                                if feeder_key(ck) == feeder_key(primary_key):
-                                    # Ensure not mixing F2-MESHKIN vs F2-KOLOOR (different full): same_feeder would have rejected, but short token matches incorrectly
-                                    # So only allow if one is exactly short token
-                                    if _norm(ck) == feeder_key(primary_key) or nk == feeder_key(ck):
-                                        r = cand
-                                        break
-                        except Exception:
-                            pass
-                        if _norm(ck) == nk:
-                            r = cand
-                            break
+                        return re.sub(r"\s*-\s*", " - ", s)
+                    # Exact normalized identity wins. A short feeder label may
+                    # resolve only when it identifies one row unambiguously.
+                    exact = [cand for cand in rows_table
+                             if _norm(str(cand.get("feeder_key") or ""))
+                             == _norm(primary_key)]
+                    matches = [cand for cand in rows_table
+                               if same_feeder(str(cand.get("feeder_key") or ""),
+                                              str(primary_key))]
+                    candidates = exact or (matches if len(matches) == 1 else [])
+                    if candidates:
+                        r = candidates[0]
                 if r is None:
                     # Never substitute another feeder's technical data for an
                     # explicitly selected reference feeder.
@@ -1399,21 +1360,39 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                     vals[4] = f"{ea_disp:.2f}" if ea_disp is not None else "—"
                 if len(row_cells) >= 6:
                     vals[5] = f"{pct:.2f}" if pct is not None else "—"
-                # X,Y or مختصات
+                # X,Y or مختصات — always scope EENS proposals to the
+                # requested feeder, instead of iterating to the last feeder.
                 try:
-                    props = m.build_proposed()
-                    # also check sectionalizer
-                    if not props:
-                        eens = getattr(m, "eens_study", {}) or {}
-                        study = eens.get("study") if isinstance(eens, dict) else None
-                        if study:
-                            for f in (study.get("feeders") or []):
-                                for c in ((f.get("best") or {}).get("selected") or []):
-                                    coord = c.get("coord")
-                                    if coord and len(coord)==2 and len(row_cells) >=7:
-                                        vals[6] = f"{float(coord[0]):.0f}, {float(coord[1]):.0f}"
-                                        break
-                    else:
+                    eens = getattr(m, "eens_study", {}) or {}
+                    study = eens.get("study") if isinstance(eens, dict) else None
+                    study_feeders = (study.get("feeders") or []) if isinstance(study, dict) else []
+                    chosen = None
+                    if primary_key and study_feeders:
+                        try:
+                            from ..topology.tracing import same_feeder
+                        except Exception:
+                            same_feeder = lambda a, b: str(a).strip() == str(b).strip()
+                        exact_feeders = [f for f in study_feeders
+                                         if str(f.get("feeder_key") or "").strip().casefold()
+                                         == str(primary_key).strip().casefold()]
+                        matched_feeders = [f for f in study_feeders
+                                           if same_feeder(str(f.get("feeder_key") or ""),
+                                                          str(primary_key))]
+                        chosen_feeders = exact_feeders or (
+                            matched_feeders if len(matched_feeders) == 1 else [])
+                        if chosen_feeders:
+                            selected = ((chosen_feeders[0].get("best") or {}).get("selected") or [])
+                            chosen = selected[0] if selected else None
+                    if chosen is not None and len(row_cells) >= 7:
+                        coord = chosen.get("coord")
+                        if coord and len(coord) == 2:
+                            if len(row_cells) >= 8:
+                                vals[6] = f"{float(coord[0]):.0f}"
+                                vals[7] = f"{float(coord[1]):.0f}"
+                            else:
+                                vals[6] = f"{float(coord[0]):.0f}, {float(coord[1]):.0f}"
+                    elif not study_feeders:
+                        props = m.build_proposed()
                         if props and len(row_cells) >= 8:
                             ps = props[0]
                             vals[6] = f"{ps.x:.0f}" if ps.x else ""
@@ -1438,39 +1417,27 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                     r = None
                     if primary_key:
                         try:
-                            from ..topology.tracing import same_feeder, feeder_key
+                            from ..topology.tracing import same_feeder
                         except Exception:
-                            same_feeder = None
-                            feeder_key = lambda x: x
+                            same_feeder = lambda a, b: str(a).strip() == str(b).strip()
                         import re
                         def _norm2(s):
                             s = (s or "").strip().upper()
                             s = re.sub(r"\s+", " ", s)
-                            s = re.sub(r"\s*-\s*", " - ", s)
-                            return s
-                        nk2 = _norm2(primary_key)
-                        for cand in rows_table:
-                            ck2 = str(cand.get("feeder_key") or "")
-                            if ck2 == primary_key:
-                                r = cand
-                                break
-                            try:
-                                if same_feeder is not None and same_feeder(ck2, primary_key):
-                                    r = cand
-                                    break
-                            except Exception:
-                                pass
-                            if _norm2(ck2) == nk2:
-                                r = cand
-                                break
-                            try:
-                                if feeder_key is not None and feeder_key(ck2) == feeder_key(primary_key) and (_norm2(ck2) == feeder_key(primary_key) or nk2 == feeder_key(ck2)):
-                                    r = cand
-                                    break
-                            except Exception:
-                                pass
-                    if r is None:
+                            return re.sub(r"\s*-\s*", " - ", s)
+                        exact = [cand for cand in rows_table
+                                 if _norm2(str(cand.get("feeder_key") or ""))
+                                 == _norm2(primary_key)]
+                        matches = [cand for cand in rows_table
+                                   if same_feeder(str(cand.get("feeder_key") or ""),
+                                                  str(primary_key))]
+                        candidates = exact or (matches if len(matches) == 1 else [])
+                        if candidates:
+                            r = candidates[0]
+                    elif rows_table:
                         r = rows_table[0]
+                    if r is None:
+                        continue
                     row_cells = t.rows[1].cells
                     # compute current/P/Q as in auto_fill — check model first then db (requirements 4,6)
                     try:
