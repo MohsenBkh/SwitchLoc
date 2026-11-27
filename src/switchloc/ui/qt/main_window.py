@@ -1406,12 +1406,14 @@ def launch(db_path: str | None = None) -> int:      # pragma: no cover (Qt)
             refresh_map()
             skipped_txt = ""
             if skipped:
-                skipped_txt = (f"\n{skipped} ردیف بدون تصمیم ماند "
-                               f"({no_zone} ردیف تأییدشده بدون زون بود).")
+                skipped_txt = f"\n{skipped} ردیفِ در انتظار بررسی بدون تصمیم ماند."
+            if no_zone:
+                skipped_txt += (f"\nتأیید مکانِ {no_zone} رخداد بدون زون ذخیره شد؛ "
+                                "انتساب زون آن‌ها خالی است.")
             failed_txt = f"\n{failed} ردیف به‌دلیل داده ناقص ذخیره نشد." if failed else ""
             QMessageBox.information(
                 dlg, "ذخیره بازبینی",
-                f"{n} انتساب/رد مهندسی ذخیره شد.{skipped_txt}{failed_txt}\n"
+                f"{n} تصمیم بازبینی مهندسی ذخیره شد.{skipped_txt}{failed_txt}\n"
                 f"{summary}\nنقشه با لایهٔ خاموشی‌های دارای مختصات به‌روز شد.")
             refresh_dashboard()
 

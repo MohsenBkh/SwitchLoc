@@ -9,9 +9,9 @@
      «مکان پیشنهادی» یا تغییر دستی زون، مبنا هم به‌روز می‌شود.
   ۲. **مکان پیشنهادی اول فهرست** — بهترین تطبیق بانک آفلاین اولین گزینه
      و انتخاب پیش‌فرض است (`place_options`).
-  ۳. **وضعیت پیش‌فرض «تأیید مهندسی»** برای همهٔ ردیف‌هایی که زون دارند؛
-     ردیف بدون زون «در انتظار بررسی» می‌ماند و صریح علامت می‌خورد، چون
-     تأیید بدون زون یعنی انتساب حدسی.
+  ۳. **مکان پیشنهادی ستاره‌دار** به‌طور پیش‌فرض «تأیید مهندسی» است،
+     مستقل از سطح اطمینان. تأیید مکان بدون زون نیز ذخیره می‌شود؛ فقط انتساب
+     زون خالی می‌ماند تا مهندس آن را مشخص کند.
 
 منطق تصمیم‌گیری (plans) بیرون از Qt ساخته می‌شود و آزمون دارد؛ این فایل
 فقط نمایش و تعامل است.
@@ -55,9 +55,9 @@ def make_outage_review_dialog(parent, *, records, plans, geometries=None,
         f"انتخاب می‌شود (تحمل {max_zone_distance_m:,.0f} متر) و مبنای آن در "
         "ستون «مبنای زون» ثبت می‌گردد؛ هیچ زونی حدس زده نمی‌شود. "
         "اگر مکان پیشنهادی پیدا شده باشد، اولین گزینهٔ فهرست همان پیشنهاد "
-        "است و به‌صورت پیش‌فرض انتخاب می‌شود. وضعیت پیش‌فرض همهٔ ردیف‌ها "
-        "«تأیید مهندسی» است؛ در صورت مغایرت تغییرش دهید. ردیف‌هایی که زون "
-        "ندارند «در انتظار بررسی» می‌مانند (تأیید بدون زون مجاز نیست). "
+        "است و به‌صورت پیش‌فرض انتخاب می‌شود؛ مکان ستاره‌دار با اطمینان "
+        "متوسط یا بالا پیش‌فرض «تأیید مهندسی» دارد. تأیید مکان حتی بدون "
+        "زون ذخیره می‌شود و انتساب زون خالی می‌ماند تا مهندس آن را مشخص کند. "
         "جدول اکسل‌مانند است: کلیک روی هدر/شمارهٔ ردیف کل سطر/ستون را "
         "انتخاب می‌کند؛ Ctrl+C کپی TSV و Ctrl+V جایگذاری است.")
     info = QLabel(base_info + ((" " + info_extra) if info_extra else ""))
@@ -258,11 +258,6 @@ def make_outage_review_dialog(parent, *, records, plans, geometries=None,
                 if _i < 0:
                     return
                 table.item(_i, 8).setText(table.cellWidget(_i, 8).currentText())
-                status = table.cellWidget(_i, 8).currentData()
-                zone = table.cellWidget(_i, 6).currentData()
-                if status == "confirmed" and not zone:
-                    _set_basis(_i, table.item(_i, 7).text(),
-                               "برای تأیید، ابتدا زون را انتخاب کنید.", warn=True)
             status_box.currentIndexChanged.connect(_on_status)
             table.setRowHeight(i, 44)
 
@@ -345,7 +340,7 @@ def make_outage_review_dialog(parent, *, records, plans, geometries=None,
     buttons.rejected.connect(dlg.reject)
 
     def decisions() -> tuple[list[dict], int, int]:
-        """(تصمیم‌ها، تعداد نادیده‌گرفته‌شده، تعداد تأییدنشده بدون زون)."""
+        """(تصمیم‌ها، تعداد نادیده‌گرفته‌شده، تعداد تأییدهای بدون زون)."""
         out, skipped, no_zone = [], 0, 0
         for i in range(table.rowCount()):
             event_id = str(table.item(i, 0).data(Qt.ItemDataRole.UserRole))
@@ -358,9 +353,8 @@ def make_outage_review_dialog(parent, *, records, plans, geometries=None,
                 skipped += 1
                 continue
             if status == "confirmed" and not zone_id:
+                # مکان تأیید می‌شود و ذخیره خواهد شد؛ فقط انتساب زون فعلاً خالی است.
                 no_zone += 1
-                skipped += 1
-                continue
             place_id = place_box.currentData() or ""
             place_name = ""
             if place_id:
@@ -386,9 +380,9 @@ def make_outage_review_dialog(parent, *, records, plans, geometries=None,
         out, skipped, no_zone = decisions()
         message = f"{len(out)} ردیف ذخیره می‌شود"
         if skipped:
-            message += (f"؛ {skipped} ردیف بدون تغییر باقی می‌ماند "
-                        f"({no_zone} ردیف تأییدشده بدون زون بود — تأیید "
-                        "بدون زون مجاز نیست)")
+            message += f"؛ {skipped} ردیفِ در انتظار بررسی بدون تغییر می‌ماند"
+        if no_zone:
+            message += f"؛ {no_zone} تأیید مکان بدون زون ذخیره می‌شود"
         dlg.setProperty("save_message", message)
         dlg.accept()
 

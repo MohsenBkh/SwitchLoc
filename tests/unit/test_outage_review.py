@@ -1,4 +1,3 @@
-import sqlite3
 from types import SimpleNamespace
 
 from switchloc.application.outage_review import OutageReviewStore, suggest_event_places
@@ -19,17 +18,16 @@ def test_review_store_persists_only_explicit_confirmations(tmp_path):
     store = OutageReviewStore(db)
     store.save('e1', 'z1', place_id='p1', place_name='زرج آباد', status='confirmed')
     store.save('e2', '', status='rejected')
+    store.save('e3', '', place_id='p3', place_name='روستای نمونه',
+               status='confirmed')
     assert store.confirmed_event_to_zone() == {'e1': 'z1'}
     assert store.load()['e1']['place_name'] == 'زرج آباد'
+    assert store.load()['e3']['status'] == 'confirmed'
+    assert store.load()['e3']['zone_id'] == ''
 
 
-def test_review_store_rejects_empty_zone_and_invalid_status(tmp_path):
+def test_review_store_rejects_invalid_status(tmp_path):
     store = OutageReviewStore(tmp_path / 'project.sqlite')
-    try:
-        store.save('e1', '', status='confirmed')
-        assert False, 'expected ValueError'
-    except ValueError:
-        pass
     try:
         store.save('e1', 'z1', status='auto')
         assert False, 'expected ValueError'

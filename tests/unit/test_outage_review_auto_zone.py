@@ -93,12 +93,12 @@ def test_zone_options_are_ordered_by_distance():
 
 
 # ------------------------------------------------------------- place_options
-def _suggestion(*names):
+def _suggestion(*names, first_confidence="بالا"):
     matches = []
     for i, name in enumerate(names):
         matches.append(PlaceMatch(place=Place(f"p{i}", name, 38.0 + i / 100,
                                                48.0 + i / 100),
-                                  confidence=("بالا" if i == 0 else "متوسط"),
+                                  confidence=(first_confidence if i == 0 else "متوسط"),
                                   matched_text=name, score=1.0 - i / 10))
     return OutagePlaceSuggestion(event_id="e1", text="x", matches=tuple(matches))
 
@@ -145,6 +145,20 @@ def test_plan_auto_confirms_when_zone_is_found():
     assert row.status == "confirmed"          # پیش‌فرض درخواست کاربر
 
 
+@pytest.mark.parametrize("confidence", ["متوسط", "بالا"])
+def test_starred_place_is_engineering_approved_for_medium_and_high(confidence):
+    # Confidence changes the annotation only: both starred suggestion levels
+    # receive the same engineering-approved default when a valid zone exists.
+    rec = _rec(substation="زرج آباد")
+    rows = plan_review_rows(
+        [rec], suggestions={"e1": _suggestion("زرج آباد", first_confidence=confidence)},
+        geometries=GEOMS, project_crs="EPSG:32639", transform=_transform)
+    row = rows[0]
+    assert row.place_options[0]["is_default"] is True
+    assert row.place_options[0]["label"].startswith("★")
+    assert row.status == "confirmed"
+
+
 def test_project_crs_alone_builds_the_default_transform():
     """بدون ``transform`` صریح، تبدیل باید از CRS پروژه استفاده کند.
 
@@ -162,27 +176,43 @@ def test_project_crs_alone_builds_the_default_transform():
     expected = transform_wgs84_to_project(p0.lat, p0.lon, "EPSG:32638")
     assert rows[0].point == pytest.approx(expected)
     assert rows[0].point_basis == "suggestion"
-    # زون این هندسه‌های جعلی دور است → هیچ زونی حدس زده نمی‌شود
-    assert rows[0].status == "pending"
+    # زون این هندسه‌های جعلی دور است → زونی حدس زده نمی‌شود؛ تأیید مکان
+    # مستقل است و ذخیرهٔ تصمیم تا انتخاب زون در دیالوگ انجام نمی‌شود.
+    assert rows[0].status == "confirmed"
 
 
-def test_plan_keeps_pending_when_no_zone_is_matched():
+def test_starred_place_is_approved_when_no_zone_is_matched():
     rec = _rec(substation="جای نامعلوم")
     rows = plan_review_rows([rec], suggestions={"e1": _suggestion("جای نامعلوم")},
                             geometries={}, project_crs="EPSG:32639",
                             transform=_transform)
     assert rows[0].zone_id == ""
-    assert rows[0].status == "pending"        # بدون زون، تأیید خودکار ممنوع
+    assert rows[0].status == "confirmed"     # پیشنهاد ستاره‌دار مستقل از زون تأیید می‌شود
     assert rows[0].zone_note
 
 
-def test_plan_is_pending_when_project_crs_is_unknown():
+def test_starred_place_is_approved_when_project_crs_is_unknown():
     rec = _rec(substation="زرج آباد")
     rows = plan_review_rows([rec], suggestions={"e1": _suggestion("زرج آباد")},
                             geometries=GEOMS, project_crs="", transform=None)
     assert rows[0].zone_basis == "no-crs"
     assert rows[0].point is None
+    assert rows[0].status == "confirmed"  # مکان تأیید می‌شود؛ زون خالی ذخیره می‌شود
+
+
+def test_no_suggestion_and_no_zone_stays_pending():
+    rows = plan_review_rows([_rec()], geometries={}, project_crs="")
     assert rows[0].status == "pending"
+
+
+def test_saved_confirmation_without_zone_survives_replanning():
+    saved = {"e1": {"status": "confirmed", "zone_id": "", "place_id": "p0",
+                    "place_name": "زرج آباد", "coord_x": 20.0, "coord_y": 30.0}}
+    row = plan_review_rows([_rec()], geometries={}, project_crs="EPSG:32639",
+                           saved=saved)[0]
+    assert row.status == "confirmed"
+    assert row.zone_id == ""
+    assert row.point == (20.0, 30.0)
 
 
 def test_saved_review_is_not_overwritten_by_automation():

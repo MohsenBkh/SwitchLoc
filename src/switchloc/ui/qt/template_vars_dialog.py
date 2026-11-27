@@ -240,10 +240,12 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     # We pre-collect feeder list from study_model (topo.traces or selected_feeders)
     _feeder_choices: list[str] = []
     try:
-        if study_model is not None and getattr(study_model, "topo", None) is not None:
-            _feeder_choices = [str(x.feeder_key) for x in (getattr(study_model.topo, "traces", []) or []) if getattr(x, "feeder_key", None)]
-        if not _feeder_choices and defaults.get("selected_feeders"):
+        # A scoped feeder study should default to (and offer) its own feeders,
+        # not the first feeder in the full network topology.
+        if defaults.get("selected_feeders"):
             _feeder_choices = [str(x) for x in defaults.get("selected_feeders", [])]
+        if not _feeder_choices and study_model is not None and getattr(study_model, "topo", None) is not None:
+            _feeder_choices = [str(x.feeder_key) for x in (getattr(study_model.topo, "traces", []) or []) if getattr(x, "feeder_key", None)]
     except Exception:
         pass
     _feeder_choices = [f for f in _feeder_choices if f and f.strip()]
@@ -256,7 +258,7 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
             _uniq_feeders.append(f)
     _feeder_choices = _uniq_feeders
     # Current main feeder (already in defaults or first)
-    _current_main = str(defaults.get("نام فیدر") or "").strip() if defaults.get("نام فیدر") else ""
+    _current_main = str(defaults.get("__main_feeder_key") or "").strip()
     if not _current_main and _feeder_choices:
         _current_main = _feeder_choices[0]
 
@@ -500,9 +502,24 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     extra_edits: dict[str, QLineEdit] = {}
     extra_buttons: dict[str, QPushButton] = {}
 
-    # Persistent store for user edits across template switches
-    # Initialized with defaults so first rebuild can fallback to it
-    live_cache: dict[str, str] = dict(defaults)
+    # Each template owns its own edits. In particular, recloser values must
+    # survive a switch to sectionalizer and back without alias-based mixing.
+    def _template_cache_key() -> str:
+        if rb_recl.isChecked():
+            return "recloser"
+        sw = _sw_type_from_model(study_model)
+        if rb_sec.isChecked():
+            if selected_template in ("sectionalizer", "disconnector"):
+                return selected_template
+            return "disconnector" if sw == "disconnector" else "sectionalizer"
+        if sw == "recloser":
+            return "recloser"
+        return "disconnector" if sw == "disconnector" else "sectionalizer"
+
+    template_caches: dict[str, dict[str, str]] = {}
+    active_cache = dict(defaults)
+    active_cache_key = _template_cache_key()
+    template_caches[active_cache_key] = active_cache
 
     # Pre-collect variables for current template
     cur_path = _current_template_path()
@@ -516,58 +533,13 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     if not var_names:
         var_names = sorted(set(defaults.keys()))
 
-    # Helper to get value for a var key with synonym fallback
+    # Values are looked up by the exact placeholder name. Cross-template
+    # canonical/synonym fallback used to make unrelated template fields share
+    # a single value (and overwrite one another on round trips).
     def _value_for_key(key: str) -> str:
-        # direct live_cache — even empty string is preserved to honor user deletion
-        if key in live_cache:
-            # if live_cache has this exact key, return it (may be empty to indicate user cleared)
-            # but if it is empty and we have a synonym with non-empty, prefer synonym only if this key was never explicitly edited?
-            # We distinguish: if live_cache[key]=="" because defaults had no value, and synonym has value, use synonym.
-            # Otherwise respect the empty.
-            val = live_cache[key]
-            if str(val).strip() != "":
-                return str(val)
-            # empty — check if this key was originally from defaults with empty: fallback to synonym if available
-            # Determine if we should fallback: if key was initially empty in defaults/live_cache, synonym may provide a value
-            # So attempt synonym before returning empty
-            try:
-                from ...reporting.docx_template import _canonical
-                ck = _canonical(key)
-                for lk, lv in live_cache.items():
-                    if _canonical(lk) == ck and str(lv).strip() != "":
-                        return str(lv)
-                # PD generic fallback
-                if key.strip().startswith("PD-"):
-                    for lk2, lv2 in live_cache.items():
-                        if str(lk2).strip().startswith("PD-") and str(lv2).strip() != "":
-                            return str(lv2)
-            except Exception:
-                pass
-            return str(val)
-        # synonym via canonical (key not in live_cache)
-        try:
-            from ...reporting.docx_template import _canonical
-            ck = _canonical(key)
-            for lk, lv in live_cache.items():
-                if _canonical(lk) == ck and str(lv).strip() != "":
-                    return str(lv)
-            for dk, dv in defaults.items():
-                if _canonical(dk) == ck and str(dv).strip() != "":
-                    return str(dv)
-            # PD generic: any PD-... shares value
-            if key.strip().startswith("PD-"):
-                for lk2, lv2 in live_cache.items():
-                    if str(lk2).strip().startswith("PD-") and str(lv2).strip() != "":
-                        return str(lv2)
-                for dk2, dv2 in defaults.items():
-                    if str(dk2).strip().startswith("PD-") and str(dv2).strip() != "":
-                        return str(dv2)
-        except Exception:
-            pass
-        # direct defaults
-        if key in defaults:
-            return str(defaults[key])
-        return ""
+        if key in active_cache:
+            return str(active_cache[key])
+        return str(defaults.get(key, ""))
 
     # Build form rows
     # Use Persian labels directly as var names
@@ -579,10 +551,9 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
         lbl = QLabel(key + " :")
         lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
         form_lay.addRow(lbl, le)
-    # snapshot initial values into live_cache (in case _value_for_key used defaults, ensure live_cache reflects what user sees)
+    # Seed this template's own cache from the values initially shown.
     for k, le in edits.items():
-        if k not in live_cache or live_cache[k] == "":
-            live_cache[k] = le.text()
+        active_cache.setdefault(k, le.text())
 
     # Extra images pickers
     img_group = QGroupBox("تصاویر اختیاری — منحنی‌های حفاظتی (TCC)")
@@ -621,9 +592,11 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
     bbox.rejected.connect(dlg.reject)
     lay.addWidget(bbox)
 
-    # When template choice changes, rebuild var form — preserve edits
+    # When template choice changes, save/restore a separate variable set for
+    # each template family. This also works when the templates have identical
+    # placeholder names.
     def _rebuild_vars():
-        nonlocal var_names
+        nonlocal var_names, active_cache, active_cache_key
         new_path = _current_template_path()
         if not new_path or not new_path.is_file():
             return
@@ -631,21 +604,12 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
             new_vars = extract_variables(str(new_path))
         except Exception:
             return
-        if set(new_vars) == set(var_names):
-            return
-        # Snapshot current edits into live_cache before clearing (preserve user typing)
-        for k, le in list(edits.items()):
-            live_cache[k] = le.text()
-            # also store canonical synonyms to help cross-template mapping (e.g., موقعیت <-> موقعیت نصب)
-            try:
-                from ...reporting.docx_template import _canonical
-                ck = _canonical(k)
-                # ensure canonical entry also updated
-                if ck != k:
-                    live_cache[ck] = le.text()
-            except Exception:
-                pass
-        # Clear form
+        for k, le in edits.items():
+            active_cache[k] = le.text()
+        next_key = _template_cache_key()
+        if next_key != active_cache_key:
+            active_cache_key = next_key
+            active_cache = template_caches.setdefault(next_key, dict(defaults))
         while form_lay.rowCount() > 0:
             form_lay.removeRow(0)
         edits.clear()
@@ -658,16 +622,49 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
             lbl = QLabel(key + " :")
             lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
             form_lay.addRow(lbl, le)
-        # keep live_cache in sync with new defaults visible
-        for k, le in edits.items():
-            if k not in live_cache or live_cache[k] == "":
-                # if still empty but we have a visible value, keep it
-                if le.text():
-                    live_cache[k] = le.text()
+            active_cache.setdefault(key, le.text())
 
     rb_recl.toggled.connect(lambda checked: _rebuild_vars() if checked else None)
     rb_sec.toggled.connect(lambda checked: _rebuild_vars() if checked else None)
     rb_auto.toggled.connect(lambda checked: _rebuild_vars() if checked else None)
+
+    # Feeder-specific values must follow the selected technical lookup key.
+    # These are generated values (not user-entered display labels), so a new
+    # feeder selection deliberately replaces the previous feeder's numbers.
+    _feeder_value_keys = {
+        "جریان فیدر", "جریان بار", "P_load (kW)/1000", "P_load (kW)",
+        "Q_load (kW)/1000", "Q_load (kW)", "طول فیدر",
+        "مقدار EENS پایه", "EENS پایه", "مقدار EENS نهایی", "EENS نهایی",
+        "درصد کاهش", "درصد کاهش EENS", "عدد نرخ خرابی", "زمان تعمیر",
+    }
+
+    def _refresh_feeder_values(*_args):
+        if study_model is None or feeder_combo is None:
+            return
+        feeder_key = feeder_combo.currentText().strip()
+        if not feeder_key:
+            return
+        try:
+            from ...reporting.docx_template import _auto_fill_vars_from_model
+            generated = {"__main_feeder_key": feeder_key}
+            _auto_fill_vars_from_model(generated, study_model)
+            for key in _feeder_value_keys:
+                if key not in generated:
+                    continue
+                value = str(generated[key])
+                defaults[key] = value
+                # A deliberate feeder change replaces the generated fields in
+                # every template cache; plain template switches never do.
+                for cache in template_caches.values():
+                    cache[key] = value
+                if key in edits:
+                    edits[key].setText(value)
+        except Exception:
+            pass
+
+    if feeder_combo is not None:
+        feeder_combo.currentTextChanged.connect(_refresh_feeder_values)
+        _refresh_feeder_values()
 
     if dlg.exec() != QDialog.DialogCode.Accepted:
         return None
@@ -679,9 +676,7 @@ def get_template_vars(parent, study_model=None, selected_template: str | None = 
 
     vars_dict = {k: e.text().strip() for k, e in edits.items()}
     vars_dict = {k: v for k, v in vars_dict.items() if v != ""}
-    # Merge also any live_cache entries for synonyms that user typed but current form does not show?
-    # No — final output should only contain vars for the selected template. But ensure synonyms are not lost for canonical mapping:
-    # e.g., if sectionalizer template has موقعیت نصب but user had typed موقعیت in live_cache, we already copy via _value_for_key, so visible field already has it.
+    # Only variables for the selected template are returned.
     # Store technical lookup key separately (English), keep display name as typed (Persian)
     if feeder_combo is not None:
         sel = feeder_combo.currentText().strip() if feeder_combo.currentText() else ""

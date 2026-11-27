@@ -674,6 +674,8 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
         # --- EENS values: from optimal EENS module (eens_study) ONLY, do NOT use level1 placement economics ---
         # User request: مقادیر eens استخراجی از ماژول eens بهینه است نه از روی سطح اول. از سطح اول استفاده نکن.
         eb = ea = pct = None
+        feeders_eens = []
+        safe_study_total = True
         # 1) Try optimal EENS study first (sectionalizer_study / switch_placement optimal)
         # This is the correct source for both recloser and sectionalizer templates.
         try:
@@ -690,16 +692,18 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                     if str(a).strip() == str(b).strip():
                         return True
                     try:
-                        from ..topology.tracing import same_feeder, feeder_key
+                        from ..topology.tracing import same_feeder
                         if same_feeder(str(a), str(b)):
-                            return True
-                        if feeder_key(str(a)) == feeder_key(str(b)):
                             return True
                     except Exception:
                         pass
                     import re
                     def _n(s): return re.sub(r"\s*-\s*", " - ", re.sub(r"\s+", " ", str(s).strip().upper()))
                     return _n(a) == _n(b)
+                safe_study_total = (
+                    (len(feeders_eens) == 1 and
+                     _match_feeder(feeders_eens[0].get("feeder_key"), primary)) or
+                    (not feeders_eens and len(feeders) <= 1))
                 for f in feeders_eens:
                     if _match_feeder(f.get("feeder_key"), primary):
                         eb = f.get("baseline_eens_kwh")
@@ -711,8 +715,8 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                             ea = f.get("best_eens_kwh")
                         _found_optimal = (eb is not None or ea is not None)
                         break
-                # also try top-level baseline/best if still missing and study has totals
-                if not _found_optimal and eb is None and isinstance(eens_study, dict):
+                # A study-level total is safe only for a single-feeder payload.
+                if not _found_optimal and eb is None and safe_study_total and isinstance(eens_study, dict):
                     try:
                         sd = eens_study.get("study") or eens_study
                         if "baseline_eens_kwh" in sd:
@@ -721,7 +725,7 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                     except Exception:
                         pass
             # fallback for older payload shapes: direct total fields
-            if eb is None and isinstance(eens_study, dict):
+            if eb is None and safe_study_total and isinstance(eens_study, dict):
                 try:
                     sd = eens_study.get("study") or eens_study
                     if "baseline_eens_kwh" in sd:
@@ -751,10 +755,8 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                         if str(a).strip() == str(b).strip():
                             return True
                         try:
-                            from ..topology.tracing import same_feeder, feeder_key
+                            from ..topology.tracing import same_feeder
                             if same_feeder(str(a), str(b)):
-                                return True
-                            if feeder_key(str(a)) == feeder_key(str(b)):
                                 return True
                         except Exception:
                             pass
@@ -775,8 +777,8 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                     # (previous code incorrectly used first feeder's data for wrong feeder)
                     pass
                 # also try top-level baseline/best
-                if eb is None and isinstance(eens_study, dict):
-                    # study might be directly at top level? Check m.eens_study["study"]["baseline_eens_kwh"]
+                if eb is None and safe_study_total and isinstance(eens_study, dict):
+                    # Study totals are safe only when there is no feeder ambiguity.
                     try:
                         sd = eens_study.get("study") or eens_study
                         if "baseline_eens_kwh" in sd:
@@ -797,11 +799,26 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
         # --- helper to get feeder P/Q and compute current ---
         def _load_pq_for_feeder(feeder_key: str):
             p_kw = q_kvar = None
+
+            def _find_pq(load_model):
+                pq_by_feeder = (load_model or {}).get("feeder_pq") or {}
+                if feeder_key in pq_by_feeder:
+                    return pq_by_feeder[feeder_key]
+                try:
+                    from ..topology.tracing import same_feeder
+                    matches = [value for key, value in pq_by_feeder.items()
+                               if same_feeder(str(key), str(feeder_key))]
+                    if len(matches) == 1:
+                        return matches[0]
+                except Exception:
+                    pass
+                return None
+
             # try m.load_model if exists
             try:
                 lm = getattr(m, "load_model", None)
                 if lm and isinstance(lm, dict):
-                    pq = (lm.get("feeder_pq") or {}).get(feeder_key)
+                    pq = _find_pq(lm)
                     if pq:
                         p_kw = float(pq.get("p_kw") or 0) if pq.get("p_kw") is not None else None
                         q_kvar = float(pq.get("q_kvar") or 0) if pq.get("q_kvar") is not None else None
@@ -817,7 +834,7 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                         try:
                             from ..persistence.engineering_load import load_load_model
                             lm2 = load_load_model(str(dbp))
-                            pq2 = (lm2.get("feeder_pq") or {}).get(feeder_key)
+                            pq2 = _find_pq(lm2)
                             if pq2:
                                 if p_kw is None and pq2.get("p_kw") is not None:
                                     p_kw = float(pq2.get("p_kw"))
@@ -846,10 +863,8 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                 if str(a).strip() == str(b).strip():
                     return True
                 try:
-                    from ..topology.tracing import same_feeder, feeder_key
+                    from ..topology.tracing import same_feeder
                     if same_feeder(str(a), str(b)):
-                        return True
-                    if feeder_key(str(a)) == feeder_key(str(b)):
                         return True
                 except Exception:
                     pass
@@ -1248,11 +1263,13 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                             r = cand
                             break
                 if r is None:
-                    # fallback to first only if single feeder or no primary
-                    primary_rows = rows_table[:1]
-                    if not primary_rows:
+                    # Never substitute another feeder's technical data for an
+                    # explicitly selected reference feeder.
+                    if primary_key:
                         continue
-                    r = primary_rows[0]
+                    if not rows_table:
+                        continue
+                    r = rows_table[0]
                 # EENS from optimal module ONLY (eens_study), do NOT use level1 economics
                 # User request: مقادیر eens استخراجی از ماژول eens بهینه است نه از روی سطح اول
                 eb = ea = pct = None
@@ -1270,10 +1287,8 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                             if str(a).strip() == str(b).strip():
                                 return True
                             try:
-                                from ..topology.tracing import same_feeder, feeder_key
+                                from ..topology.tracing import same_feeder
                                 if same_feeder(str(a), str(b)):
-                                    return True
-                                if feeder_key(str(a)) == feeder_key(str(b)):
                                     return True
                             except Exception:
                                 pass

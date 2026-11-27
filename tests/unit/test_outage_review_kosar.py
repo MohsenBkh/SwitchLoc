@@ -76,7 +76,7 @@ def test_suggested_places_become_project_coordinates(kosar):
         assert abs(r.point[0]) > 1000 and abs(r.point[1]) > 1000
 
 
-def test_auto_zone_confirms_only_rows_with_a_matched_zone(kosar):
+def test_suggested_places_are_approved_independently_of_zone_assignment(kosar):
     rows = kosar["rows"]
     zoned = [r for r in rows if r.zone_id]
     assert zoned, "هیچ زونی خودکار انتخاب نشد"
@@ -84,9 +84,14 @@ def test_auto_zone_confirms_only_rows_with_a_matched_zone(kosar):
         assert r.status == "confirmed"          # پیش‌فرض درخواست کاربر
         assert r.zone_basis == "point"
     for r in rows:
+        has_starred_place = any(
+            option.get("place_id") and option.get("is_default")
+            for option in r.place_options)
+        if has_starred_place:
+            assert r.status == "confirmed"        # سطح متوسط/بالا هر دو تأیید پیش‌فرض‌اند
         if not r.zone_id:
-            assert r.status == "pending"        # هرگز تأیید بدون زون
             assert r.zone_note
+            # تأیید مکان ذخیره می‌شود؛ انتساب زون در این ردیف خالی است.
 
 
 def test_zone_belongs_to_the_event_feeder(kosar):

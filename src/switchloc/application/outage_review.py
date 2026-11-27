@@ -10,9 +10,10 @@
    نمی‌شود و مبنای انتخاب در ستون جدا ثبت می‌گردد (بند ۱۹).
 ۲. **مکان پیشنهادی در ابتدای فهرست** و انتخاب‌شده به‌صورت پیش‌فرض، هرگاه
    بانک آفلاین مکان برای «نام پست» تطبیقی پیدا کرده باشد.
-۳. **وضعیت پیش‌فرض «تأیید مهندسی»** برای همهٔ ردیف‌ها، به‌جز ردیف‌هایی که
-   هیچ زونی برایشان تعیین نشده است (تأیید بدون زون، انتساب حدسی است و
-   مجاز نیست؛ آن ردیف‌ها «در انتظار بررسی» می‌مانند و صریح علامت می‌خورند).
+۳. **وضعیت پیش‌فرض «تأیید مهندسی»** برای مکان‌های پیشنهادی ستاره‌دار،
+   مستقل از سطح اطمینان (متوسط/بالا). تأیید مکان حتی بدون زون ذخیره می‌شود؛
+   انتساب زون تا زمان انتخاب/تشخیص زون خالی می‌ماند. رخداد بدون پیشنهاد و
+   بدون زون در انتظار بررسی می‌ماند.
 
 منطق خالص (بدون Qt) در همین ماژول است و با pytest آزمون می‌شود؛ دیالوگ
 Qt فقط `plan_review_rows` را رندر می‌کند.
@@ -484,9 +485,10 @@ def plan_review_rows(records: Iterable, *,
         row.point_basis = point_basis
 
         # --- انتساب زون --------------------------------------------------
-        if old.get("zone_id") and old.get("status") in ("confirmed", "rejected"):
+        if old.get("status") in ("confirmed", "rejected"):
             row.zone_id = str(old.get("zone_id") or "")
-            row.zone_basis = "saved-review"
+            row.zone_basis = ("saved-review" if row.zone_id else
+                              str(old.get("zone_basis") or "unmatched"))
             row.status = str(old.get("status"))
             pick = None
         else:
@@ -500,8 +502,13 @@ def plan_review_rows(records: Iterable, *,
             row.zone_id = pick.zone_id
             row.zone_basis = pick.basis
             row.nearest_zone_distance_m = pick.nearest_distance_m
-            # وضعیت پیش‌فرض: تأیید مهندسی هرگاه زون تعیین شده باشد
-            row.status = "confirmed" if row.zone_id else "pending"
+            # مکان ستاره‌دار به‌طور پیش‌فرض «تأیید مهندسی» است، مستقل از
+            # سطح اطمینان و حتی اگر کاربر هنوز زون را تعیین نکرده باشد؛
+            # مکان تأییدشده بدون زون نیز قابل ذخیره است.
+            has_starred_place = any(
+                option.get("place_id") and option.get("is_default")
+                for option in row.place_options)
+            row.status = "confirmed" if (row.zone_id or has_starred_place) else "pending"
             if not row.zone_id and pick.nearest_distance_m is not None:
                 row.zone_note = (
                     "نزدیک‌ترین زون {0:,.0f} متر دورتر از مختصات پیشنهادی "
@@ -749,10 +756,11 @@ class OutageReviewStore:
              place_name: str = '', reviewer: str = '', note: str = '',
              status: str = 'confirmed', coord_x: float | None = None,
              coord_y: float | None = None, zone_basis: str = '') -> None:
-        if not event_id or (status == 'confirmed' and not zone_id):
-            raise ValueError('event_id and confirmed zone_id are required')
+        if not event_id:
+            raise ValueError('event_id is required')
         if status not in ('confirmed', 'rejected'):
             raise ValueError('status must be confirmed or rejected')
+        zone_id = str(zone_id or '')
         with sqlite3.connect(self.db_path) as db:
             cols = {r[1] for r in
                     db.execute("PRAGMA table_info(outage_event_review)")}
@@ -781,7 +789,7 @@ class OutageReviewStore:
 
     def confirmed_event_to_zone(self) -> dict[str, str]:
         return {eid: r['zone_id'] for eid, r in self.load().items()
-                if r['status'] == 'confirmed'}
+                if r['status'] == 'confirmed' and r['zone_id']}
 
 # ---------------------------------------------------------------------------
 # توزیع رنگی مسیر بر اساس تکرار خاموشی + رتبه‌بندی مکان‌ها
