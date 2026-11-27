@@ -136,13 +136,15 @@ def test_two_runs_are_deterministic(result, topology, lam_matrix):
     assert again.to_dict() == result.to_dict()
 
 
-def test_persistence_roundtrip_and_report(result, topology, tmp_path):
+def test_persistence_roundtrip_and_report(result, topology, tmp_path, caplog):
     net, _topo = topology
     db_copy = tmp_path / "p4_acceptance.sqlite"
     shutil.copy(DB, db_copy)
     svc = PlacementService(PlacementAppSettings(
         user="acceptance", persist=True, report_dir=str(tmp_path / "reports")))
     run = svc.run(str(db_copy))
+    assert not any("source run id unavailable" in record.getMessage()
+                   for record in caplog.records)
     assert run.run_id and run.verdict == "PASS"
     assert (tmp_path / "reports" / "phase4_placement_report.md").exists()
     assert (tmp_path / "reports" / "phase4_placement_report.json").exists()

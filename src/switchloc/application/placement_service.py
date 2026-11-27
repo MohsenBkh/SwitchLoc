@@ -84,6 +84,15 @@ def _lambda_from_store(store: ProjectStore) -> tuple[list, str | None]:
     return lam, data["outage_run_id"]
 
 
+def _latest_source_run_id(store: ProjectStore) -> str:
+    """Read the latest study-run id using the ProjectStore's public key."""
+    runs = store.runs()
+    if not runs:
+        return ""
+    latest = runs[0]
+    return str(latest.get("id") or latest.get("run_id") or "")
+
+
 class PlacementService:
     def __init__(self, settings: PlacementAppSettings | None = None):
         self.settings = settings or PlacementAppSettings()
@@ -108,8 +117,7 @@ class PlacementService:
         check_cancelled()
         source_run_id = ""
         try:
-            runs = store.runs()
-            source_run_id = runs[0]["run_id"] if runs else ""
+            source_run_id = _latest_source_run_id(store)
         except Exception as exc:                   # noqa: BLE001
             _log.warning("source run id unavailable: %s", exc)
 
