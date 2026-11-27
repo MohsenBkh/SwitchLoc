@@ -68,6 +68,53 @@ def _canonical(key: str) -> str:
     return _SYNONYM_MAP.get(k, k)
 
 
+def _first_number(data: dict, keys: tuple[str, ...]) -> float | None:
+    for key in keys:
+        value = data.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _feeder_eens_values(feeder: dict) -> tuple[float | None, float | None]:
+    """Return (baseline, optimized) EENS in kWh/year across payload versions."""
+    baseline = _first_number(
+        feeder, ("baseline_eens_kwh", "baseline_eens_kwh_per_year"))
+    if baseline is None:
+        baseline_mwh = _first_number(feeder, ("baseline_eens_mwh_per_year",))
+        baseline = baseline_mwh * 1000.0 if baseline_mwh is not None else None
+
+    best = feeder.get("best") or {}
+    best = best if isinstance(best, dict) else {}
+    optimized = _first_number(
+        best, ("eens_kwh", "best_eens_kwh", "eens_kwh_per_year",
+               "best_eens_kwh_per_year"))
+    if optimized is None:
+        optimized = _first_number(
+            feeder, ("best_eens_kwh", "best_eens_kwh_per_year"))
+    if optimized is None:
+        best_mwh = _first_number(feeder, ("best_eens_mwh_per_year",))
+        optimized = best_mwh * 1000.0 if best_mwh is not None else None
+    return baseline, optimized
+
+
+def _study_eens_totals(study: dict) -> tuple[float | None, float | None]:
+    baseline = _first_number(
+        study, ("baseline_eens_kwh", "total_baseline_eens_kwh_per_year"))
+    optimized = _first_number(
+        study, ("best_eens_kwh", "total_best_eens_kwh_per_year"))
+    if optimized is None:
+        best = study.get("best") or {}
+        if isinstance(best, dict):
+            optimized = _first_number(
+                best, ("eens_kwh", "eens_kwh_per_year", "best_eens_kwh_per_year"))
+    return baseline, optimized
+
+
 def _is_red(run) -> bool:
     try:
         c = run.font.color.rgb
@@ -706,31 +753,21 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                     (not feeders_eens and len(feeders) <= 1))
                 for f in feeders_eens:
                     if _match_feeder(f.get("feeder_key"), primary):
-                        eb = f.get("baseline_eens_kwh")
-                        # best may be under f["best"] or f["best_eens_kwh"]
-                        best = f.get("best") or {}
-                        if isinstance(best, dict):
-                            ea = best.get("eens_kwh") if "eens_kwh" in best else best.get("best_eens_kwh")
-                        if ea is None:
-                            ea = f.get("best_eens_kwh")
+                        eb, ea = _feeder_eens_values(f)
                         _found_optimal = (eb is not None or ea is not None)
                         break
                 # A study-level total is safe only for a single-feeder payload.
                 if not _found_optimal and eb is None and safe_study_total and isinstance(eens_study, dict):
                     try:
                         sd = eens_study.get("study") or eens_study
-                        if "baseline_eens_kwh" in sd:
-                            eb = sd.get("baseline_eens_kwh")
-                            ea = sd.get("best_eens_kwh") if "best_eens_kwh" in sd else sd.get("best", {}).get("eens_kwh")
+                        eb, ea = _study_eens_totals(sd)
                     except Exception:
                         pass
             # fallback for older payload shapes: direct total fields
             if eb is None and safe_study_total and isinstance(eens_study, dict):
                 try:
                     sd = eens_study.get("study") or eens_study
-                    if "baseline_eens_kwh" in sd:
-                        eb = sd.get("baseline_eens_kwh")
-                        ea = sd.get("best_eens_kwh") if "best_eens_kwh" in sd else sd.get("best", {}).get("eens_kwh")
+                    eb, ea = _study_eens_totals(sd)
                 except Exception:
                     pass
         except Exception:
@@ -765,13 +802,7 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                         return _n(a) == _n(b)
                     for f in feeders_eens:
                         if _match_feeder(f.get("feeder_key"), primary):
-                            eb = f.get("baseline_eens_kwh")
-                            # best may be under f["best"] or f["best_eens_kwh"]
-                            best = f.get("best") or {}
-                            if isinstance(best, dict):
-                                ea = best.get("eens_kwh") if "eens_kwh" in best else best.get("best_eens_kwh")
-                            if ea is None:
-                                ea = f.get("best_eens_kwh")
+                            eb, ea = _feeder_eens_values(f)
                             break
                     # Do not fallback to first feeder when primary not found — keep None to avoid mixing
                     # (previous code incorrectly used first feeder's data for wrong feeder)
@@ -781,9 +812,7 @@ def _auto_fill_vars_from_model(vars_dict: dict, m) -> None:
                     # Study totals are safe only when there is no feeder ambiguity.
                     try:
                         sd = eens_study.get("study") or eens_study
-                        if "baseline_eens_kwh" in sd:
-                            eb = sd.get("baseline_eens_kwh")
-                            ea = sd.get("best_eens_kwh") if "best_eens_kwh" in sd else sd.get("best", {}).get("eens_kwh")
+                        eb, ea = _study_eens_totals(sd)
                     except Exception:
                         pass
             except Exception:
@@ -1295,23 +1324,15 @@ def _fill_tables_from_model(doc, m, primary_key: str | None = None, display_name
                             return _norm2(a) == _norm2(b)
                         for f in (study.get("feeders") or []):
                             if _match2(f.get("feeder_key"), str(r.get("feeder_key") or "")):
-                                eb = f.get("baseline_eens_kwh")
-                                best = f.get("best") or {}
-                                if isinstance(best, dict):
-                                    ea = best.get("eens_kwh") if "eens_kwh" in best else best.get("best_eens_kwh")
-                                if ea is None:
-                                    ea = f.get("best_eens_kwh")
+                                eb, ea = _feeder_eens_values(f)
                                 break
                         # also try study totals if per-feeder not found but study has totals
                         if eb is None:
                             try:
                                 sd = eens.get("study") or {}
-                                if "total_baseline_eens_kwh_per_year" in sd:
-                                    # total is sum across all feeders; only use for single-feeder case
-                                    # To avoid mixing, only use if single feeder table
-                                    if len(rows_table) == 1:
-                                        eb = sd.get("total_baseline_eens_kwh_per_year")
-                                        ea = sd.get("total_best_eens_kwh_per_year")
+                                # Study totals are safe only for a single-feeder table.
+                                if len(rows_table) == 1:
+                                    eb, ea = _study_eens_totals(sd)
                             except Exception:
                                 pass
                 except Exception:

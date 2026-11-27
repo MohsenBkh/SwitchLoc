@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 
+from docx import Document
 
-from switchloc.reporting.docx_template import _auto_fill_vars_from_model
+from switchloc.reporting.docx_template import (_auto_fill_vars_from_model,
+                                                _fill_tables_from_model)
 
 
 FEEDER_ROWS = [
@@ -27,14 +29,16 @@ def _model():
         ),
         eens_study={"study": {
             "feeders": [
-                {"feeder_key": "F1 - NORTH", "baseline_eens_kwh": 1000,
-                 "best": {"eens_kwh": 500}},
-                {"feeder_key": "F2 - SOUTH", "baseline_eens_kwh": 2200,
-                 "best": {"eens_kwh": 1100}},
+                {"feeder_key": "F1 - NORTH", "baseline_eens_kwh_per_year": 1000,
+                 "best_eens_kwh_per_year": 500,
+                 "best": {"eens_kwh_per_year": 500}},
+                {"feeder_key": "F2 - SOUTH", "baseline_eens_kwh_per_year": 2200,
+                 "best_eens_kwh_per_year": 1100,
+                 "best": {"eens_kwh_per_year": 1100}},
             ],
             # Deliberately unrelated aggregate: must not override selected feeder.
-            "baseline_eens_kwh": 9999,
-            "best_eens_kwh": 8888,
+            "total_baseline_eens_kwh_per_year": 9999,
+            "total_best_eens_kwh_per_year": 8888,
         }},
         load_model={"feeder_pq": {
             "F1 - NORTH": {"p_kw": 1000, "q_kvar": 0},
@@ -58,6 +62,23 @@ def test_reference_feeder_populates_its_own_specs_load_current_and_eens():
     assert vars_dict["EENS پایه"] == "2.20"
     assert vars_dict["EENS نهایی"] == "1.10"
     assert vars_dict["درصد کاهش"] == "50.00"
+
+
+def test_eens_table_reads_current_serialized_per_feeder_field_names():
+    doc = Document()
+    table = doc.add_table(rows=2, cols=6)
+    for cell, title in zip(
+            table.rows[0].cells,
+            ("فیدر", "طول", "بار", "EENS پایه", "EENS نهایی", "درصد کاهش")):
+        cell.text = title
+
+    _fill_tables_from_model(doc, _model(), primary_key="F2 - SOUTH",
+                            display_name="فیدر جنوب")
+
+    assert table.cell(1, 0).text == "فیدر جنوب"
+    assert table.cell(1, 3).text == "2.20"
+    assert table.cell(1, 4).text == "1.10"
+    assert table.cell(1, 5).text == "50.00"
 
 
 def test_missing_reference_feeder_does_not_fall_back_to_another_feeders_eens():
